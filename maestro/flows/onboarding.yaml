@@ -1,0 +1,29 @@
+appId: com.battlebuddy.app
+name: "Onboarding — first launch to home screen"
+---
+
+# Step 1: Welcome screen
+- assertVisible: "Meet your BattleBuddy"
+- assertVisible: "Get started"
+- tapOn: "Get started"
+
+# Step 2: Habit selection
+- assertVisible: "What are you working on?"
+- assertVisible: "Quitting smoking"
+- tapOn: "That's me"
+
+# Step 3: Trigger selection
+- assertVisible: "What usually sets it off?"
+- tapOn: "Stress"
+- tapOn: "Boredom"
+- tapOn: "Continue"
+
+# Step 4: Disclaimer
+- assertVisible: "One important thing"
+- assertVisible: "988"
+- tapOn: "I understand"
+
+# Verify: landed on mascot home screen
+- assertVisible: "☰"
+- assertVisible: "chat"
+- assertVisible: "voice"

@@ -1,0 +1,46 @@
+appId: com.battlebuddy.app
+name: "Full chat session — swipe to chat, trigger capture, conversation, outcome"
+---
+
+# Precondition: onboarding already complete, on home screen
+- assertVisible: "☰"
+
+# Swipe down to open chat
+- swipe:
+    direction: DOWN
+    duration: 300
+
+# Trigger capture
+- assertVisible: "What set it off?"
+- tapOn: "Stress"
+- assertVisible: "How strong?"
+- tapOn:
+    text: "3"
+
+# Chat should auto-greet
+- assertVisible: "Talk to Buddy"
+- waitForAnimationToEnd
+
+# Wait for the AI greeting to stream
+- extendedWaitUntil:
+    visible: "↑"
+    timeout: 10000
+
+# Type a message
+- tapOn:
+    id: "chat-input"
+- inputText: "I really want a cigarette right now"
+- tapOn: "↑"
+
+# Wait for response
+- extendedWaitUntil:
+    visible: "↑"
+    timeout: 10000
+
+# Close chat — triggers outcome capture
+- tapOn: "✕"
+
+# Outcome capture
+- assertVisible:
+    text: "resisted"
+    optional: true

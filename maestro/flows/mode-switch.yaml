@@ -1,0 +1,35 @@
+appId: com.battlebuddy.app
+name: "Mode switch — start in chat, switch to voice, switch back to text"
+---
+
+# Start on home screen
+- assertVisible: "☰"
+
+# Open chat via swipe down
+- swipe:
+    direction: DOWN
+    duration: 300
+
+# Skip trigger capture
+- assertVisible: "What set it off?"
+- tapOn: "Skip"
+
+# Wait for greeting
+- assertVisible: "Talk to Buddy"
+- extendedWaitUntil:
+    visible: "↑"
+    timeout: 10000
+
+# Switch to voice via mic button
+- tapOn: "🎙"
+
+# Verify voice mode
+- assertVisible: "Buddy"
+- assertVisible: "LIVE"
+- assertVisible: "Text"
+
+# Switch back to text
+- tapOn: "Text"
+
+# Verify chat reopened with history
+- assertVisible: "Talk to Buddy"

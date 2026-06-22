@@ -1,0 +1,33 @@
+appId: com.battlebuddy.app
+name: "Voice session — swipe up, mascot visible, end call with ceremony"
+---
+
+# Precondition: on home screen
+- assertVisible: "☰"
+
+# Swipe up to open voice mode
+- swipe:
+    direction: UP
+    duration: 300
+
+# Verify voice mode elements
+- assertVisible: "Buddy"
+- assertVisible: "LIVE"
+- assertVisible: "End"
+- assertVisible: "Text"
+
+# Wait a moment for LiveKit connection
+- waitForAnimationToEnd
+
+# End the call
+- tapOn: "End"
+
+# End call overlay should appear
+- assertVisible: "Call ended"
+- assertVisible: "How did it go?"
+
+# Wait for overlay to dismiss, outcome capture to appear
+- extendedWaitUntil:
+    visible: "resisted"
+    timeout: 5000
+    optional: true

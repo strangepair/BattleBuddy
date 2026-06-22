@@ -1,0 +1,47 @@
+appId: com.battlebuddy.app
+name: "Drawer navigation — open drawer, visit each screen, return"
+---
+
+# Start on home screen
+- assertVisible: "☰"
+
+# Open drawer via hamburger
+- tapOn: "☰"
+
+# Verify drawer items
+- assertVisible: "History"
+- assertVisible: "Analytics"
+- assertVisible: "Goals"
+- assertVisible: "Routines"
+- assertVisible: "Preferences"
+
+# Navigate to History
+- tapOn: "History"
+- assertVisible: "History"
+- tapOn: "← Back"
+
+# Open drawer again, go to Analytics
+- tapOn: "☰"
+- tapOn: "Analytics"
+- assertVisible: "Analytics"
+- tapOn: "← Back"
+
+# Open drawer, go to Goals
+- tapOn: "☰"
+- tapOn: "Goals"
+- assertVisible: "Quitting smoking"
+- tapOn: "← Back"
+
+# Open drawer, go to Preferences
+- tapOn: "☰"
+- tapOn: "Preferences"
+- assertVisible: "About BattleBuddy"
+
+# Navigate to disclaimer
+- tapOn: "About BattleBuddy"
+- assertVisible: "988"
+- tapOn: "← Back"
+
+# Back to preferences, then home
+- tapOn: "← Back"
+- assertVisible: "☰"

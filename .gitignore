@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Expo
+.expo/
+dist/
+web-build/
+
+# Env files — never commit
+.env
+.env.local
+.env.*.local
+mobile/.env
+mobile/.env.local
+supabase/.env
+supabase/.env.local
+server/.env
+server/.env.local
+agent/.env
+agent/.env.local
+
+# Native
+ios/
+android/
+
+# Build artifacts
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+
+# Misc
+.DS_Store
+*.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+.idea/
+.vscode/
