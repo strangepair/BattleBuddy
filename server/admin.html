@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BattleBuddy Admin</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: #1C1C1E; color: #fff; padding: 32px; max-width: 600px; margin: 0 auto; }
+  h1 { font-size: 24px; margin-bottom: 4px; }
+  .subtitle { color: #8E8E93; font-size: 14px; margin-bottom: 32px; }
+  h2 { font-size: 16px; color: #8E8E93; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+  .voice-grid { display: flex; flex-direction: column; gap: 8px; margin-bottom: 32px; }
+  .voice-card { display: flex; align-items: center; justify-content: space-between; background: #2C2C2E; border-radius: 12px; padding: 14px 16px; cursor: pointer; border: 2px solid transparent; transition: border-color 0.2s; }
+  .voice-card:hover { border-color: #3A3A3C; }
+  .voice-card.active { border-color: #E8624A; background: #2A1F1B; }
+  .voice-name { font-size: 16px; font-weight: 600; }
+  .voice-style { font-size: 13px; color: #8E8E93; }
+  .voice-check { font-size: 18px; color: #E8624A; font-weight: 700; visibility: hidden; }
+  .voice-card.active .voice-check { visibility: visible; }
+  .status { padding: 12px 16px; border-radius: 10px; background: #2C2C2E; margin-top: 16px; font-size: 14px; color: #34C759; display: none; }
+  .status.error { color: #FF453A; }
+  .current { color: #E8624A; font-weight: 600; font-size: 15px; margin-bottom: 16px; }
+</style>
+</head>
+<body>
+  <h1>BattleBuddy Admin</h1>
+  <p class="subtitle">Voice & agent configuration</p>
+
+  <h2>TTS Voice</h2>
+  <p class="current" id="current-voice">Loading...</p>
+  <div class="voice-grid" id="voices"></div>
+  <div class="status" id="status"></div>
+
+<script>
+const VOICES = [
+  { id: 'aura-2-theia-en', name: 'Theia', style: 'Warm female' },
+  { id: 'aura-2-apollo-en', name: 'Apollo', style: 'Confident male' },
+  { id: 'aura-2-arcas-en', name: 'Arcas', style: 'Calm male' },
+  { id: 'aura-2-athena-en', name: 'Athena', style: 'Professional female' },
+  { id: 'aura-2-helios-en', name: 'Helios', style: 'Friendly male' },
+  { id: 'aura-2-luna-en', name: 'Luna', style: 'Soft female' },
+  { id: 'aura-2-orion-en', name: 'Orion', style: 'Deep male' },
+  { id: 'aura-2-stella-en', name: 'Stella', style: 'Bright female' },
+  { id: 'aura-2-zeus-en', name: 'Zeus', style: 'Authoritative male' },
+];
+
+let activeVoice = '';
+
+async function loadCurrent() {
+  try {
+    const res = await fetch('/admin/voice');
+    const data = await res.json();
+    activeVoice = data.voice;
+    document.getElementById('current-voice').textContent = 'Current: ' + (VOICES.find(v => v.id === activeVoice)?.name || activeVoice);
+    render();
+  } catch {
+    document.getElementById('current-voice').textContent = 'Could not load';
+  }
+}
+
+function render() {
+  const grid = document.getElementById('voices');
+  grid.innerHTML = VOICES.map(v => `
+    <div class="voice-card ${v.id === activeVoice ? 'active' : ''}" onclick="selectVoice('${v.id}')">
+      <div>
+        <div class="voice-name">${v.name}</div>
+        <div class="voice-style">${v.style}</div>
+      </div>
+      <div class="voice-check">✓</div>
+    </div>
+  `).join('');
+}
+
+async function selectVoice(id) {
+  const status = document.getElementById('status');
+  try {
+    const res = await fetch('/admin/voice', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ voice: id }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      activeVoice = id;
+      document.getElementById('current-voice').textContent = 'Current: ' + (VOICES.find(v => v.id === id)?.name || id);
+      render();
+      status.textContent = 'Voice updated — next voice session will use ' + (VOICES.find(v => v.id === id)?.name || id);
+      status.className = 'status';
+      status.style.display = 'block';
+    }
+  } catch {
+    status.textContent = 'Failed to update voice';
+    status.className = 'status error';
+    status.style.display = 'block';
+  }
+  setTimeout(() => { status.style.display = 'none'; }, 3000);
+}
+
+loadCurrent();
+</script>
+</body>
+</html>

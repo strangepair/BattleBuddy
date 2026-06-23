@@ -76,11 +76,11 @@ const server = createServer(async (req, res) => {
     for await (const chunk of req) body += chunk;
 
     try {
-      const { messages, profile, trigger_context } = JSON.parse(body);
+      const { messages, profile, trigger_context, recent_history } = JSON.parse(body);
       const systemPrompt = buildSystemPrompt(
         profile,
         trigger_context ? JSON.stringify(trigger_context) : undefined,
-        messages?.slice(-6).map(m => `${m.role}: ${m.content}`).join('\n'),
+        recent_history || messages?.slice(-6).map(m => `${m.role}: ${m.content}`).join('\n'),
       );
 
       res.writeHead(200, {
@@ -169,7 +169,7 @@ print(result["text"].strip())
     for await (const chunk of req) body += chunk;
 
     try {
-      const { room, identity } = JSON.parse(body);
+      const { room, identity, context } = JSON.parse(body);
       const apiKey = process.env.LIVEKIT_API_KEY;
       const apiSecret = process.env.LIVEKIT_API_SECRET;
 
@@ -179,7 +179,10 @@ print(result["text"].strip())
       }
 
       const roomName = room || 'battlebuddy';
-      const at = new AccessToken(apiKey, apiSecret, { identity: identity || `user-${Date.now()}` });
+      const at = new AccessToken(apiKey, apiSecret, {
+        identity: identity || `user-${Date.now()}`,
+        metadata: JSON.stringify({ context: context || 'fresh_session' }),
+      });
       at.addGrant({ roomJoin: true, room: roomName, canPublish: true, canSubscribe: true });
       const token = await at.toJwt();
 
@@ -423,6 +426,137 @@ print(result["text"].strip())
       res.end(JSON.stringify({ error: err.message, synced_ids: [] }));
     }
     return;
+  }
+
+  // ─── Session report generation ──────────────────────────────────────────────
+  if (req.method === 'POST' && req.url === '/session/report') {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+
+    try {
+      const { messages, outcome, triggerContext, cravingEventId, userId } = JSON.parse(body);
+
+      if (!messages?.length) {
+        res.writeHead(400, { ...CORS, 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'No messages provided' }));
+      }
+
+      const transcript = messages
+        .map(m => `${m.role === 'user' ? 'User' : 'BattleBuddy'}: ${m.content}`)
+        .join('\n');
+
+      const analysisPrompt = `Analyze this BattleBuddy session transcript and return a JSON object with exactly these fields:
+
+{
+  "trigger_type": "stress" | "boredom" | "social" | "routine" | "craving" | "unknown",
+  "trigger_intensity": 1-5 integer,
+  "outcome": "${outcome || 'unsure'}",
+  "emotional_arc": { "start": "one-word emotion", "end": "one-word emotion" },
+  "what_helped": ["array of specific things that worked"],
+  "what_didnt_help": ["array of things that didn't land or were ignored"],
+  "preferences": {
+    "coping_style": "talk-through" | "distraction" | "exercise" | "mixed",
+    "response_preference": "brief" | "detailed" | "questions",
+    "any other observed preferences as key-value pairs"
+  },
+  "next_session_hint": "One sentence: what to try differently or keep doing next time",
+  "summary": "1-2 sentence natural language summary of the session and what was learned"
+}
+
+Trigger context provided: ${triggerContext ? JSON.stringify(triggerContext) : 'none'}
+Outcome reported by user: ${outcome || 'not reported'}
+
+Transcript:
+${transcript}
+
+Return ONLY the JSON object, no markdown, no explanation.`;
+
+      const response = await client.messages.create({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: analysisPrompt }],
+      });
+
+      const reportText = response.content[0]?.text || '{}';
+      let report;
+      try {
+        report = JSON.parse(reportText);
+      } catch {
+        const jsonMatch = reportText.match(/\{[\s\S]*\}/);
+        report = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
+      }
+
+      // Store in Supabase if configured
+      const supabaseUrl = process.env.SUPABASE_URL;
+      const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+
+      if (supabaseUrl && supabaseKey && cravingEventId && userId) {
+        await fetch(`${supabaseUrl}/rest/v1/session_reports`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': supabaseKey,
+            'Authorization': `Bearer ${supabaseKey}`,
+            'Prefer': 'resolution=ignore-duplicates',
+          },
+          body: JSON.stringify({
+            craving_event_id: cravingEventId,
+            user_id: userId,
+            trigger_type: report.trigger_type || null,
+            trigger_intensity: report.trigger_intensity || null,
+            outcome: report.outcome || outcome || null,
+            emotional_arc: report.emotional_arc || {},
+            what_helped: report.what_helped || [],
+            what_didnt_help: report.what_didnt_help || [],
+            preferences: report.preferences || {},
+            next_session_hint: report.next_session_hint || null,
+            summary: report.summary || 'Session completed.',
+          }),
+        });
+      }
+
+      console.log(`Session report generated for event ${cravingEventId}`);
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, report }));
+    } catch (err) {
+      console.error('Session report error:', err.message);
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: err.message }));
+    }
+    return;
+  }
+
+  // ─── Admin panel ────────────────────────────────────────────────────────────
+  if (req.method === 'GET' && req.url === '/admin') {
+    const html = readFileSync(resolve(__dirname, 'admin.html'), 'utf-8');
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    return res.end(html);
+  }
+
+  if (req.method === 'GET' && req.url === '/admin/voice') {
+    try {
+      const config = JSON.parse(readFileSync(resolve(__dirname, 'voice-config.json'), 'utf-8'));
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(config));
+    } catch {
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ voice: 'aura-2-arcas-en' }));
+    }
+  }
+
+  if (req.method === 'POST' && req.url === '/admin/voice') {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const { voice } = JSON.parse(body);
+      writeFileSync(resolve(__dirname, 'voice-config.json'), JSON.stringify({ voice }));
+      console.log(`Voice changed to: ${voice}`);
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, voice }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
   }
 
   if (req.method === 'GET' && req.url === '/health') {
