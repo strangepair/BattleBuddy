@@ -55,4 +55,10 @@ A running log of significant product/architecture decisions and deviations from 
 
 ---
 
+## 2026-06-27 — Backend: Node.js over Supabase Edge Functions
+
+**Decision.** The spec called for Supabase Edge Functions (Deno). During Phase 1 we switched to a Node.js HTTP server in `server/` because LiveKit, Whisper STT, and the Anthropic SDK are difficult on Deno Edge. Supabase is still used for the database (Postgres/pgvector/RLS) but not as the compute layer. The `supabase/functions/` stubs have been removed; `server/` is canonical.
+
+---
+
 > Tip: pre-existing strategic choices that predate this log and still stand — React Native + Expo, Supabase, the hybrid Gemma (on-device) + Claude (cloud) brain, and Sesame CSM for voice — are documented in `CLAUDE.md` and `docs/`. Only log *changes* and *new* decisions here.
