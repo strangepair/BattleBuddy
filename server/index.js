@@ -217,13 +217,6 @@ const server = createServer(async (req, res) => {
         analyzeAndUpdate(effectiveUserId, messages, false, timezone).catch(() => {});
       }
 
-      res.writeHead(200, {
-        ...CORS,
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-      });
-
       const stream = client.messages.stream({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 512,
@@ -234,7 +227,19 @@ const server = createServer(async (req, res) => {
         })),
       });
 
+      // Wait for the first event before committing to SSE —
+      // this lets pre-stream errors (billing, auth) return a proper HTTP status
+      let headersSent = false;
       for await (const event of stream) {
+        if (!headersSent) {
+          res.writeHead(200, {
+            ...CORS,
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            Connection: 'keep-alive',
+          });
+          headersSent = true;
+        }
         if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
           res.write(`data: ${JSON.stringify({ text: event.delta.text })}\n\n`);
         }
@@ -245,9 +250,14 @@ const server = createServer(async (req, res) => {
     } catch (err) {
       console.error('Error:', err.message);
       if (!res.headersSent) {
-        res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+        const status = err.message?.includes('credit balance') ? 503 : 500;
+        res.writeHead(status, { ...CORS, 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      } else {
+        res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+        res.write('data: [DONE]\n\n');
+        res.end();
       }
-      res.end(JSON.stringify({ error: err.message }));
     }
     return;
   }
