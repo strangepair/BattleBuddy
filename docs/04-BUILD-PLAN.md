@@ -1,6 +1,6 @@
 # BattleBuddy — Phased Build Plan
 
-> Doc 4 of 6. The sequence Claude Code should follow. Start at Phase 0, ship the circuit-breaker core (Phase 1) before anything else.
+> Doc 4 of 7. The sequence Claude Code should follow. Start at Phase 0, ship the circuit-breaker core (Phase 1) before anything else.
 > Each phase ends with a working, testable increment. MVP target habit: **smoking/vaping**.
 
 ---

@@ -1,6 +1,7 @@
 # BattleBuddy — Agent & Prompt Design
 
-> Doc 3 of 6. This is the heart of the product: how the buddy thinks, talks, and stays honest about what it is.
+> Doc 3 of 7. This is the heart of the product: how the buddy thinks, talks, and stays honest about what it is.
+> For the *why* beneath the persona and the evidence behind each method, see `07-IDENTITY-AND-METHOD.md`.
 > Audience: Claude Code (to implement the prompts/tools) and Mike (to tune the voice).
 
 ---

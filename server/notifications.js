@@ -125,7 +125,40 @@ const NUDGE_MESSAGES = {
 };
 
 export function pickNudgeMessage(type, context = {}) {
-  const templates = NUDGE_MESSAGES[type];
+  // If the engagement engine provides anomaly context, use it for a specific nudge
+  if (context.anomalyContext) {
+    const ac = context.anomalyContext;
+    if (ac.signal_type === 'heart_rate') {
+      return {
+        title: 'I noticed something',
+        body: "Your heart rate spiked. That can happen with cravings. I'm here if you need to talk.",
+        data: { type: 'biometric_anomaly', route: 'chat' },
+      };
+    }
+    if (ac.signal_type === 'hrv') {
+      return {
+        title: 'Stress check',
+        body: "Looks like a stressful moment. Want to talk it through?",
+        data: { type: 'biometric_anomaly', route: 'chat' },
+      };
+    }
+    if (ac.trigger_type === 'risk_window') {
+      return {
+        title: 'I know this hour',
+        body: context.riskMessage || "This is usually a tough time for you. What's happening right now?",
+        data: { type: 'risk_window', route: 'chat' },
+      };
+    }
+    if (ac.trigger_type === 'scheduled_checkin') {
+      return {
+        title: 'Check-in time',
+        body: context.checkinMessage || "Just checking in. How are you doing?",
+        data: { type: 'scheduled_checkin', route: 'chat' },
+      };
+    }
+  }
+
+  const templates = NUDGE_MESSAGES[type] || NUDGE_MESSAGES.check_in;
   const template = templates[Math.floor(Math.random() * templates.length)];
 
   return {

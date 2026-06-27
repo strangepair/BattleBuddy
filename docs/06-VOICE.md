@@ -1,6 +1,6 @@
 # BattleBuddy — Voice Persona & Provider Selection
 
-> Doc 6 of 6 (added per requirement: high-quality conversational voice, Sesame-AI-grade).
+> Doc 6 of 7 (added per requirement: high-quality conversational voice, Sesame-AI-grade).
 > Audience: Mike (decision) + Claude Code (integration). Status: recommendation, pending Mike's pick.
 
 ---

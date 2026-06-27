@@ -1,6 +1,6 @@
 # BattleBuddy — Technical Architecture
 
-> Doc 2 of 6. Pairs with `01-PRD.md` (what) and `03-AGENT-DESIGN.md` (the agent's behavior).
+> Doc 2 of 7. Pairs with `01-PRD.md` (what) and `03-AGENT-DESIGN.md` (the agent's behavior).
 > Audience: Claude Code building the app. Status: MVP architecture.
 
 ---

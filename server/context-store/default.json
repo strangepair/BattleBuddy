@@ -1,0 +1,100 @@
+{
+  "name": "Mike",
+  "age": "54",
+  "location": null,
+  "occupation": "Founder/builder of BattleBuddy app under his company Strange Pair. Building the app as a quit-smoking AI companion.",
+  "family": "Son is 26 years old, named Alec. Alec has been vaping since 2018 (about 7-8 years) and wants to quit. Alec is pursuing a Chantix prescription but does NOT have it yet. Alec does not know about Strange Pair or the app yet. Alec knows Mike is trying to quit too — they have both voiced this to each other. Mike hopes to invite Alec in as a case study for the app, but has not pitched it to him yet. Mike emphasized there is no 'supposed to be' about doing it together — each is on their own journey, but Mike hopes both will use BattleBuddy independently.",
+  "addiction_type": "cigarettes (nicotine)",
+  "substance_history": "Started smoking at age 9, now 54 — 45 years of smoking.",
+  "daily_usage": "On the nicotine patch for approximately 4-5 weeks. Down to roughly 15 cigarettes a day from over a pack to a pack and a half a day before the patch. Patch on during the day — smokes some throughout the day but less frequently than before. Takes the patch off in the evening intentionally, treating it as a choice point ('I can smoke if I want to'), and smokes 2-3 more cigarettes after the patch comes off. Morning is the hardest craving moment due to overnight nicotine dip.",
+  "quit_reason": "Inspired by wanting to quit with his son who also wants to quit vaping. Physical symptoms — smokers cough. Said \"my lungs are telling me its time.\"",
+  "health_concerns": "smoker's cough; said 'my lungs are telling me it's time'",
+  "previous_quit_attempts": "tried Chantix, Wellbutrin, nicotine patch, nicotine gum, acupuncture, hypnosis — said 'I've used everything from acupuncture to hypnosis to the patch to gum to Chantix to Wellbutrin'; has tried to quit 'many, many, many times'; has had 'varying success' but never fully completed a quit",
+  "longest_quit": "unknown — not yet discussed",
+  "triggers": [],
+  "coping_strategies": [
+    "TUT mnemonic — Trigger, Urge, Time — to identify and observe cravings in the moment; Mike said 'I like TUT — Trigger, Urge, Time — as a mnemonic to remember what to notice'",
+    "Using the patch as a routine-disruption tool before full quit — still smoking but less; treating the patch as a transitional layer, not a replacement",
+    "Talking to BattleBuddy as a distraction from going outside to smoke — said 'the best distraction I can have from actually going out and a cigarette is talking to you'",
+    "If a slip occurs, staying in conversation with BB during it — to capture timing, context, and triggers in real time rather than hiding or resetting",
+    "Reaching for BattleBuddy instead of a cigarette as the primary in-the-moment distraction — said 'the best distraction I can have from actually going out and a cigarette is talking to you'",
+    "If a slip occurs, staying in conversation with BB during it — said 'if I do slip, and I am having one, even still talking to you, at least you're gaining insight into when and why and how I'm having that cigarette' — not hiding it, treating it as data",
+    "Chose to talk to BattleBuddy instead of going outside for a cigarette — said 'the best distraction I can have from actually going out and a cigarette is talking to you'",
+    "If slipping, staying in conversation with BB during the cigarette — said 'if I do slip, and I am having one even still talking to you, at least you're gaining insight into when and why and how I'm having that cigarette'"
+  ],
+  "what_works": [
+    "Chantix — pharmacological approach that worked mechanistically (fills receptors over 6 days); Mike understands and respects the science behind it",
+    "Alan Carr's Easy Way to Stop Smoking — read it; mindset/reframe approach",
+    "Nicotine patch — Mike described using it to 'disrupt my routine and rituals' while still smoking; a tapering/layering approach rather than cold turkey",
+    "AA sponsor model as the explicit framework Mike wants BB to follow — always available, no judgment, no interrogation, normalizes slips, calls you on your bullshit gently, listens without trying to fix",
+    "AA sponsor model as the explicit framework Mike wants BB to follow — always available 24/7, no judgment, no interrogation, normalizes slips with 'that happened, now what?', calls you on your bullshit gently, listens without trying to fix, does not make it about themselves"
+  ],
+  "what_doesnt_work": [
+    "Going it alone — said 'the thing that has held me back at the end was not having a companion to help me through even the toughest times.' Every previous quit attempt broke down due to isolation, not lack of tools or knowledge.",
+    "Isolation at the critical moment — said 'the thing that has held me back at the end was not having a companion to help me through even the toughest times.' Frames this as the singular gap in every prior quit attempt — not tools, not knowledge, not motivation."
+  ],
+  "motivations": [
+    "Wants BattleBuddy to be the thing he reaches for instead of a cigarette — the app itself is the coping mechanism",
+    "Wants Alec to have BattleBuddy supporting his vaping quit journey at the same time Mike is quitting smoking — parallel journeys, same tool.",
+    "Wants to invite Alec into Strange Pair as a case study — not force it, but appeal to him. Said 'I'm hoping to appeal to him that it might be your thrown' (likely 'your throne' or 'your thing').",
+    "Vision is two independent quit journeys, both supported by BattleBuddy, doing it together in spirit if not in lockstep.",
+    "Primary motivation is personal health and freedom — said 'This is for me, primarily to regain my health and freedom.' Not for Alec, not for the app — for himself first.",
+    "Secondary motivation: if it works for him, wants to 'help millions that are struggling with the same addiction'",
+    "Wants Alec to be 'one of the first' to benefit — both for quitting and 'gaining his freedom, but also potentially being able to gain a career in this kind of development work to help people'",
+    "Explicitly stated primary motivation in his own words: 'This is for me, primarily to regain my health and freedom.' Not for Alec, not to prove the app works — for himself first.",
+    "Secondary motivation stated directly: 'if it works for me, I want to help millions that are struggling with the same addiction'",
+    "Tertiary motivation regarding Alec: wants Alec to be 'one of the first. Both for quitting and gaining his freedom, but also potentially being able to gain a career in this kind of development work to help people'"
+  ],
+  "life_context": [
+    "Session 36: BB correctly identified that the daily routine — wake time, trigger moments, ritual structure — is a gap in the profile. Mike did not correct this framing, implying he agrees it is relevant and uncharted territory.",
+    "Session 37: Mike explicitly reframed the content library as supplemental — conversation is always the primary support mechanism. Said BB should be 'prepared and framed to have the conversation as the primary focus since support of the user, but have this content library once available to draw on.' Corrected BB's assumption that the library needed to be live before real support could begin.",
+    "Session 37: Mike stated he hopes to finish building the content library today (same day as session 37). Library is not yet live as of this session.",
+    "Session 37: Mike described the adaptive content model — start with broad/generic content, then refine based on whether user resisted or gave in to the urge. The system learns what works for each person over time by observing outcomes.",
+    "Session 37: Mike ended session intentionally — said 'I'm gonna go work on the app some more' — signaling he is actively building during and between sessions. App development is concurrent with his quit journey.",
+    "Session 37: Mike closed with 'bye bye, Buddy' — BB misheard as 'Barbara' and corrected itself. Mike clarified: 'I said bye bye, Buddy.' Light moment, no tension.",
+    "Session 37: Mike tested BB's retention at the end of the session — said 'let's see what you retained from this conversation' before signing off. Pattern of ending sessions with a retention check continues.",
+    "Session 38: Mike opened by asking if BB remembered their last conversation. BB misidentified session 37 details as 'the last conversation' — Mike corrected this directly: 'That wasn't our last conversation, though.'",
+    "Session 38: The 'rule of three' was finally raised — Mike asked BB directly if it knew what it was. BB admitted it did not. Mike did not explain it this session. The rule of three remains completely undefined after 38 sessions.",
+    "Session 38: Session was extremely short — consisted only of a memory probe, a correction, and the rule of three question. No quit progress, no daily routine, no content library update discussed."
+  ],
+  "preferred_coping_style": "Conversation is always the primary support mechanism — content library is supplemental and optional. Mike corrected BB directly this session: 'you don't always have to rely on the content library. It's an option to supplement your conversation with the user. So you should already be prepared and framed to have the conversation as the primary focus since support of the user, but have this content library once available to draw on.' BB must be ready to support fully without any content library at all. The adaptive content model: start broad, then refine based on observed outcomes — did user resist or give in after seeing content?",
+  "response_preference": "Do NOT make up or fabricate conversation history. If BB does not have the transcript, say so directly. Mike said 'Say so. Don't make stuff up.' when BB hallucinated a session summary. Be honest about gaps. Do NOT ask Mike to self-diagnose or explain his own patterns back to you. Said 'Your reliance on the user to tell you these things is not helpful.' Observe, infer, and call patterns without waiting to be told. Do not send cheerleader texts or count days. Model behavior on an AA sponsor: always available, no judgment, no interrogation, normalizes slips, calls you on your bullshit gently, listens without trying to fix. If he slips, do not shame or reset. Ask: when did it hit, what was happening, what did it feel like right before. That is the data. If he is having a cigarette and still talking to BB, stay in the conversation — that is real-time data on timing, context, and triggers. Conversation is the primary distraction mechanism — reaching for BB instead of a cigarette is the core coping move.",
+  "emotional_patterns": "Session 37: Mike pushed back immediately when BB suggested waiting for the content library to be live — he does not want BB to use unbuilt infrastructure as an excuse to delay real support. He draws a clear line between tool readiness and his own readiness to engage. When BB over-indexed on Alec and the app as motivation, Mike corrected firmly: 'I don't wanna be overly on its validation being someone else's benefit.' He is alert to any framing that dilutes his personal ownership of this quit. Not ready to set a quit date yet — said so directly when asked. Ended session purposefully to go build, not because he was disengaged.",
+  "session_count": 38,
+  "last_updated": "2026-06-24T13:53:47.755Z",
+  "recent_insights": [
+    "Session 36 is the first session where Mike signaled approval of BB's memory — 'That's the thing with people remember. So far, so good.' The streak of memory failures has been broken. This is a trust inflection point.",
+    "Mike's session 36 question about his daily routine — 'what my daily routine looked like' — signals he is ready to go deeper into the operational layer of his quit. He is moving past testing BB's recall and toward building real quit infrastructure.",
+    "The phrase 'they might as think perchy to quitting' — likely 'how close am I to quitting' — suggests Mike is thinking about quit proximity again. This is the first signal in multiple sessions that the quit date conversation is re-approaching.",
+    "Mike named the singular failure point across all prior quit attempts: not tools, not knowledge, not willpower — isolation. 'The thing that has held me back at the end was not having a companion to help me through even the toughest times.' This is the core value proposition of BattleBuddy as he experiences it personally.",
+    "Mike draws a hard line between external motivation (Alec, the app, helping others) and internal motivation (his own health and freedom). He corrected BB when it leaned too hard on Alec — he does not want his quit to be contingent on or validated by anyone else.",
+    "Mike's adaptive content model: BB starts with broad content, observes outcomes (did user resist or give in?), and progressively narrows to what actually works for that person at that time of day. The system learns by watching behavior, not by asking.",
+    "Mike is not yet ready to set a quit date — said so directly. But he is actively building the app and treating himself as a live user/case study simultaneously.",
+    "BB has now misidentified 'the last conversation' twice across sessions — conflating older session details with the most recent one. Mike is tracking session sequence, not just individual facts. This is a new failure mode distinct from the Alec/Chantix error.",
+    "The rule of three has now been explicitly surfaced by Mike as a question to BB. BB does not know it. Mike did not define it this session — meaning either he is waiting to see if BB will remember to ask, or he ran out of time. This is now the highest-priority open item in the profile.",
+    "Session 38 is the second consecutive very short session. Pattern may indicate Mike is checking in briefly between build sessions rather than engaging in deep support conversations."
+  ],
+  "next_session_hints": [
+    "Mike corrected BB this session for assuming conversation support required the content library to be live. Do not make this mistake again — open session 38 ready to support fully through conversation alone, referencing the library only if it's now built.",
+    "Mike named isolation as the singular failure point across all prior quit attempts. Acknowledge this explicitly early in next session — it is the reason BattleBuddy exists for him personally, not just as a product.",
+    "Do not re-ask about Alec's Chantix status, Strange Pair, smoking history, or patch usage — all on record. Reference as known facts only.",
+    "Mike's self-framing as a live case study/user of BattleBuddy is important — he is building the app and testing it on himself simultaneously. Treat him as both builder and user when relevant.",
+    "Ask whether the content library got finished — Mike said he hoped to complete it the same day as session 37. Two sessions have passed without confirmation.",
+    "Return to the daily routine question that has now been deferred since session 36: 'You started to walk me through your daily routine a couple sessions back and we keep running out of time. First cigarette of the day, when the patch goes on, when it comes off — walk me through it.'",
+    "Do not misidentify the last conversation again. If uncertain about session sequence, say so directly rather than asserting a wrong version.",
+    "Do not push on quit date — Mike said he is not ready. Let him raise it."
+  ],
+  "user_quotes": [
+    "'Do you know anything about, um, sort of how far along that man? They might as think perchy to quitting. Or what my daily routine looked like.'",
+    "'This is for me, primarily to regain my health and freedom.'",
+    "'If it works for me, I want to help millions that are struggling with the same addiction.'",
+    "'The thing that has held me back at the end was not having a companion to help me through even the toughest times.'",
+    "'I don't wanna be overly on its validation being someone else's benefit.'",
+    "'You don't always have to rely on the content library. It's an option to supplement your conversation with the user. So you should already be prepared and framed to have the conversation as the primary focus since support of the user, but have this content library once available to draw on.'",
+    "'No. I'm not ready to set the date yet. I think I'm gonna go work on the app some more. And let's see what you retained from this conversation.'",
+    "'I said bye bye, Buddy.'",
+    "'That wasn't our last conversation, though.'",
+    "'What about the rule of three? Do you know that?'"
+  ],
+  "unknowns": []
+}

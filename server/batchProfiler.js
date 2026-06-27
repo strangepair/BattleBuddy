@@ -146,6 +146,54 @@ function computeRiskFingerprint(events) {
   return { time_risks: topHours, trigger_risks: topTriggers, day_risks: dayOfWeekCounts };
 }
 
+// ─── User facts aggregation ─────────────────────────────────────────────────────
+
+function aggregateUserFacts(reports) {
+  const facts = {
+    name: null,
+    cigarettes_per_day: null,
+    urges_per_day: null,
+    longest_quit: null,
+    quit_reason: null,
+    smoking_history: null,
+    life_events: [],
+    metrics_timeline: [],
+  };
+
+  // Walk reports newest-first — most recent value wins for scalar fields
+  for (const report of reports) {
+    const kf = report.preferences?.key_facts_learned;
+    if (!kf) continue;
+
+    if (kf.name && !facts.name) facts.name = kf.name;
+    if (kf.preferred_name && !facts.name) facts.name = kf.preferred_name;
+    if (kf.cigarettes_per_day != null && !facts.cigarettes_per_day) facts.cigarettes_per_day = kf.cigarettes_per_day;
+    if (kf.urges_per_day != null && !facts.urges_per_day) facts.urges_per_day = kf.urges_per_day;
+    if (kf.longest_quit && !facts.longest_quit) facts.longest_quit = kf.longest_quit;
+    if (kf.quit_reason && !facts.quit_reason) facts.quit_reason = kf.quit_reason;
+    if (kf.smoking_history && !facts.smoking_history) facts.smoking_history = kf.smoking_history;
+    if (kf.life_events?.length) {
+      for (const event of kf.life_events) {
+        if (!facts.life_events.includes(event)) facts.life_events.push(event);
+      }
+    }
+
+    // Track metrics over time
+    const tm = report.preferences?.trackable_metrics;
+    if (tm && (tm.cigarettes_today != null || tm.urges_today != null || tm.resists_today != null)) {
+      facts.metrics_timeline.push({
+        date: report.created_at,
+        cigarettes: tm.cigarettes_today,
+        urges: tm.urges_today,
+        resists: tm.resists_today,
+        days_smoke_free: tm.days_smoke_free,
+      });
+    }
+  }
+
+  return facts;
+}
+
 // ─── What works analysis ────────────────────────────────────────────────────────
 
 function computeWhatWorks(reports) {
@@ -185,7 +233,7 @@ function computeTrajectory(events) {
 
 // ─── Build profile text ─────────────────────────────────────────────────────────
 
-async function buildProfileText(userId, events, reports, phases, risk, whatWorks, trajectory) {
+async function buildProfileText(userId, events, reports, phases, risk, whatWorks, trajectory, userFacts) {
   const totalEvents = events.length;
   const resisted = events.filter(e => e.outcome === 'resisted').length;
   const resistRate = totalEvents > 0 ? Math.round((resisted / totalEvents) * 100) : 0;
@@ -202,8 +250,32 @@ async function buildProfileText(userId, events, reports, phases, risk, whatWorks
     : 0;
 
   const parts = [];
+
+  // User identity
+  if (userFacts.name) parts.push(`Name: ${userFacts.name}.`);
+  if (userFacts.smoking_history) parts.push(`Smoking history: ${userFacts.smoking_history}.`);
+  if (userFacts.cigarettes_per_day) parts.push(`Baseline: ${userFacts.cigarettes_per_day} cigarettes/day.`);
+  if (userFacts.quit_reason) parts.push(`Reason for quitting: ${userFacts.quit_reason}.`);
+  if (userFacts.life_events.length > 0) parts.push(`Life context: ${userFacts.life_events.join('; ')}.`);
+
+  // Stats
   parts.push(`${totalEvents} sessions, ${resistRate}% resist rate.`);
   if (streak > 0) parts.push(`Current streak: ${streak}.`);
+
+  // Metrics trend
+  if (userFacts.metrics_timeline.length >= 2) {
+    const recent = userFacts.metrics_timeline[0];
+    const older = userFacts.metrics_timeline[userFacts.metrics_timeline.length - 1];
+    if (recent.cigarettes != null && older.cigarettes != null) {
+      const diff = older.cigarettes - recent.cigarettes;
+      if (diff > 0) parts.push(`Cigarettes trending down: ${older.cigarettes} → ${recent.cigarettes}/day.`);
+      else if (diff < 0) parts.push(`Cigarettes trending up: ${older.cigarettes} → ${recent.cigarettes}/day.`);
+    }
+  } else if (userFacts.metrics_timeline.length === 1) {
+    const m = userFacts.metrics_timeline[0];
+    if (m.cigarettes != null) parts.push(`Last reported: ${m.cigarettes} cigarettes that day.`);
+    if (m.days_smoke_free != null) parts.push(`Reported ${m.days_smoke_free} days smoke-free.`);
+  }
 
   if (currentPhase) {
     parts.push(`Journey: day ${phaseAge} of ${currentPhase.phase_type.replace('_', ' ')}.`);
@@ -215,8 +287,8 @@ async function buildProfileText(userId, events, reports, phases, risk, whatWorks
   if (risk.time_risks.length > 0) parts.push(`Riskiest times: ${risk.time_risks.join(', ')}.`);
   if (whatWorks.framings.length > 0) parts.push(`What works: ${whatWorks.framings.join(', ')}.`);
   if (whatWorks.coping_styles.length > 0) parts.push(`Preferred coping: ${whatWorks.coping_styles.join(', ')}.`);
+  if (userFacts.longest_quit) parts.push(`Longest previous quit: ${userFacts.longest_quit}.`);
 
-  // Get the most recent session hint
   if (reports.length > 0 && reports[0].next_session_hint) {
     parts.push(`Hint: ${reports[0].next_session_hint}`);
   }
@@ -264,8 +336,11 @@ async function profileUser(userId, fullRebuild = false) {
     });
   }
 
+  // Aggregate user facts across all reports
+  const userFacts = aggregateUserFacts(reports);
+
   // Build profile text
-  const profileText = await buildProfileText(userId, events, reports, phases, risk, whatWorks, trajectory);
+  const profileText = await buildProfileText(userId, events, reports, phases, risk, whatWorks, trajectory, userFacts);
 
   const currentPhase = phases.length > 0 ? phases[phases.length - 1] : null;
   const phaseAge = currentPhase

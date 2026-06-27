@@ -1,6 +1,6 @@
 # BattleBuddy — Hybrid Model Strategy (on-device + cloud)
 
-> Doc 5 of 6. How the "brain" is split between a small on-device Gemma and cloud models.
+> Doc 5 of 7. How the "brain" is split between a small on-device Gemma and cloud models.
 > Decision: hybrid. Read alongside `03-AGENT-DESIGN.md` (the persona + scope this must honor).
 
 ---

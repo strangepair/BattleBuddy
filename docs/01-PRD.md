@@ -1,6 +1,6 @@
 # BattleBuddy — Product Requirements Document (PRD)
 
-> Reading order: this is doc 1 of 6. See `00-README.md` for the full map.
+> Reading order: this is doc 1 of 7. See `00-README.md` for the full map.
 > Status: MVP spec. Owner: Mike. Last updated: 2026-06-15.
 
 ---

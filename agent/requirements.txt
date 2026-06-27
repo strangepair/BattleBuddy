@@ -1,0 +1,7 @@
+livekit-agents==1.6.2
+livekit-plugins-anthropic==1.6.2
+livekit-plugins-deepgram==1.6.2
+livekit-plugins-silero==1.6.2
+livekit-plugins-turn-detector==1.6.2
+python-dotenv==1.2.2
+aiohttp==3.11.18

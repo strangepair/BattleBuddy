@@ -1,5 +1,13 @@
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught exception:', err.message);
+  console.error(err.stack);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('[FATAL] Unhandled rejection:', err);
+});
+
 import { createServer } from 'node:http';
-import { readFileSync, writeFileSync, mkdtempSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, unlinkSync, mkdirSync, readdirSync } from 'node:fs';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -8,6 +16,7 @@ import { promisify } from 'node:util';
 import Anthropic from '@anthropic-ai/sdk';
 import { AccessToken } from 'livekit-server-sdk';
 import { sendPush, isQuietHours, pickNudgeMessage } from './notifications.js';
+import { analyzeAndUpdate, buildProfileSummary, loadProfile, seedProfile, mergeProfiles, resolveUserId } from './contextAgent.js';
 
 const execFileAsync = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -35,10 +44,35 @@ const systemPromptTemplate = readFileSync(systemPromptPath, 'utf-8');
 // Path to the CSM venv's Python (for whisper transcription)
 const WHISPER_PYTHON = resolve(__dirname, '..', 'sesame-csm', '.venv', 'bin', 'python3');
 
-function buildSystemPrompt(profile, triggerContext, recentHistory) {
+function formatLocalTime(timezone) {
+  try {
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone || 'America/Chicago',
+      weekday: 'long',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+    const dateFormatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone || 'America/Chicago',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
+    return `${formatter.format(now)}, ${dateFormatter.format(now)}`;
+  } catch {
+    return new Date().toLocaleString();
+  }
+}
+
+function buildSystemPrompt(profile, triggerContext, recentHistory, timezone) {
+  const localTime = formatLocalTime(timezone);
+  const timeContext = `User's local time: ${localTime}.` +
+    (triggerContext ? ` ${triggerContext}` : '');
   return systemPromptTemplate
     .replace('{{profile}}', profile || 'New user — no history yet.')
-    .replace('{{trigger_context}}', triggerContext || 'Not provided.')
+    .replace('{{trigger_context}}', timeContext)
     .replace('{{recent_history}}', recentHistory || 'First message in this session.');
 }
 
@@ -76,12 +110,26 @@ const server = createServer(async (req, res) => {
     for await (const chunk of req) body += chunk;
 
     try {
-      const { messages, profile, trigger_context, recent_history } = JSON.parse(body);
+      const { messages, profile, trigger_context, recent_history, userId, timezone } = JSON.parse(body);
+
+      // Use the context agent's profile if available, fall back to client-provided
+      const effectiveUserId = userId || 'default';
+      const contextProfile = buildProfileSummary(effectiveUserId);
+      const finalProfile = (contextProfile && !contextProfile.includes('New user'))
+        ? contextProfile
+        : profile;
+
       const systemPrompt = buildSystemPrompt(
-        profile,
+        finalProfile,
         trigger_context ? JSON.stringify(trigger_context) : undefined,
         recent_history || messages?.slice(-6).map(m => `${m.role}: ${m.content}`).join('\n'),
+        timezone,
       );
+
+      // Fire background analysis (non-blocking) — Sonnet extracts facts while Haiku responds
+      if (messages?.length >= 2) {
+        analyzeAndUpdate(effectiveUserId, messages, false, timezone).catch(() => {});
+      }
 
       res.writeHead(200, {
         ...CORS,
@@ -169,7 +217,7 @@ print(result["text"].strip())
     for await (const chunk of req) body += chunk;
 
     try {
-      const { room, identity, context } = JSON.parse(body);
+      const { room, identity, context, sessionCount, profile, recentHistory, triggerContext, priorMessages, timezone } = JSON.parse(body);
       const apiKey = process.env.LIVEKIT_API_KEY;
       const apiSecret = process.env.LIVEKIT_API_SECRET;
 
@@ -181,18 +229,72 @@ print(result["text"].strip())
       const roomName = room || 'battlebuddy';
       const at = new AccessToken(apiKey, apiSecret, {
         identity: identity || `user-${Date.now()}`,
-        metadata: JSON.stringify({ context: context || 'fresh_session' }),
+        metadata: JSON.stringify({
+          context: context || 'fresh_session',
+          sessionCount: sessionCount || 0,
+          profile: profile || undefined,
+          recentHistory: recentHistory || undefined,
+          triggerContext: triggerContext || undefined,
+          priorMessages: priorMessages || undefined,
+        }),
       });
       at.addGrant({ roomJoin: true, room: roomName, canPublish: true, canSubscribe: true });
       const token = await at.toJwt();
 
-      // Dispatch the agent to the room
+      // Use context agent's profile if available
+      const effectiveUserId = identity || 'default';
+      const contextProfile = buildProfileSummary(effectiveUserId);
+      const finalProfile = (contextProfile && !contextProfile.includes('New user'))
+        ? contextProfile
+        : profile;
+
+      console.log(`[Voice] User: ${effectiveUserId}`);
+      console.log(`[Voice] Profile (${(finalProfile || '').length} chars): ${(finalProfile || '').substring(0, 200)}`);
+
+      const voiceSystemPrompt = buildSystemPrompt(
+        finalProfile,
+        triggerContext ? JSON.stringify(triggerContext) : undefined,
+        priorMessages || recentHistory || undefined,
+        timezone,
+      );
+
+      try {
+        console.log(`[Voice] System prompt: ${voiceSystemPrompt.length} chars, has Mike: ${voiceSystemPrompt.includes('Mike')}, has Alec: ${voiceSystemPrompt.includes('Alec')}`);
+      } catch(e) { console.log('[Voice] Log error:', e.message); }
+
+      // Extract name — check context agent first, then client profile
+      const agentProfile = loadProfile(effectiveUserId);
+      let userName = agentProfile?.name || 'there';
+      if (userName === 'there' && finalProfile) {
+        const nameMatch = finalProfile.match(/Name:\s*([^.]+)/);
+        if (nameMatch) userName = nameMatch[1].trim();
+      }
+
+      // Build the greeting instruction — include a profile hint so the agent uses its knowledge
+      let greeting;
+      if (context === 'switched_from_text' || priorMessages) {
+        greeting = 'Casually acknowledge switching to voice and continue the conversation. One sentence.';
+      } else if (agentProfile && agentProfile.session_count > 0) {
+        // Returning user — build a contextual greeting with a specific detail
+        const hints = agentProfile.next_session_hints || [];
+        const hint = hints.length > 0 ? hints[0] : null;
+        greeting = `Greet ${userName} warmly by name. You know them well — you've had ${agentProfile.session_count} conversations. `
+          + `Reference ONE specific thing you know about them to show you remember. `
+          + (hint ? `Suggested follow-up from last session: "${hint}". ` : '')
+          + `Keep it to 2 sentences. Then wait.`;
+      } else {
+        greeting = `Say: 'Hey, ${userName}! How's it going?' and wait for their response.`;
+      }
+
+      // Dispatch the agent with the prompt and greeting baked in
       const { RoomServiceClient, AgentDispatchClient } = await import('livekit-server-sdk');
       const lkUrl = process.env.LIVEKIT_URL;
       try {
         const agentDispatch = new AgentDispatchClient(lkUrl, apiKey, apiSecret);
-        await agentDispatch.createDispatch(roomName, 'battlebuddy');
-        console.log(`Dispatched agent to room: ${roomName}`);
+        await agentDispatch.createDispatch(roomName, 'battlebuddy', {
+          metadata: JSON.stringify({ systemPrompt: voiceSystemPrompt, greeting, userId: effectiveUserId, timezone: timezone || 'America/Chicago' }),
+        });
+        console.log(`Dispatched agent to room: ${roomName} (user: ${userName})`);
       } catch (dispatchErr) {
         console.log('Agent dispatch (may already exist):', dispatchErr.message);
       }
@@ -252,7 +354,10 @@ print(result["text"].strip())
     for await (const chunk of req) body += chunk;
 
     try {
-      const { userId, nudgeType, context } = JSON.parse(body);
+      const parsed = JSON.parse(body);
+      const userId = parsed.userId;
+      const nudgeType = parsed.nudgeType || parsed.type || 'check_in';
+      const context = parsed.context || { anomalyContext: parsed.anomalyContext };
       const supabaseUrl = process.env.SUPABASE_URL;
       const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
 
@@ -445,22 +550,56 @@ print(result["text"].strip())
         .map(m => `${m.role === 'user' ? 'User' : 'BattleBuddy'}: ${m.content}`)
         .join('\n');
 
-      const analysisPrompt = `Analyze this BattleBuddy session transcript and return a JSON object with exactly these fields:
+      const analysisPrompt = `Analyze this BattleBuddy session transcript. Extract everything that would help the next conversation start smarter — not reinventing the wheel.
+
+Return a JSON object with exactly these fields:
 
 {
   "trigger_type": "stress" | "boredom" | "social" | "routine" | "craving" | "unknown",
   "trigger_intensity": 1-5 integer,
+  "trigger_texture": "The user's own words for what the urge felt like — physical, emotional, habitual. Quote them.",
+  "trigger_context_detail": "Was it social or alone? Post-meal? Driving? Time of day? What was happening around them?",
   "outcome": "${outcome || 'unsure'}",
+  "resist_duration_note": "How long did they resist before the session ended? Any indication?",
   "emotional_arc": { "start": "one-word emotion", "end": "one-word emotion" },
-  "what_helped": ["array of specific things that worked"],
-  "what_didnt_help": ["array of things that didn't land or were ignored"],
+  "what_helped": ["Specific things that worked — quote BB's exact phrases that landed, not just categories"],
+  "what_didnt_help": ["Things that got ignored, pushed back on, or fell flat"],
+  "mode_switches": "Did the user switch between voice and text? Note any pattern.",
   "preferences": {
-    "coping_style": "talk-through" | "distraction" | "exercise" | "mixed",
+    "coping_style": "talk-through" | "distraction" | "exercise" | "movement" | "mixed",
     "response_preference": "brief" | "detailed" | "questions",
-    "any other observed preferences as key-value pairs"
+    "user_metaphors": ["Metaphors or language the user used that felt authentic to them"],
+    "user_motivations": ["What drives them — health, family, building something, freedom, etc."],
+    "post_slip_behavior": "shame-spiral" | "curious" | "dismissive" | "resilient" | "unknown"
   },
-  "next_session_hint": "One sentence: what to try differently or keep doing next time",
-  "summary": "1-2 sentence natural language summary of the session and what was learned"
+  "same_or_new_trigger": "Was this the same trigger as recent sessions or a new one?",
+  "spiral_or_shift": "Is the user spiraling (repeated, escalating) or shifting (trying new approaches, stabilizing)?",
+  "key_facts_learned": {
+    "name": "User's name if mentioned, null otherwise",
+    "preferred_name": "What they want to be called if different from name, null otherwise",
+    "age": "User's age if mentioned, null otherwise",
+    "location": "Where they live if mentioned, null otherwise",
+    "occupation": "Their job/work if mentioned, null otherwise",
+    "family": "Family details if mentioned (spouse, kids, etc), null otherwise",
+    "cigarettes_per_day": "Number if mentioned, null otherwise",
+    "vapes_per_day": "Number if mentioned, null otherwise",
+    "urges_per_day": "Number if mentioned, null otherwise",
+    "longest_quit": "Duration if mentioned, null otherwise",
+    "quit_reason": "Why they want to quit if mentioned, null otherwise",
+    "addiction_type": "smoking, vaping, dipping, or other — if mentioned, null otherwise",
+    "smoking_history": "How long they've been using nicotine if mentioned, null otherwise",
+    "life_events": ["ANY personal facts shared — age, job, family, health, hobbies, stress sources, everything"],
+    "health_concerns": "Any health issues mentioned, null otherwise",
+    "previous_quit_attempts": "Details of past attempts if mentioned, null otherwise"
+  },
+  "trackable_metrics": {
+    "cigarettes_today": "Number if they said how many they smoked today, null otherwise",
+    "urges_today": "Number of urges mentioned, null otherwise",
+    "resists_today": "Number of resists mentioned, null otherwise",
+    "days_smoke_free": "If they mentioned a streak, null otherwise"
+  },
+  "next_session_hint": "One concrete sentence: what to try, keep doing, or avoid next time with THIS specific user",
+  "summary": "2-3 sentence summary capturing what happened, what was learned about this user, and what changed"
 }
 
 Trigger context provided: ${triggerContext ? JSON.stringify(triggerContext) : 'none'}
@@ -508,7 +647,17 @@ Return ONLY the JSON object, no markdown, no explanation.`;
             emotional_arc: report.emotional_arc || {},
             what_helped: report.what_helped || [],
             what_didnt_help: report.what_didnt_help || [],
-            preferences: report.preferences || {},
+            preferences: {
+              ...(report.preferences || {}),
+              trigger_texture: report.trigger_texture || null,
+              trigger_context_detail: report.trigger_context_detail || null,
+              resist_duration_note: report.resist_duration_note || null,
+              mode_switches: report.mode_switches || null,
+              same_or_new_trigger: report.same_or_new_trigger || null,
+              spiral_or_shift: report.spiral_or_shift || null,
+              key_facts_learned: report.key_facts_learned || null,
+              trackable_metrics: report.trackable_metrics || null,
+            },
             next_session_hint: report.next_session_hint || null,
             summary: report.summary || 'Session completed.',
           }),
@@ -524,6 +673,107 @@ Return ONLY the JSON object, no markdown, no explanation.`;
       res.end(JSON.stringify({ error: err.message }));
     }
     return;
+  }
+
+  // ─── Context Agent API ──────────────────────────────────────────────────────
+
+  // Get the context agent's profile for a user
+  if (req.method === 'GET' && req.url.startsWith('/context/profile/')) {
+    const userId = req.url.split('/context/profile/')[1];
+    const summary = buildProfileSummary(userId);
+    const profile = loadProfile(userId);
+    res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ summary, profile }));
+  }
+
+  // Trigger a context analysis (called by the app on session end or mid-session)
+  if (req.method === 'POST' && req.url === '/context/analyze') {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const { userId, messages, isSessionEnd, timezone } = JSON.parse(body);
+      // Run async — respond immediately
+      analyzeAndUpdate(userId || 'default', messages, isSessionEnd, timezone || 'America/Chicago').catch(() => {});
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, queued: true }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  // Seed a user profile (called on account creation)
+  if (req.method === 'POST' && req.url === '/context/seed') {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const { userId, name } = JSON.parse(body);
+      seedProfile(userId || 'default', name);
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  // Record a session outcome (resisted / gave_in) into the user's profile
+  if (req.method === 'POST' && req.url === '/context/session-outcome') {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const { userId, outcome, timestamp } = JSON.parse(body);
+      const effectiveUserId = resolveUserId(userId || 'default');
+      const profile = loadProfile(effectiveUserId);
+
+      if (!Array.isArray(profile.session_outcomes)) profile.session_outcomes = [];
+      profile.session_outcomes.push({
+        outcome,
+        timestamp: timestamp || new Date().toISOString(),
+      });
+      // Keep last 100 outcomes
+      if (profile.session_outcomes.length > 100) {
+        profile.session_outcomes = profile.session_outcomes.slice(-100);
+      }
+
+      // Also log as an activity_log entry
+      if (!Array.isArray(profile.activity_log)) profile.activity_log = [];
+      const tz = 'America/Chicago';
+      let localTime, localDate;
+      try {
+        localTime = new Intl.DateTimeFormat('en-US', {
+          timeZone: tz, hour: 'numeric', minute: '2-digit', hour12: true,
+        }).format(new Date());
+        localDate = new Intl.DateTimeFormat('en-CA', {
+          timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+        }).format(new Date());
+      } catch {
+        localTime = new Date().toLocaleTimeString();
+        localDate = new Date().toISOString().slice(0, 10);
+      }
+      profile.activity_log.push({
+        time: localTime,
+        date: localDate,
+        event: outcome === 'resisted' ? 'resisted the urge after session' : 'gave in after session',
+        type: outcome === 'resisted' ? 'resist' : 'smoke',
+        logged_at: new Date().toISOString(),
+      });
+      if (profile.activity_log.length > 60) {
+        profile.activity_log = profile.activity_log.slice(-60);
+      }
+
+      profile.last_updated = new Date().toISOString();
+      const storePath = process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store');
+      try { mkdirSync(storePath, { recursive: true }); } catch {}
+      writeFileSync(resolve(storePath, `${effectiveUserId}.json`), JSON.stringify(profile, null, 2));
+
+      console.log(`[SessionOutcome] ${effectiveUserId}: ${outcome}`);
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
   }
 
   // ─── Admin panel ────────────────────────────────────────────────────────────
@@ -559,6 +809,118 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     }
   }
 
+  // ─── Profile upload endpoint (admin tool) ──────────────────────────────────
+  if (req.method === 'PUT' && req.url.startsWith('/context/profile/')) {
+    const userId = req.url.split('/context/profile/')[1];
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const profile = JSON.parse(body);
+      const storePath = process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store');
+      try { mkdirSync(storePath, { recursive: true }); } catch {}
+      writeFileSync(resolve(storePath, `${userId}.json`), JSON.stringify(profile, null, 2));
+      // Clear the in-memory cache so loadProfile picks up the new file
+      const p = loadProfile(userId);
+      Object.assign(p, profile);
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, name: profile.name, session_count: profile.session_count }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  // ─── Profile merge endpoint (one-time admin tool) ─────────────────────────
+  if (req.method === 'POST' && req.url === '/context/merge') {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const { sourceId, targetId } = JSON.parse(body);
+      const merged = mergeProfiles(sourceId, targetId);
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, session_count: merged.session_count }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  // ─── Risk windows endpoint ──────────────────────────────────────────────────
+  if (req.method === 'GET' && req.url.startsWith('/risk-windows/')) {
+    const userId = req.url.split('/risk-windows/')[1];
+    try {
+      const profile = loadProfile(userId);
+      const windows = (profile.risk_windows || []).map(rw => ({
+        hour: rw.hour,
+        day_of_week: rw.day_of_week,
+        weight: rw.weight,
+        source: rw.source,
+      }));
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ windows }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  // ─── LiveKit Webhook — safety net for transcript capture ───────────────────
+  if (req.method === 'POST' && req.url === '/livekit/webhook') {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+
+    try {
+      const { WebhookReceiver } = await import('livekit-server-sdk');
+      const receiver = new WebhookReceiver(
+        process.env.LIVEKIT_API_KEY,
+        process.env.LIVEKIT_API_SECRET,
+      );
+      const event = await receiver.receive(body, req.headers.authorization);
+
+      if (event.event === 'room_finished' && event.room) {
+        const roomName = event.room.name;
+        const metadata = event.room.metadata || '{}';
+        let userId = 'default';
+        try {
+          const meta = JSON.parse(metadata);
+          userId = meta.userId || 'default';
+        } catch {}
+
+        // Extract userId from room name as fallback (format: bb-{userId})
+        if (userId === 'default' && roomName.startsWith('bb-')) {
+          userId = roomName.replace('bb-', '');
+        }
+
+        console.log(`[Webhook] Room finished: ${roomName} (user: ${userId})`);
+
+        // The agent's periodic save and on_close should have already sent the transcript.
+        // This webhook is the safety net — trigger a profile save to increment session count
+        // if the context agent already has data from periodic saves.
+        const profile = loadProfile(userId);
+        if (profile && profile.last_updated) {
+          const lastUpdate = new Date(profile.last_updated).getTime();
+          const now = Date.now();
+          // If profile was updated in the last 5 minutes (from periodic saves), just increment session count
+          if (now - lastUpdate < 5 * 60 * 1000) {
+            profile.session_count = (profile.session_count || 0) + 1;
+            profile.last_updated = new Date().toISOString();
+            const storePath = process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store');
+            try { mkdirSync(storePath, { recursive: true }); } catch {}
+            writeFileSync(resolve(storePath, `${userId}.json`), JSON.stringify(profile, null, 2));
+            console.log(`[Webhook] Session count incremented for ${userId}: ${profile.session_count}`);
+          }
+        }
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true }));
+    } catch (e) {
+      console.log(`[Webhook] Error: ${e.message}`);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true }));
+    }
+  }
+
   if (req.method === 'GET' && req.url === '/health') {
     res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ ok: true }));
@@ -567,6 +929,77 @@ Return ONLY the JSON object, no markdown, no explanation.`;
   res.writeHead(404, CORS);
   res.end('Not found');
 });
+
+// ─── Transcript watcher — picks up files written by the voice agent ──────────
+const TRANSCRIPT_DIR = resolve(__dirname, 'transcripts');
+try { mkdirSync(TRANSCRIPT_DIR, { recursive: true }); } catch {}
+
+setInterval(async () => {
+  try {
+    const files = readdirSync(TRANSCRIPT_DIR).filter(f => f.endsWith('.json'));
+    for (const file of files) {
+      const filePath = resolve(TRANSCRIPT_DIR, file);
+      try {
+        const data = JSON.parse(readFileSync(filePath, 'utf-8'));
+        if (data.messages && data.messages.length >= 2) {
+          console.log(`[TranscriptWatcher] Processing ${file} (${data.messages.length} messages for ${data.userId})`);
+          await analyzeAndUpdate(data.userId || 'default', data.messages, data.isSessionEnd || false);
+          console.log(`[TranscriptWatcher] Profile updated for ${data.userId}`);
+        }
+        unlinkSync(filePath);
+      } catch (e) {
+        console.log(`[TranscriptWatcher] Error processing ${file}: ${e.message}`);
+        try { unlinkSync(filePath); } catch {}
+      }
+    }
+  } catch {}
+}, 5000); // Check every 5 seconds
+
+// ─── Nightly risk window sync to Supabase ─────────────────────────────────────
+async function syncRiskWindowsToSupabase() {
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+  if (!supabaseUrl || !supabaseKey) return;
+
+  const storeDir = process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store');
+  try {
+    const files = readdirSync(storeDir).filter(f => f.endsWith('.json'));
+    for (const file of files) {
+      try {
+        const profile = JSON.parse(readFileSync(resolve(storeDir, file), 'utf-8'));
+        const userId = file.replace('.json', '');
+        const windows = profile.risk_windows || [];
+        if (!windows.length) continue;
+
+        for (const rw of windows) {
+          await fetch(`${supabaseUrl}/rest/v1/risk_windows`, {
+            method: 'POST',
+            headers: {
+              'apikey': supabaseKey,
+              'Authorization': `Bearer ${supabaseKey}`,
+              'Content-Type': 'application/json',
+              'Prefer': 'resolution=merge-duplicates',
+            },
+            body: JSON.stringify({
+              user_id: userId,
+              day_of_week: rw.day_of_week,
+              hour: rw.hour,
+              weight: rw.weight || 0.5,
+            }),
+          });
+        }
+        console.log(`[RiskSync] Synced ${windows.length} windows for ${userId}`);
+      } catch (e) {
+        console.log(`[RiskSync] Error for ${file}: ${e.message}`);
+      }
+    }
+  } catch (e) {
+    console.log(`[RiskSync] Failed: ${e.message}`);
+  }
+}
+
+// Risk window sync available on-demand via /admin/sync-risk-windows
+// Disabled as a periodic job to conserve memory
 
 const PORT = process.env.PORT || 3333;
 server.listen(PORT, '0.0.0.0', () => {
