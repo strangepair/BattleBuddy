@@ -452,7 +452,7 @@ async function backfillVectors(userId, profile) {
     const mod = await import('../vectorStore.js');
     embedAndStore = mod.embedAndStore;
     if (!mod.isConfigured()) {
-      console.log('  [vectors] OPENAI_API_KEY not configured, skipping vector backfill');
+      console.log('  [vectors] Supabase not configured, skipping vector backfill');
       return { embedded: 0, skipped: true };
     }
   } catch (e) {

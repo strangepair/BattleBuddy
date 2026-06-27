@@ -1135,5 +1135,5 @@ async function syncRiskWindowsToSupabase() {
 const PORT = process.env.PORT || 3333;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`BattleBuddy API running on http://0.0.0.0:${PORT}`);
-  console.log(`Vector store: ${isVectorConfigured() ? 'configured' : 'not configured (set OPENAI_API_KEY)'}`);
+  console.log(`Vector store: ${isVectorConfigured() ? 'configured' : 'not configured (set SUPABASE_URL + SUPABASE_SERVICE_KEY)'}`);
 });
