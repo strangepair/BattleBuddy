@@ -44,3 +44,4 @@ yarn-error.*
 
 # Python virtual environments
 .venv/
+agent/.venv/
