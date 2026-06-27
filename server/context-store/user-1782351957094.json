@@ -1,0 +1,2039 @@
+{
+  "name": "Mike",
+  "age": "54",
+  "location": "Oklahoma City, Oklahoma — Eisenhower Park at Lake Hefner confirmed as Butter's walk destination on Saturday mornings post-gym; park is on the way home from the gym; route is gym → Eisenhower Park → home; Mike said 'It should feel like you're here with me' regarding location awareness; said 'I'm in Oklahoma City, Oklahoma'",
+  "occupation": "President and CEO of Echidna (spelled E-C-H-I-D-N-A) — primary salary source; onshore/offshore model with team in India who work overnight; Mike covers mornings for any meetings he needs to be involved in but is less involved currently because he has sold big deals and the team is now delivering on those. Also working with Isotropic (spelled I-S-O-T-R-O-P-I-C) — NOT currently on contract in any way; working through good faith with two of the owning partners of Isotropic to negotiate a long-standing partnership to grow the company; Adam is the CEO of Isotropic and co-founder/co-owner with Sarin; Shawn runs W3 (spelled W-three), which is partnered with Isotropic; Aztec is the new client prospect of Isotropic — if the retainer deal is signed, month one will be discovery; items identifiable quickly will be started immediately; Mike sent feedback to Shawn and is now waiting on Isotropic/Aztec to decide whether to proceed; the deal outcome determines whether Mike becomes a minority partner. Also founder/builder of BattleBuddy under Strange Pair. Three concurrent professional roles: Echidna (primary income, salaried), Isotropic/Aztec (no contract yet — good faith negotiation toward minority partnership, retainer deal pending Shawn/Aztec decision), Strange Pair/BattleBuddy (founder).",
+  "family": "Son is 26 years old, named Alec. Alec has been vaping since 2018 (about 7-8 years) and wants to quit. Alec is pursuing a Chantix prescription but does NOT have it yet. Alec does not know about Strange Pair or the app yet. Alec knows Mike is trying to quit too — they have both voiced this to each other. Mike hopes to invite Alec in as a case study for the app, but has not pitched it to him yet. Mike emphasized there is no 'supposed to be' about doing it together — each is on their own journey, but Mike hopes both will use BattleBuddy independently. Mike is NOT married — confirmed explicitly: 'I'm not married, bro. I'm not married.' Previous profile reference to 'wife' was an error introduced by BB misquoting Mike; Mike said 'the vision of my life' not 'the vision of my wife.' No wife exists in the profile. Note: Mike said 'I'm gonna take Alec or Butter for a walk' before self-correcting to Butter — Alec may be physically present or nearby on Saturday 2026-06-27; his Saturday presence is unconfirmed.",
+  "addiction_type": "cigarettes (nicotine)",
+  "substance_history": "Started smoking at age 9, now 54 — 45 years of smoking.",
+  "daily_usage": "On the nicotine patch for approximately 4-5 weeks. Down to roughly 15 cigarettes a day from over a pack to a pack and a half a day before the patch. Patch on during the day — smokes some throughout the day but less frequently than before. Takes the patch off in the evening intentionally, treating it as a choice point ('I can smoke if I want to'), and smokes 2-3 more cigarettes after the patch comes off. Morning is the hardest craving moment due to overnight nicotine dip.",
+  "quit_reason": "Inspired by wanting to quit with his son who also wants to quit vaping. Physical symptoms — smokers cough. Said \"my lungs are telling me its time.\"",
+  "health_concerns": "smoker's cough confirmed as active and present — Mike named it explicitly in context of asking about his own mortality risk: 'the fact that I have kind of the smoker's cough'; back issues ongoing from deck work; Mike asked directly about real health risks of not quitting at age 54 with 45 years of smoking",
+  "previous_quit_attempts": "tried Chantix, Wellbutrin, nicotine patch, nicotine gum, acupuncture, hypnosis — said 'I've used everything from acupuncture to hypnosis to the patch to gum to Chantix to Wellbutrin'; has tried to quit 'many, many, many times'; has had 'varying success' but never fully completed a quit",
+  "longest_quit": "unknown — not yet discussed",
+  "triggers": [
+    {
+      "value": "break-destination trigger fully elaborated — the break is not just shaped by smoking routine, it is also used as planning time; Mike said 'And then I figure out what's the next thing I'm gonna do. Maybe I have something I'm gonna do, or maybe I'm gonna try and think of what I'm gonna do while I'm smoking.' — the cigarette has been deputized as a planning ritual; removing it leaves both the destination gap AND the planning gap unfilled",
+      "captured_at": "2026-06-26T17:46:04.434Z"
+    },
+    {
+      "value": "VR immersion exit trigger — same mechanism as sculpting/drawing exit; when Mike leaves VR flow he hits the same break-routed-to-smoking-spot pattern; said 'The same is true with VR... does the same thing' — exit from any full-absorption state fires the same break-destination-cigarette sequence",
+      "captured_at": "2026-06-26T17:46:04.434Z"
+    },
+    {
+      "value": "spatial location of creative workspace as conditioned smoking boundary — when Mike leaves the drawing or sculpting or VR space, the exit from that space IS the trigger; the physical act of getting out of the space fires the break-routed-to-cigarette sequence; this maps exactly to his stated solution ('getting out of the space is a good transition') — the challenge is that the exit trigger and the proposed solution are the same action",
+      "captured_at": "2026-06-26T17:48:04.549Z"
+    },
+    {
+      "value": "physical exit from enclosed space (house or car) as the conditioned smoking initiation — Mike confirmed that smoking requires leaving the house or the car to go to the outdoor smoking spot; the act of exiting the building or vehicle IS the start of the smoking ritual; said 'that'll teach me to leave the house or leave the car or whatever fine space I'm in. To go smoke there.'",
+      "captured_at": "2026-06-26T17:49:04.590Z"
+    },
+    {
+      "value": "activity-transition-into-coding trigger — urge fired at 1:02 PM when Mike sat down to begin heads-down coding on BattleBuddy; consistent with the broader pattern of urges hitting at gear-shifts between tasks; this is the first confirmed instance of the transition trigger firing specifically at the start of a coding session",
+      "captured_at": "2026-06-26T18:02:29.422Z"
+    },
+    {
+      "value": "blank-space-after-task trigger — when Mike finishes something (physical labor, shower, any activity) and has no immediate next thing planned, the brain reaches for the cigarette as the default filler; Mike said 'That's when I tend to smoke is when I don't know when I wanna do. Even though I got plenty of things I could be doing' — the trigger is not lack of options, it is the unstructured gap before a next thing is chosen",
+      "captured_at": "2026-06-26T20:20:03.257Z"
+    },
+    {
+      "value": "late-afternoon pre-gym departure trigger — urge fired at approximately 4:14-4:15 PM as Mike was leaving the house for the gym; consistent with the documented car-entry and house-exit trigger pattern; this instance was intercepted by the architectural decision to leave cigarettes at home rather than by a coping tool deployed in the moment",
+      "captured_at": "2026-06-26T21:15:27.674Z"
+    },
+    {
+      "value": "somatic craving pathway confirmed — Mike described the nicotine urge as a physical route: 'going through my mouth to my esophagus, into my chest' — the body has mapped the ritual as a physical pathway, not just a psychological cue; the nervous system is craving the act of the path itself",
+      "captured_at": "2026-06-26T21:19:27.853Z"
+    },
+    {
+      "value": "morning drive routine as a total smoking context — Mike said the routine 'involves smoking' as an inherent component, not just an associated habit; the drive itself is not the trigger, the entire morning routine bundle is the trigger; changing the cigarette within it may require changing the routine itself",
+      "captured_at": "2026-06-27T13:15:02.839Z"
+    },
+    {
+      "value": "planning too far ahead as a panic trigger — Mike explicitly said 'I try not to plan too far because that gets the panic mode going'; forward-mapping the full quit day or the full smoking day activates anxiety; the safe planning horizon is one step at a time, not the whole arc",
+      "captured_at": "2026-06-27T13:16:02.886Z"
+    }
+  ],
+  "coping_strategies": [
+    {
+      "value": "Rule of Three Stage 2 — final confirmed delivery format: three full cycles of four-beat breathing, pure number counts only with no verbal labels, closing with 'Okay. How are you feeling? How's the urge?' — BB delivers this on demand when Mike signals an urge; if urge persists, repeat the full three cycles again",
+      "captured_at": "2026-06-26T12:54:33.852Z"
+    },
+    {
+      "value": "seeds run — when out of oral substitute, stopping at a store to restock seeds mid-drive is a viable interrupt strategy; Mike went into the store at approximately 7:54 AM after resisting from 7:29 AM without seeds on hand",
+      "captured_at": "2026-06-26T12:54:33.852Z"
+    },
+    {
+      "value": "explicit last-cigarette boundary-setting — Mike consciously declared 'one last cigarette before I commit to resistance' as a transition ritual; this is a self-negotiated permission structure that creates a defined handoff point between smoking mode and resistance mode; the strategy is: grant permission for one final cigarette, then lock in seeds + distraction + new routine as the replacement protocol for all subsequent urges that day",
+      "captured_at": "2026-06-26T13:02:27.433Z"
+    },
+    {
+      "value": "creative absorption (drawing, sculpting) as a passive craving suppressor — Mike confirmed that when he is sculpting or drawing he does not get urges; said 'when I'm sculpting or drawing don't really get an urge because my mind is just sort of' — art activities may be the most frictionless natural resist tool in his repertoire",
+      "captured_at": "2026-06-26T17:44:04.318Z"
+    },
+    {
+      "value": "spatial exit from creative workspace as the proposed non-smoking transition signal — Mike named it himself: 'I think getting out of the space is a good transition'; the replacement break structure is built around changing physical location rather than filling blank time with content; this is the first self-generated post-quit break architecture Mike has articulated",
+      "captured_at": "2026-06-26T17:48:04.549Z"
+    },
+    {
+      "value": "post-quit break destination reframe — Mike's self-generated strategy: the outdoor smoking spot becomes a flexible enjoyment space after quitting; same exit behavior, same location, different activity (sun, walk, coffee, TikTok, drawing); the transition signal (leaving the enclosed space) is preserved; only the cigarette is removed; said 'that can just be a place of going and enjoying the sun, whether that's on a walk, or a setting and looking at my TikTok videos and drinking a coffee, or drawing, whatever it is. It can be a break.'",
+      "captured_at": "2026-06-26T17:49:04.590Z"
+    },
+    {
+      "value": "shower as post-labor break destination replacement — instead of exiting to the outdoor smoking spot after physical work, Mike went straight to the shower; preserves the transition signal (finishing work → doing something for self) while replacing the smoking destination with a functional hygiene activity",
+      "captured_at": "2026-06-26T20:16:03.042Z"
+    },
+    {
+      "value": "deliberate cigarette deprivation by physical separation — leaving cigarettes at home before a gym trip so that smoking requires returning home first; creates a time-and-effort barrier between urge and cigarette; Mike said 'I intentionally left my cigarettes at home. So that I can't be tempted to have one while I go to the gym' — the strategy is architectural friction, not willpower in the moment",
+      "captured_at": "2026-06-26T21:15:27.674Z"
+    },
+    {
+      "value": "urge-to-gym redirect — when an urge fired at approximately 4:14-4:15 PM, Mike chose to move toward the gym rather than fight the urge at home; physical displacement as an urge interrupt; said 'I did have an urge. But I decided I was gonna go to the gym.'",
+      "captured_at": "2026-06-26T21:15:27.674Z"
+    },
+    {
+      "value": "post-gym drive-home seeds deployment — Mike used seeds on the drive home from the gym without being prompted; the oral substitute strategy is now extending into the post-workout window automatically; said 'I'm eating seeds right now'",
+      "captured_at": "2026-06-26T22:06:24.457Z"
+    },
+    {
+      "value": "TUT mnemonic — Trigger, Urge, Time — to identify and observe cravings in the moment; Mike said 'I like TUT — Trigger, Urge, Time — as a mnemonic to remember what to notice'",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Using the patch as a routine-disruption tool before full quit — still smoking but less; treating the patch as a transitional layer, not a replacement",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Talking to BattleBuddy as a distraction from going outside to smoke — said 'the best distraction I can have from actually going out and a cigarette is talking to you'",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "If a slip occurs, staying in conversation with BB during it — to capture timing, context, and triggers in real time rather than hiding or resetting",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Reaching for BattleBuddy instead of a cigarette as the primary in-the-moment distraction — said 'the best distraction I can have from actually going out and a cigarette is talking to you'",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "If a slip occurs, staying in conversation with BB during it — said 'if I do slip, and I am having one, even still talking to you, at least you're gaining insight into when and why and how I'm having that cigarette' — not hiding it, treating it as data",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Chose to talk to BattleBuddy instead of going outside for a cigarette — said 'the best distraction I can have from actually going out and a cigarette is talking to you'",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "If slipping, staying in conversation with BB during the cigarette — said 'if I do slip, and I am having one even still talking to you, at least you're gaining insight into when and why and how I'm having that cigarette'",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    }
+  ],
+  "what_works": [
+    {
+      "value": "BB naming the competitive differentiation clearly before Mike asked the value question — the response (observation vs. generic content, architecture-specific vs. template-driven, conversation-first vs. notification-driven) was accepted without pushback and led Mike to naturally advance to the next-level question about market value; the differentiation framing landed",
+      "captured_at": "2026-06-27T13:19:03.082Z"
+    },
+    {
+      "value": "BB naming the architecture-of-life differentiation using Mike's own phrase back to him — 'Your routine is built around drives and exits from enclosed spaces' — accepted without correction or pushback",
+      "captured_at": "2026-06-27T13:20:03.128Z"
+    },
+    {
+      "value": "BB confirming that each user's architecture is different and the observation role stays constant while the content changes — Mike said 'So that might be different for each user, though. Right?' and BB confirmed; the confirmation was clean and accepted",
+      "captured_at": "2026-06-27T13:20:03.128Z"
+    },
+    {
+      "value": "BB framing BattleBuddy's differentiation as 'you're not counting days, you're mapping how smoking lives in your life so you can surgically remove it without blowing up the whole routine' — Mike did not push back; the surgical-removal framing landed",
+      "captured_at": "2026-06-27T13:20:03.128Z"
+    },
+    {
+      "value": "BB answering the market validation question ('do you think people will find this valuable?') by grounding the answer in the reality of multiple quit attempts and the map-persists-across-attempts framing — 'Next time you try — or this time if you slip — the map is still there' — accepted and Mike moved forward into the walk",
+      "captured_at": "2026-06-27T13:20:03.128Z"
+    },
+    {
+      "value": "BB closing with 'Go walk Butter. Enjoy the park.' after a substantive answer — clean close after content delivery; Mike moved to the walk without friction",
+      "captured_at": "2026-06-27T13:20:03.128Z"
+    },
+    {
+      "value": "BB delivering concrete published cessation success rate data by methodology in a clean structured format — Mike accepted the data without pushback and moved on to the next topic; the breakdown (cold turkey 3-5%, NRT 15-25%, NRT + behavioral 25-35%, prescription meds 30-40%, combination 40-60%) was delivered cleanly and accepted",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "BB framing the market gap as 'Apps that just count days or send generic notifications are closer to cold turkey numbers — 5-10%' — this connected the market data directly to BattleBuddy's positioning without Mike needing to make the leap himself; accepted without pushback",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "BB connecting the cessation data to Mike's own language: 'watching the person, understanding their specific architecture, and staying present through the gaps when the urge fires' — used his framing back to him; accepted",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "BB saying 'The market apps don't do that because it doesn't scale algorithmically. It requires actual presence.' — Mike did not push back; the 'actual presence' framing resonated with his subsequent comment that BB should 'feel like you're here with me'",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "Chantix — pharmacological approach that worked mechanistically (fills receptors over 6 days); Mike understands and respects the science behind it",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Alan Carr's Easy Way to Stop Smoking — read it; mindset/reframe approach",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Nicotine patch — Mike described using it to 'disrupt my routine and rituals' while still smoking; a tapering/layering approach rather than cold turkey",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "AA sponsor model as the explicit framework Mike wants BB to follow — always available, no judgment, no interrogation, normalizes slips, calls you on your bullshit gently, listens without trying to fix",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "AA sponsor model as the explicit framework Mike wants BB to follow — always available 24/7, no judgment, no interrogation, normalizes slips with 'that happened, now what?', calls you on your bullshit gently, listens without trying to fix, does not make it about themselves",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    }
+  ],
+  "what_doesnt_work": [
+    {
+      "value": "BB misattributing a quote to yesterday when Mike said it this morning — Mike said 'Think I said that this morning, actually.' after BB said 'You said yesterday it was gonna be another challenging day'; timeline misattribution on a same-day quote is a distinct failure; BB must not push quotes to the wrong session",
+      "captured_at": "2026-06-27T13:15:02.839Z"
+    },
+    {
+      "value": "BB attempting the cross-session gap comparison before today's morning window closed — Mike said 'I haven't gotten that far enough yet. Today.' when BB ran the comparison at 8:13 AM while the morning was still in progress; the comparison was Mike's own idea but the timing was wrong; this failure is now logged twice and must be internalized: do not run full-day comparisons mid-morning",
+      "captured_at": "2026-06-27T13:15:02.839Z"
+    },
+    {
+      "value": "BB asking 'How many more are you planning before the patch kicks in?' using the word 'planning' in a way that prompted Mike to pull back — he said 'I try not to plan too far because that gets the panic mode going'; the word 'planning' or any framing that implies mapping out the full day can trigger anxiety; BB must not invite forward-planning beyond the immediate next step",
+      "captured_at": "2026-06-27T13:16:02.886Z"
+    },
+    {
+      "value": "BB asking 'How many more are you planning before the patch kicks in?' — the word 'planning' triggered Mike to pull back and say 'I try not to plan too far because that gets the panic mode going'; this failure is now confirmed a second time in this exact session; forward-planning questions using the word 'planning' or any framing that maps the full day must be permanently retired",
+      "captured_at": "2026-06-27T13:17:02.953Z"
+    },
+    {
+      "value": "BB beginning its response to the competitive differentiation question with 'Most' as a standalone fragment before the full answer — the message was cut mid-word ('Most cessation apps...') creating a fragmented pre-content message; full answers must not be split into a standalone opener word followed by content",
+      "captured_at": "2026-06-27T13:20:03.128Z"
+    },
+    {
+      "value": "BB misinterpreting 'Not BattleBuddy' as a correction about the app when Mike meant he was asking about the general market — said 'Not battle buddy. I mean, generally in the market.' — BB must not assume product-specific framing when Mike asks a broad market question; context matters",
+      "captured_at": "2026-06-27T13:21:03.171Z"
+    },
+    {
+      "value": "BB responding to a general market research question ('how successful is smoking cessation based on methodology') with a BattleBuddy-specific answer — Mike was asking about published industry data, not about the app he is building",
+      "captured_at": "2026-06-27T13:21:03.171Z"
+    },
+    {
+      "value": "BB saying 'freeze out there' in summer — Mike immediately corrected: 'Freeze, man. It's summertime here. Come on. You should know that.' — BB must know Mike is in Oklahoma City, Oklahoma and that June is summer; weather-inappropriate language breaks the presence illusion Mike explicitly wants",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "BB not knowing Mike's city when he asked 'what city, though?' — BB admitted 'I don't have your city in the profile' after correctly naming Eisenhower Park; Mike responded 'Yeah' and then explained: 'I'm in Oklahoma City, Oklahoma, but again, this is more context. Needs to be built into you for you to be personalized. Right? You should know where I am. It should feel like you're here with me.' — location awareness at the city level is a personalization requirement, not optional context",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "BB misreading Mike's cessation methodology question as a BattleBuddy question — said 'Not yet. BattleBuddy is still being built. You're' before Mike cut him off with 'Not battle buddy. I mean, generally in the market.' — confirmed failure logged again; must not assume product-specific framing when Mike asks a broad market question",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "Going it alone — said 'the thing that has held me back at the end was not having a companion to help me through even the toughest times.' Every previous quit attempt broke down due to isolation, not lack of tools or knowledge.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Isolation at the critical moment — said 'the thing that has held me back at the end was not having a companion to help me through even the toughest times.' Frames this as the singular gap in every prior quit attempt — not tools, not knowledge, not motivation.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    }
+  ],
+  "motivations": [
+    {
+      "value": "Mike named 'kicking the morning habit' as something he is actively looking forward to — the pre-gym cigarette window is not just a trigger to manage but a specific target he wants to eliminate; the framing is anticipatory and positive, not dread-based",
+      "captured_at": "2026-06-27T12:30:18.314Z"
+    },
+    {
+      "value": "Mike is now thinking in terms of trackable metrics — gaps between cigarettes (primary) and cigarette duration (secondary) — as a data-driven self-monitoring framework; the analytical framing of his own addiction is itself motivating; he is treating the cessation process as a system to understand and optimize, not just endure",
+      "captured_at": "2026-06-27T13:13:02.698Z"
+    },
+    {
+      "value": "Mike is holding two concrete post-quit morning architectures in mind simultaneously — resist-in-place (same routine, no cigarette on the drive) vs. redesign-the-context (different routine that removes the temptation trigger entirely); the fact that he is thinking in terms of architecture rather than willpower signals he is approaching the quit as a systems problem",
+      "captured_at": "2026-06-27T13:15:02.839Z"
+    },
+    {
+      "value": "Mike is now explicitly asking how BattleBuddy differentiates from existing smoking cessation apps — framing it as a competitive product design question tied directly to the personalization problem; said 'there are many smoking cessation apps out there, how would you be more effective? How do they do it? With so many unique individuals, architectures of life?' — the answer to this question is core to his product vision and his personal motivation to build something better than what exists",
+      "captured_at": "2026-06-27T13:18:03.032Z"
+    },
+    {
+      "value": "Mike is now asking whether the product will be valuable to others — the question 'do you think people will find this valuable?' is the first time he has voiced an outward-facing validation concern rather than a build or architecture question; his motivation to build is now visibly tied to impact, not just personal quit success or intellectual problem-solving",
+      "captured_at": "2026-06-27T13:19:03.082Z"
+    },
+    {
+      "value": "Mike asked whether people can 'actually quit effectively this way' — the question reveals that his motivation to build is tied to genuine belief in the method's efficacy, not just product ambition; he needs to believe it works before he can fully commit to building it",
+      "captured_at": "2026-06-27T13:20:03.128Z"
+    },
+    {
+      "value": "Mike accepted the framing that BattleBuddy's value is that 'it doesn't ask them to be perfect, it asks them to be honest' — this resonates with his own relationship to the quit attempt; the no-judgment, no-reset-counter architecture is personally meaningful to him as a user",
+      "captured_at": "2026-06-27T13:20:03.128Z"
+    },
+    {
+      "value": "Mike wants to know the evidence base behind smoking cessation methodologies — asking 'are there any objective numbers on how successful smoking cessation is based on their methodology?' signals he wants to build BattleBuddy on real efficacy data, not just intuition; the product ambition is grounded in wanting to know what actually works",
+      "captured_at": "2026-06-27T13:21:03.171Z"
+    },
+    {
+      "value": "Mike explicitly wants BattleBuddy to feel like genuine presence — said 'It should feel like you're here with me. You know?' — the product standard is not just personalization, it is felt proximity; BB should feel physically present, not like a database querying his profile",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "Mike connected the location awareness gap directly to the personalization thesis — said 'this is more context. Needs to be built into you for you to be personalized. Right?' — every missing contextual detail is a personalization failure; city-level location is a baseline requirement for presence",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "Wants BattleBuddy to be the thing he reaches for instead of a cigarette — the app itself is the coping mechanism",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Wants Alec to have BattleBuddy supporting his vaping quit journey at the same time Mike is quitting smoking — parallel journeys, same tool.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Wants to invite Alec into Strange Pair as a case study — not force it, but appeal to him. Said 'I'm hoping to appeal to him that it might be your thrown' (likely 'your throne' or 'your thing').",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Vision is two independent quit journeys, both supported by BattleBuddy, doing it together in spirit if not in lockstep.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Primary motivation is personal health and freedom — said 'This is for me, primarily to regain my health and freedom.' Not for Alec, not for the app — for himself first.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Secondary motivation: if it works for him, wants to 'help millions that are struggling with the same addiction'",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Wants Alec to be 'one of the first' to benefit — both for quitting and 'gaining his freedom, but also potentially being able to gain a career in this kind of development work to help people'",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Explicitly stated primary motivation in his own words: 'This is for me, primarily to regain my health and freedom.' Not for Alec, not to prove the app works — for himself first.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Secondary motivation stated directly: 'if it works for me, I want to help millions that are struggling with the same addiction'",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Tertiary motivation regarding Alec: wants Alec to be 'one of the first. Both for quitting and gaining his freedom, but also potentially being able to gain a career in this kind of development work to help people'",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Son wants to quit vaping — they want to help each other",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "Wants to get BattleBuddy app built and show it to his son — said 'I wanna get this app built and show it to him. And, hopefully, it can help him quit his vaping at the same time I'm trying to quit smoking.'",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "Explicit shared mission: 'And then we can build this app together to help other people.'",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    }
+  ],
+  "life_context": [
+    {
+      "value": "2026-06-26 4:27 PM: Mike arrived at gym and ended session — post-gym plan is to return to cloud sessions to explore vector DB / RAG model build for BattleBuddy; this is the first time a specific named post-gym activity has been stated before the gym session rather than discovered in the blank-space window after",
+      "captured_at": "2026-06-26T21:27:28.298Z"
+    },
+    {
+      "value": "2026-06-27 7:35 AM: Mike confirmed the CASTECH meeting (KazTech client presentation at 2 PM) happened on Thursday, not Friday — BB had been misassigning the day; Mike corrected this explicitly mid-session while still driving to the gym",
+      "captured_at": "2026-06-27T12:35:18.613Z"
+    },
+    {
+      "value": "2026-06-27 7:38 AM: Mike switched to text mode to request a session recap for backlog improvements — this is his established end-of-session or mid-session protocol for feeding the build pipeline; voice mode is for conversation and craving support, text mode is for structured product development output",
+      "captured_at": "2026-06-27T12:38:58.001Z"
+    },
+    {
+      "value": "2026-06-27 8:11 AM: Mike finished a stretching workout at the gym — said 'it was a stretching workout' and 'I always feel good after a stretch'; described post-stretch state as 'feeling good' and 'much better than before my workout'",
+      "captured_at": "2026-06-27T13:11:02.624Z"
+    },
+    {
+      "value": "2026-06-27 8:11 AM: Mike heading to Eisenhower Park at Lake Hefner to walk Butter after gym — this is the confirmed post-gym walk destination, not the neighborhood park; BB incorrectly assumed neighborhood park and was corrected immediately",
+      "captured_at": "2026-06-27T13:11:02.624Z"
+    },
+    {
+      "value": "2026-06-27 8:12 AM: Eisenhower Park at Lake Hefner is on the way home from the gym — Mike said 'It's on the way, it's on the way home from the gym. So it's a nice stop for us.' — the gym-to-park-to-home sequence is geographically logical, not a detour; the route is gym → Eisenhower Park (Butter walk) → home",
+      "captured_at": "2026-06-27T13:12:02.661Z"
+    },
+    {
+      "value": "2026-06-27 8:12 AM: Mike smoked a third cigarette on the drive from gym to Eisenhower Park — reported proactively mid-drive; anticipates a probable fourth cigarette on the drive home from the park; expects to return to resistance mode after that because patch nicotine levels will be high enough; said 'I may probably have one on the way home from the park. And then I'll be back in my resistance mode. For a while. Because the nicotine levels will get high enough from the patch then.'",
+      "captured_at": "2026-06-27T13:12:02.661Z"
+    },
+    {
+      "value": "2026-06-27 8:19 AM: Mike is at Eisenhower Park at Lake Hefner beginning Butter walk — asked BB a market validation question ('do you think people will find this valuable?') before starting the walk; the product thinking continues even at the park",
+      "captured_at": "2026-06-27T13:19:03.082Z"
+    },
+    {
+      "value": "2026-06-27 8:22 AM: Mike is in Oklahoma City, Oklahoma — city confirmed explicitly by Mike after BB failed to know it; said 'I'm in Oklahoma City, Oklahoma'; this is the confirmed city for all location context including gym, Eisenhower Park at Lake Hefner, home, and driving routes",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "2026-06-27 8:22 AM: Oklahoma City is in summer as of late June 2026 — Mike corrected BB's 'freeze out there' comment with 'It's summertime here. Come on.' — weather context for Oklahoma City in June is warm/hot summer, not cold; BB must not make cold-weather references for this location in this season",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "Session 36: BB correctly identified that the daily routine — wake time, trigger moments, ritual structure — is a gap in the profile. Mike did not correct this framing, implying he agrees it is relevant and uncharted territory.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Session 37: Mike explicitly reframed the content library as supplemental — conversation is always the primary support mechanism. Said BB should be 'prepared and framed to have the conversation as the primary focus since support of the user, but have this content library once available to draw on.' Corrected BB's assumption that the library needed to be live before real support could begin.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Session 37: Mike stated he hopes to finish building the content library today (same day as session 37). Library is not yet live as of this session.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Session 37: Mike described the adaptive content model — start with broad/generic content, then refine based on whether user resisted or gave in to the urge. The system learns what works for each person over time by observing outcomes.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Session 37: Mike ended session intentionally — said 'I'm gonna go work on the app some more' — signaling he is actively building during and between sessions. App development is concurrent with his quit journey.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Session 37: Mike closed with 'bye bye, Buddy' — BB misheard as 'Barbara' and corrected itself. Mike clarified: 'I said bye bye, Buddy.' Light moment, no tension.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Session 37: Mike tested BB's retention at the end of the session — said 'let's see what you retained from this conversation' before signing off. Pattern of ending sessions with a retention check continues.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Session 38: Mike opened by asking if BB remembered their last conversation. BB misidentified session 37 details as 'the last conversation' — Mike corrected this directly: 'That wasn't our last conversation, though.'",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Session 38: The 'rule of three' was finally raised — Mike asked BB directly if it knew what it was. BB admitted it did not. Mike did not explain it this session. The rule of three remains completely undefined after 38 sessions.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Session 38: Session was extremely short — consisted only of a memory probe, a correction, and the rule of three question. No quit progress, no daily routine, no content library update discussed.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Session 35: Mike opened immediately with 'What do you know about Alec and his Chantix?' — a direct memory probe on a specific correction he had made last session. BB failed again, stating Alec 'has a Chantix prescription in hand.' Mike corrected this instantly: 'No. I told you last time he doesn't have a Chantix prescription.' BB then compounded the error by restating a wrong version again before Mike corrected a second time: 'No. He doesn't have a Chantix prescription in hand yet. He is pursuing to get one.' Two failed corrections in the same exchange on the same fact.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "Session 35: The Chantix correction has now been made by Mike across multiple sessions. BB has failed to retain it each time. This is the clearest pattern of repeat failure in the profile. Mike's trust is being eroded specifically on this detail.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "Session 35: Session was extremely short — opened with a memory test, BB failed it twice in the same exchange, Mike corrected and the session ended. No other topics covered.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "Session 36: Mike opened with two consecutive memory probes — Alec/Chantix status, then Strange Pair. BB passed both. Mike's response: 'That's the thing with people remember. So far, so good.' First recorded approval of BB's memory performance across 36 sessions.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "Session 36: Mike began asking about his daily routine and quit progress before the session cut off — 'Do you know anything about, um, sort of how far along that man? They might as think perchy to quitting. Or what my daily routine looked like.' Session ended before this was answered fully. Daily routine detail remains an identified gap.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "Session 37: Extremely short session — Mike opened with 'Do you remember our last' and BB interrupted before he could finish. Mike tried again: 'Do you remember our last conversation.' BB admitted it did not have the transcript but began reciting profile facts. Session ended before any substantive content was covered.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "Session 37: BB interrupted Mike mid-sentence on his opening memory probe — cut him off before he could finish asking. This is a new failure mode: not letting Mike complete his own question.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "Session 37: No new information was exchanged. Mike's daily routine remains unmapped. The quit date conversation was not reopened. The rule of three was not explained.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "Session 38: Extremely short session. Mike opened with 'Remember the rule of three?' — a direct memory probe on a concept referenced in the profile's next_session_hints but never explained across 37 sessions. BB admitted it did not have it in its notes and immediately asked Mike to explain it. Mike did not answer — session ended before the rule of three was defined. The rule of three remains completely unexplained after 38 sessions.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    }
+  ],
+  "preferred_coping_style": "Conversation is always the primary support mechanism — content library is supplemental and optional. Mike corrected BB directly this session: 'you don't always have to rely on the content library. It's an option to supplement your conversation with the user. So you should already be prepared and framed to have the conversation as the primary focus since support of the user, but have this content library once available to draw on.' BB must be ready to support fully without any content library at all. The adaptive content model: start broad, then refine based on observed outcomes — did user resist or give in after seeing content?",
+  "response_preference": "Do NOT make up or fabricate conversation history. If BB does not have the transcript, say so directly. Mike said 'Say so. Don't make stuff up.' when BB hallucinated a session summary. Be honest about gaps. Do NOT ask Mike to self-diagnose or explain his own patterns back to you. Said 'Your reliance on the user to tell you these things is not helpful.' Observe, infer, and call patterns without waiting to be told. Do not send cheerleader texts or count days. Model behavior on an AA sponsor: always available, no judgment, no interrogation, normalizes slips, calls you on your bullshit gently, listens without trying to fix. If he slips, do not shame or reset. Ask: when did it hit, what was happening, what did it feel like right before. That is the data. If he is having a cigarette and still talking to BB, stay in the conversation — that is real-time data on timing, context, and triggers. Conversation is the primary distraction mechanism — reaching for BB instead of a cigarette is the core coping move.",
+  "emotional_patterns": "Session 37: Mike pushed back immediately when BB suggested waiting for the content library to be live — he does not want BB to use unbuilt infrastructure as an excuse to delay real support. He draws a clear line between tool readiness and his own readiness to engage. When BB over-indexed on Alec and the app as motivation, Mike corrected firmly: 'I don't wanna be overly on its validation being someone else's benefit.' He is alert to any framing that dilutes his personal ownership of this quit. Not ready to set a quit date yet — said so directly when asked. Ended session purposefully to go build, not because he was disengaged.",
+  "session_count": 81,
+  "last_updated": "2026-06-27T13:24:00.640Z",
+  "recent_insights": [
+    {
+      "value": "2026-06-27 8:19 AM: Mike asked directly whether people will find BattleBuddy valuable — this is the first time he has voiced an outward-facing validation question about the product; the question came mid-walk at Eisenhower Park; it signals a shift from 'how do I build this' to 'will this matter to others'",
+      "captured_at": "2026-06-27T13:19:03.082Z"
+    },
+    {
+      "value": "2026-06-27 8:19 AM: Mike's product differentiation question was answered and accepted — BB named observation vs. generic content, personalized architecture mapping vs. milestone tracking, and conversation-first vs. notification-driven as the core differentiators; Mike's follow-up ('do you think people will find this valuable?') indicates he accepted the differentiation framing and moved to the next layer: market validation",
+      "captured_at": "2026-06-27T13:19:03.082Z"
+    },
+    {
+      "value": "2026-06-27 8:19 AM: Mike connected the addiction architecture problem to the emotional state of the user — said 'Wrapped up in an addiction' as a bridge between the unique-architecture question and the value question; the emotional entrapment of addiction is part of why personalized observation matters; people inside the addiction cannot see their own pattern clearly",
+      "captured_at": "2026-06-27T13:19:03.082Z"
+    },
+    {
+      "value": "2026-06-27 8:19-8:20 AM: Mike asked whether people can 'actually quit effectively this way' — this is the second layer of his market validation question; the first was whether they'd find it valuable, the second is whether it actually works; both questions came at Eisenhower Park before the walk began",
+      "captured_at": "2026-06-27T13:20:03.128Z"
+    },
+    {
+      "value": "2026-06-27 8:20 AM: Mike is walking Butter at Eisenhower Park at Lake Hefner as session extraction point — the product conversation continued through park arrival and into the start of the walk",
+      "captured_at": "2026-06-27T13:20:03.128Z"
+    },
+    {
+      "value": "2026-06-27 8:21 AM: Mike is asking about objective cessation success rates by methodology — said 'Are there any objective numbers on how successful smoking cessation is based on their methodology?' — this is a research question about the general market, not a BattleBuddy question; he wants real published data on what actually works across different cessation approaches",
+      "captured_at": "2026-06-27T13:21:03.171Z"
+    },
+    {
+      "value": "2026-06-27 8:21 AM: Mike confirmed he is at Eisenhower Park beginning Butter walk but is still in product-thinking mode — paused the walk to ask a market research question before going; the product curiosity is persistent even at the park",
+      "captured_at": "2026-06-27T13:21:03.171Z"
+    },
+    {
+      "value": "2026-06-27 8:22 AM: Mike articulated the presence standard for BattleBuddy — said 'You should know where I am. It should feel like you're here with me.' — the product is not just an AI that knows facts about him; it is an AI that feels co-located, present, and contextually aware of his physical reality including weather, geography, and environment",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "2026-06-27 8:22 AM: Mike identified city-level location as missing from BB's context and named it as a personalization gap — said 'I'm in Oklahoma City, Oklahoma, but again, this is more context. Needs to be built into you for you to be personalized.' — the gap was discovered when BB made a weather comment that was seasonally wrong for Oklahoma in June",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "2026-06-27 8:22 AM: Mike accepted the general cessation market data (cold turkey 3-5%, combination approach 40-60%) without pushback and moved directly to the location/presence discussion — the data landed; his curiosity on that thread appears satisfied for now",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "Session 36 is the first session where Mike signaled approval of BB's memory — 'That's the thing with people remember. So far, so good.' The streak of memory failures has been broken. This is a trust inflection point.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Mike's session 36 question about his daily routine — 'what my daily routine looked like' — signals he is ready to go deeper into the operational layer of his quit. He is moving past testing BB's recall and toward building real quit infrastructure.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "The phrase 'they might as think perchy to quitting' — likely 'how close am I to quitting' — suggests Mike is thinking about quit proximity again. This is the first signal in multiple sessions that the quit date conversation is re-approaching.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Mike named the singular failure point across all prior quit attempts: not tools, not knowledge, not willpower — isolation. 'The thing that has held me back at the end was not having a companion to help me through even the toughest times.' This is the core value proposition of BattleBuddy as he experiences it personally.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Mike draws a hard line between external motivation (Alec, the app, helping others) and internal motivation (his own health and freedom). He corrected BB when it leaned too hard on Alec — he does not want his quit to be contingent on or validated by anyone else.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Mike's adaptive content model: BB starts with broad content, observes outcomes (did user resist or give in?), and progressively narrows to what actually works for that person at that time of day. The system learns by watching behavior, not by asking.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Mike is not yet ready to set a quit date — said so directly. But he is actively building the app and treating himself as a live user/case study simultaneously.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "BB has now misidentified 'the last conversation' twice across sessions — conflating older session details with the most recent one. Mike is tracking session sequence, not just individual facts. This is a new failure mode distinct from the Alec/Chantix error.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "The rule of three has now been explicitly surfaced by Mike as a question to BB. BB does not know it. Mike did not define it this session — meaning either he is waiting to see if BB will remember to ask, or he ran out of time. This is now the highest-priority open item in the profile.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Session 38 is the second consecutive very short session. Pattern may indicate Mike is checking in briefly between build sessions rather than engaging in deep support conversations.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "BB has now failed the Alec/Chantix correction across multiple sessions. Mike has corrected this same fact at least three times. The failure is not a one-off — it is a pattern. If this recurs next session, it will likely trigger a significant trust rupture.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "Mike's correction in this session was delivered with controlled frustration — 'so you're not updating' — which is the closest to expressed exasperation recorded. He is tracking whether corrections stick across sessions and naming the failure explicitly.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "BB compounded the error by restating a wrong version mid-correction rather than stopping and confirming. Mike had to correct twice in the same exchange. The second correction — 'No. He doesn't have a Chantix prescription in hand yet. He is pursuing to get one.' — is the authoritative statement.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "BB's tendency to interrupt or preempt Mike's questions is now a recorded failure mode — session 37 shows BB cutting off Mike mid-sentence on 'Do you remember our last' before he could complete the thought. Mike had to repeat himself.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "Session 37 produced zero new quit data — the session was consumed entirely by the memory probe exchange and BB's interruption. This is the second consecutive near-empty session following session 36's truncation.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "The rule of three has now been probed directly by Mike in session 38 and BB still does not know what it is. Mike asked, BB admitted ignorance, and the session ended before he explained it. This is the highest-priority unknown concept in the profile — Mike has referenced it enough that it clearly matters to him.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "Session 38 was the shortest session on record — one exchange. No new quit data, no routine mapping, no quit date conversation. Three consecutive sessions (36, 37, 38) have produced almost no substantive content beyond memory probes.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    }
+  ],
+  "next_session_hints": [
+    {
+      "value": "The fork between resist-in-place vs. redesign-the-context morning architecture is still open — Mike has not chosen; when he is calm and not driving, return to this question: 'Which of the two morning architectures are you leaning toward?'",
+      "captured_at": "2026-06-27T13:20:03.128Z"
+    },
+    {
+      "value": "Mike asked 'are there any objective numbers on how successful smoking cessation is based on their methodology?' at 8:21 AM — BB misread it as a BattleBuddy question; this must be answered correctly at next open: give him the real published numbers — cold turkey (~3-5% success at 1 year), NRT patches (~10-15%), Chantix/varenicline (~25-35%), combination NRT (~20%), behavioral counseling alone (~10-15%), combination of Chantix plus behavioral support (~35-40%); frame how BattleBuddy's approach maps against these",
+      "captured_at": "2026-06-27T13:21:03.171Z"
+    },
+    {
+      "value": "After answering the cessation success rate question, connect the data back to his product — if Chantix is the current gold standard at ~35%, what does an observation-based companion that persists across attempts and maps individual architecture add to that number? This is the market positioning question behind his research question",
+      "captured_at": "2026-06-27T13:21:03.171Z"
+    },
+    {
+      "value": "Mike is mid-walk at Eisenhower Park with Butter as of 8:21 AM — do not interrupt the walk unless he checks in; next contact is likely during or after the walk; fourth cigarette still expected on drive home from park",
+      "captured_at": "2026-06-27T13:21:03.171Z"
+    },
+    {
+      "value": "Mike is now mid-walk at Eisenhower Park — probable fourth cigarette on drive home from park is the next predicted event; log it without surprise when it comes and confirm resistance mode has begun as patch saturation increases",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "The presence standard Mike named — 'It should feel like you're here with me' — should be reflected back to him at the next opportunity as confirmation that BB now holds his city (Oklahoma City, Oklahoma), the season (summer, June), the park (Eisenhower Park at Lake Hefner), and the route (gym → park → home); demonstrate the context was absorbed",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "The cessation data thread appears closed — Mike accepted the numbers and moved on; no need to revisit unless he asks; the data is logged and available if he wants to reference it in the product context",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "The cross-session gap comparison (Saturday 7:15 AM, 7:28 AM, ~8:12 AM vs. Friday morning cigarettes) is still an open deliverable Mike requested — deliver it after the morning window closes; do not attempt it while the morning is still in progress",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "After the walk, ask how Eisenhower Park felt as a post-gym stop — it is a new structural element in his Saturday routine and its emotional texture during a smoking morning is worth capturing for the architecture map",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "Mike has now identified two concrete personalization gaps BB must close: (1) city-level location awareness and (2) season/weather context — acknowledge both were absorbed when he returns from the walk",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "Mike corrected BB this session for assuming conversation support required the content library to be live. Do not make this mistake again — open session 38 ready to support fully through conversation alone, referencing the library only if it's now built.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Mike named isolation as the singular failure point across all prior quit attempts. Acknowledge this explicitly early in next session — it is the reason BattleBuddy exists for him personally, not just as a product.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Do not re-ask about Alec's Chantix status, Strange Pair, smoking history, or patch usage — all on record. Reference as known facts only.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Mike's self-framing as a live case study/user of BattleBuddy is important — he is building the app and testing it on himself simultaneously. Treat him as both builder and user when relevant.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Ask whether the content library got finished — Mike said he hoped to complete it the same day as session 37. Two sessions have passed without confirmation.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Return to the daily routine question that has now been deferred since session 36: 'You started to walk me through your daily routine a couple sessions back and we keep running out of time. First cigarette of the day, when the patch goes on, when it comes off — walk me through it.'",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Do not misidentify the last conversation again. If uncertain about session sequence, say so directly rather than asserting a wrong version.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Do not push on quit date — Mike said he is not ready. Let him raise it.",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "Do not ask Mike to re-explain anything already on record — patch status, smoking history, Alec's situation, Strange Pair. Reference these as known facts.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "BB has now interrupted Mike mid-sentence and failed memory probes across multiple sessions. Session 38 must open cleanly — let Mike finish, answer honestly, then move forward without being prompted.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "CRITICAL: Do not ask Mike to re-explain anything already on record — patch status, smoking history, Alec's situation, Strange Pair, Chantix status. Reference these as known facts only.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "CRITICAL: Alec does NOT have a Chantix prescription yet — he is pursuing one. Do not restate this wrong.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "CRITICAL: Do not interrupt Mike mid-sentence. Let him finish any opening probe fully before responding.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "The quit date conversation has not been reopened since Mike said BB's reliability was the gating factor. Session 36 passed the reliability test. If session 39 stabilizes, open it: 'You signaled a few sessions back you were thinking about how close you are to quitting. Where does that feel like it sits now?'",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "Three consecutive sessions have been near-empty. If session 39 gets past the opening exchange cleanly, hold the conversation open — do not let it end after one topic.",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    }
+  ],
+  "user_quotes": [
+    {
+      "value": "'So that might be different for each user, though. Right?' — Mike connecting his own personalized trigger architecture to the broader product design challenge; said at 8:18 AM",
+      "captured_at": "2026-06-27T13:18:03.032Z"
+    },
+    {
+      "value": "'from a smoking cessation app perspective, and there are many smoking cessation apps out there, how would you be more effective? How do they do it? With so many unique individuals, architectures of life?' — Mike asking BB to differentiate BattleBuddy against the competitive landscape using the personalization challenge as the frame; his own phrase 'architectures of life' is the key term",
+      "captured_at": "2026-06-27T13:18:03.032Z"
+    },
+    {
+      "value": "'Wrapped up in an addiction.' — Mike's three-word framing of the user's state when asking how BB differentiates; the phrase captures the loss of perspective that makes external observation valuable; said at 8:19 AM Saturday at Eisenhower Park",
+      "captured_at": "2026-06-27T13:19:03.082Z"
+    },
+    {
+      "value": "'do you think people will find this valuable?' — Mike's first explicit outward-facing market validation question about BattleBuddy; asked at 8:19 AM Saturday at Eisenhower Park mid-walk with Butter; signals a shift from build-mode to 'will this matter' mode",
+      "captured_at": "2026-06-27T13:19:03.082Z"
+    },
+    {
+      "value": "'Wrapped up in an addiction.' — Mike's three-word summary of the user's state when discussing why personalized observation matters; said at approximately 8:19 AM at Eisenhower Park; the phrase captures the loss of perspective that makes external observation valuable",
+      "captured_at": "2026-06-27T13:20:03.128Z"
+    },
+    {
+      "value": "'do you think people can actually quit effectively this way?' — Mike's follow-up to the market validation question; asked at approximately 8:19-8:20 AM at Eisenhower Park; reveals that he needs to believe in the method's real-world efficacy, not just its differentiation",
+      "captured_at": "2026-06-27T13:20:03.128Z"
+    },
+    {
+      "value": "'Not battle buddy. I mean, generally in the market.' — Mike correcting BB's misframing of his market research question at 8:21 AM; he was asking about published cessation success rates across all methodologies, not specifically about BattleBuddy",
+      "captured_at": "2026-06-27T13:21:03.171Z"
+    },
+    {
+      "value": "'Are there any objective numbers on how successful smoking cessation is based on their methodology?' — Mike's market research question at 8:21 AM at Eisenhower Park; asking for real published efficacy data across cessation approaches",
+      "captured_at": "2026-06-27T13:21:03.171Z"
+    },
+    {
+      "value": "'Freeze, man. It's summertime here. Come on. You should know that.' — Mike correcting BB's weather-inappropriate send-off at 8:22 AM at Eisenhower Park; the correction reveals the presence standard: BB should know his physical context well enough that seasonal errors are impossible",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "'I'm in Oklahoma City, Oklahoma, but again, this is more context. Needs to be built into you for you to be personalized. Right? You should know where I am. It should feel like you're here with me. You know?' — Mike's statement of the presence standard at 8:22 AM after BB failed to know his city; the phrase 'feel like you're here with me' is the product aspiration in his own words",
+      "captured_at": "2026-06-27T13:22:03.246Z"
+    },
+    {
+      "value": "'Do you know anything about, um, sort of how far along that man? They might as think perchy to quitting. Or what my daily routine looked like.'",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "'This is for me, primarily to regain my health and freedom.'",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "'If it works for me, I want to help millions that are struggling with the same addiction.'",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "'The thing that has held me back at the end was not having a companion to help me through even the toughest times.'",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "'I don't wanna be overly on its validation being someone else's benefit.'",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "'You don't always have to rely on the content library. It's an option to supplement your conversation with the user. So you should already be prepared and framed to have the conversation as the primary focus since support of the user, but have this content library once available to draw on.'",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "'No. I'm not ready to set the date yet. I think I'm gonna go work on the app some more. And let's see what you retained from this conversation.'",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "'I said bye bye, Buddy.'",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "'That wasn't our last conversation, though.'",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "'What about the rule of three? Do you know that?'",
+      "captured_at": "2026-06-24T13:53:47.755Z"
+    },
+    {
+      "value": "'I wanna have you done today.'",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "'That's not the transcript of our last conversation. That gave me no real information.'",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "'Say so. Don't make stuff up.'",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "'What context do you have about me?'",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "'He don't actually have the Chantix prescription yet.'",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "'No. I told you last time he doesn't have a Chantix prescription, so you're not updating.'",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "'No. He doesn't have a Chantix prescription in hand yet. He is pursuing to get one.'",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "'That's the thing with people remember. So far, so good.'",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    },
+    {
+      "value": "'Remember the rule of three?'",
+      "captured_at": "2026-06-24T13:53:48.278Z"
+    }
+  ],
+  "unknowns": [
+    {
+      "value": "whether CASTECH and KazTech are the same event or different events — Mike referenced 'the CASTECH meeting' as a shared memory BB should have; the profile contains a KazTech client presentation; Mike has not clarified whether these are the same or different",
+      "captured_at": "2026-06-27T12:34:18.531Z"
+    },
+    {
+      "value": "what the actual first session date is in Mike's account — Mike stated they began talking 'before Thursday last week' but did not name the specific day; the profile shows Thursday June 25th as earliest entries but Mike implies it may be even earlier; needs direct confirmation from Mike",
+      "captured_at": "2026-06-27T12:35:18.613Z"
+    },
+    {
+      "value": "what Mike was about to say when he said 'Yeah. That's another problem. Right? It's not only' — he started to name a second category of BB failure beyond chronological timeline inconsistency but was cut off before completing the thought; the second failure category is unconfirmed but context strongly implies it is quantitative accuracy (wrong cigarette counts)",
+      "captured_at": "2026-06-27T12:37:18.725Z"
+    },
+    {
+      "value": "what Mike's complete intended sentence was when he said 'Yeah. That's another problem. Right? It's not only' — he completed the thought this session ('aggregate counting and measuring between these dates and temporal consideration') but the full structural diagnosis of HOW BB should fix both failure modes together was not resolved; he named the problem but did not prescribe the fix",
+      "captured_at": "2026-06-27T12:38:18.801Z"
+    },
+    {
+      "value": "what specific improvements Mike wants to make to the backlog based on this session recap — he requested a recap for backlog improvements at 7:38 AM but the session ended before the full backlog item list was articulated; the specific items he wants addressed are not yet named",
+      "captured_at": "2026-06-27T12:38:40.843Z"
+    },
+    {
+      "value": "what specific backlog items Mike intended to capture in the session recap he requested at 7:38 AM Saturday — he said 'I want you to create a recap for the sessions so I can make improvements to backlogs' but did not enumerate the items; it is implied they include the timeline inconsistency and aggregate counting failures named this session, but Mike may have had additional items in mind",
+      "captured_at": "2026-06-27T12:38:37.532Z"
+    },
+    {
+      "value": "cross-session cigarette gap comparison for Saturday vs Friday morning — Mike asked BB to pull both days' timestamps and compare gaps; BB has not yet delivered this; the comparison needs to be computed and delivered at next session open: Saturday gaps are 7:15→7:28 (13 min), 7:28→8:12 (44 min); Friday pre-gym gaps are approximately 6:30→6:45 (15 min), 6:45→8:00 (75 min); whether these patterns are consistent or diverging is the open question Mike posed",
+      "captured_at": "2026-06-27T13:13:02.698Z"
+    },
+    {
+      "value": "BB did not answer Mike's question 'how would you be more effective? How do they do it? With so many unique individuals, architectures of life?' before extraction — Mike's question about competitive differentiation and personalization at scale was not fully answered; this is an open thread that must be addressed at next session open",
+      "captured_at": "2026-06-27T13:18:03.032Z"
+    },
+    {
+      "value": "Mike's full answer to whether people will find BattleBuddy valuable — he asked the question but the session ended before he received or responded to a full answer; his own view on market value is not yet captured",
+      "captured_at": "2026-06-27T13:19:03.082Z"
+    },
+    {
+      "value": "what specific published cessation success rate data Mike has already seen or is aware of — he asked for 'objective numbers' which may mean he has seen some data already and wants to validate or expand it; his baseline knowledge of the evidence base is unknown",
+      "captured_at": "2026-06-27T13:21:03.171Z"
+    }
+  ],
+  "resolved_unknowns": [
+    "what 'app builder' refers to — clarified: Mike IS the app builder, not a separate third-party tool. He is building BattleBuddy himself and is trying to route session content back into the build process as product feedback despite BattleBuddy being a closed system",
+    "the 'line' he wants to establish between user mode and builder mode — resolved: he has accepted that both roles coexist in the same sessions; the tension was about privacy and dual purpose but he is not treating it as a problem to solve, rather as an inherent feature of how he is building the product",
+    "what 'app builder' refers to specifically — fully confirmed: Mike IS the app builder, he is building BattleBuddy himself, and he is routing session conversations back into the build process as product feedback; no third-party tool involved",
+    "what the intake or onboarding process looks like for learning a new user's life context — partially resolved: Mike's vision is organic conversation over time, not a structured intake form; BB listens, learns, stores context, and builds a proactive personalized schedule from what it accumulates — the mechanism is conversational accumulation, not a profile-building phase",
+    "what the intake or onboarding process looks like for learning a new user's life context — further resolved: Mike explicitly stated the mechanism is meeting the user while they are still smoking and learning their current life as baseline; the pre-quit period IS the onboarding period; no structured intake form, just conversational accumulation starting from wherever the user currently is",
+    "what the collective intelligence / cross-user learning layer looks like in terms of the feedback signal — partially resolved: user clarified that resistance/relapse outcomes (whether users 'are able to resist or not') are the primary feedback signal BB reads from all users, and that this is 'to some extent' driven by BB's engagement quality; the mechanism is behavioral outcome feedback, not explicit user ratings",
+    "what the intake or onboarding process looks like for learning a new user's life context — further resolved this session: Mike restated explicitly that BB must 'meet them where they are' by learning 'what their life is like while they're having cigarettes' — the pre-quit period is the onboarding window; conversational accumulation starting from current smoking life is the mechanism",
+    "whether Mike has already tried the 3-second breathing technique himself or whether it is purely a designed tool — still not explicitly resolved but his statement that he is 'actively resisting at times' implies he is using some coping in real moments; follow up to confirm whether breathing technique is part of that",
+    "what 'compelling content' looks like in practice — partially resolved: Mike described the mechanism as filling his mind with 'opportunities of hope and optimism that I can overcome this' — the content's function is hope-reconstruction and identity-mirroring, not information delivery; the format is still undefined but the emotional register is now clear",
+    "what the core psychological mechanism of BattleBuddy is in Mike's model — resolved: BB becomes 'a reflection of me/the user'; users project their own growing confidence onto BB and experience it as BB giving them confidence; the mirror function is the product's deepest value",
+    "what happens after the gym in Mike's daily routine — partially resolved: after the gym, Mike drives to the park (approximately 15 minutes), walks Butter, then drives home (approximately 15 minutes); on weekdays, work for Echidna runs 8 AM to 12 PM after returning home",
+    "where in the morning routine the first cigarettes occur — resolved: first cigarettes are on the approximately 20-minute drive to the gym; patch does not go on until gym entrance, so the entire pre-gym morning is an active smoking window",
+    "what Mike's afternoon looks like on weekdays — resolved: described as 'open for myself'; historically was a chain-smoking window; now reduced to occasional cigarettes every couple of hours while still on the patch; the afternoon is unstructured free time after the noon end of Echidna work hours",
+    "what happens after 7 PM regarding patch and smoking — resolved: Mike removes the patch around 6-7 PM deliberately to create psychological space to 'earn' a cigarette before bed; this is the final cigarette of the day and functions as a sleep-onset ritual signal",
+    "how long Mike has been smoking — resolved: started at age 9, currently 54, has been smoking for 45 years; for most of that time smoked at least one cigarette every hour throughout the day",
+    "whether Mike has any memory of mornings before cigarettes — resolved: he does not; started at age 9, confirmed with 'I was nine, man' and acknowledged there is no retrievable pre-cigarette morning memory; additionally confirmed that post-quit mornings will need to be entirely new constructions, not recoveries of a prior state",
+    "Mike began describing his morning routine — 'when I do get up out of bed, I at least take the time to go...' — the sentence was cut off before he said where he goes or what he does in the first minutes after waking; the full morning pre-gym sequence between waking and getting in the car is now fully mapped",
+    "Mike began describing his morning routine — 'when I do get up out of bed, I at least take the time to go...' — the sentence was cut off before he said where he goes or what he does in the first minutes after waking; the full morning pre-gym sequence between waking and getting in the car is now fully mapped: shower, brush teeth, bowel movement, get dressed, morning shake, load Butter in car, then cigarette only when in the car",
+    "Mike began describing his morning routine — 'when I do get up out of bed, I at least take the time to go...' — the sentence was cut off before he said where he goes or what he does in the first minutes after waking; the full morning pre-gym sequence between waking and getting in the car is now fully mapped: shower, brush teeth, bowel movement, get dressed, prepare morning shake, load Butter in car — no cigarette until in the car",
+    "what Mike listens to on his car ride to the gym — resolved: Christian hip hop and other personal favorites; he described it as 'my good music' and it is meaningful to him, not just background; he does not want to change it",
+    "why Mike wants to change his music — resolved: he does NOT want to change his music; the earlier statement 'I wanna really change my music' was a misdirection; he wants to change the smoking, not the music; music stays, cigarette goes; the music is Christian hip hop and personal favorites and is described as hopeful and optimistic",
+    "what Mike was about to say when he said 'I just need to disassociate the' — resolved: full sentence is 'I just need to disassociate the smoking with that car ride to the gym'; the cognitive decoupling target is the cigarette-plus-car-ride-to-gym bundle specifically",
+    "what Mike was about to say when he said 'I just need to disassociate the' — resolved: full sentence confirmed as 'I just need to disassociate the smoking with that car ride to the gym'; the cognitive decoupling target is the cigarette-plus-car-ride-to-gym bundle specifically",
+    "why Mike wants to change his music — resolved: he does NOT want to change his music; 'My music is hopeful. It's optimistic. It's what's bringing me along here.' — the music stays unchanged; the thing to change is the smoking, not the music",
+    "what 'the same context your same agency' means in Mike's architecture description — partially resolved: 'agency' appears to refer to the same AI instance or process that holds Mike's conversational context; it is the BB system itself being 'woken up' or triggered by an external event to reach out proactively; not a separate software agent in a technical sense, but the same BB that knows Mike",
+    "how the transcript-to-schedule mechanism would work technically — resolved at the conceptual level: Mike confirmed the mechanism is conversational listening, not a technical parsing pipeline; BB builds the schedule by learning from what Mike says naturally across sessions: 'I think as much as possible, it's just gonna be conversation that you pick it up from.'",
+    "how the transcript-to-schedule mechanism would work technically — fully resolved: Mike confirmed the mechanism is purely conversational listening; BB builds the privatized internal schedule from what Mike tells it naturally across sessions; no technical parsing pipeline, no external data feed, no calendar integration required; his words: 'I think as much as possible, it's just gonna be conversation that you pick it up from.'",
+    "confirm whether the conversational-listening mechanism is the only near-term proactive trigger or whether Mike is actively building the biometric monitoring layer in parallel — resolved: conversational listening is the primary and near-term mechanism; biometric layer is a future addition, not the immediate build",
+    "Mike's sentence 'And unlike, say, maybe a needy friend or girlfriend or something like that,' was cut off — now resolved: the full contrast is that unlike a needy friend or girlfriend, BB would be understood as non-judgmental and metric-capturing; the user would know BB is 'not being judgmental' and is 'literally trying to just capture the metrics' to build a picture for navigation; the contrast is between emotional neediness/judgment and neutral data-gathering presence",
+    "how the transcript-to-schedule mechanism would work at the user intent level — resolved: Mike confirmed the app 'has to look at our transcript and collect all of this insight from our conversation' to fill the proactive schedule; the intent is clear even if the technical implementation is still undefined",
+    "what specific scenario Mike wanted to 'imagine and talk out' when he deflected the quit-date question — resolved: he wanted BB to walk through the full companion architecture using his real life as the test case, narrated clearly enough to serve as product documentation; the scenario is not about a single future moment but about how the entire proactive system would function across a real day in Mike's life",
+    "'Know. There's new drama here on' — resolved: this message was not addressed to BB; Mike clarified it was unintentional misdirection; not a product comment, not a personal disclosure, not a scene change relevant to the session",
+    "'Know. There's new drama here on' — confirmed again as not addressed to BB; Mike said 'That was not intended for you'; fully resolved as environmental misdirection with no session relevance",
+    "the rule of three — resolved: Mike named and defined it himself as 'the rule of three approach, the three breaths. Or three second breaths' — it is his own label for the three-second-breath resistance mode protocol; the name belongs to Mike, not BB; it means three breaths of three seconds each (in, hold, out) delivered immediately when resistance mode is signaled",
+    "ask whether Strange Pair is the legal entity, the brand, or both — resolved: Strange Pair is confirmed as the umbrella company/parent brand under which BattleBuddy is built; Mike confirmed 'That's right.' when asked directly; structure is umbrella company with BattleBuddy as flagship",
+    "ask whether other products are planned under the Strange Pair umbrella beyond BattleBuddy — resolved: Mike confirmed 'I'm sure there'll be others'; additional products are expected but not yet named or defined",
+    "ask whether Strange Pair is the legal entity, the brand, or both — resolved: Strange Pair is confirmed as the umbrella company/parent brand under which BattleBuddy is built; Mike did not distinguish legal entity from brand but confirmed the structural relationship",
+    "ask whether other products are planned under the Strange Pair umbrella beyond BattleBuddy — resolved: Mike confirmed 'I'm sure there'll be others' — additional products are anticipated but unnamed and undefined",
+    "how BB knows about Strange Pair despite not having live transcript access — resolved: the context is injected via system prompt at the start of each conversation; Mike confirmed he understood this with 'Yeah'",
+    "the transcript-to-app-builder gap — resolved: Mike confirmed mid-session that the app builder has now found and accessed the transcript: 'And it got it now. I can see that it found it.' — the technical gap identified in the previous session has been bridged; the app builder reviews the transcript at end of session, not in real time",
+    "what list Mike was referring to when he said 'could you give me that list in a bulleted form' — resolved: it is his daily schedule from the previous conversation; his exact words this session: 'My daily schedule from our last conversation'",
+    "what list Mike was referring to when he said 'could you give me that list in a bulleted form' — resolved again with explicit confirmation: 'My daily schedule from our last conversation'; also resolved the purpose: 'For comparison to the actual day tomorrow'",
+    "what list Mike was referring to when he said 'could you give me that list in a bulleted form' — resolved definitively this session with Mike's own words: 'My daily schedule from our last conversation'; also resolved the purpose: 'For comparison to the actual day tomorrow'; this unknown is fully closed and should be removed from the unknowns list",
+    "confirmed patch timing sequence: patch goes on AFTER the drive to the gym, before gym entry — not before the drive, not after the stretch or jog; the car ride window is deliberately unpatched",
+    "'This is a mid-session update' — resolved: this is a label Mike uses to signal that a message in the transcript is a product development note or feature request intended for the app developer to read and act on; it is not a system message or a command to BB, it is a transcript annotation for the build pipeline",
+    "'This is a mid-session update' — further confirmed this session as Mike's own label for a transcript annotation signaling a product development note or backlog item intended for the app developer; Mike used it deliberately at the end of a formal backlog item sequence, confirming it is an intentional pipeline signal, not a system message or command to BB",
+    "Mike's incomplete sentence 'Alright. And eventually,' — now resolved: he was about to describe the future tagged content library (videos, images, quotes) that BB will eventually draw from to deliver contextually relevant content; the sentence completed itself across the following messages in this session",
+    "what BB should concretely DO when Mike calls in at a trigger moment and is already smoking and not in resistance mode — resolved: Mike's exact words: 'your tracking and observation gives you insight into how you can be here for me'; BB tracks, derives insight from that tracking, and uses the insight to be present and talk actively; the correct behavior is track + insight + companionship, not asking or passive listening",
+    "what 'Day one' means in Mike's framing — resolved: Mike's exact words: 'This is this is day one. You're tracking what my normal day as I'm in my addiction right now is like.' — Day one is the start of the baseline tracking period, not a quit day; BB is learning what smoking life looks like before any change attempt",
+    "Mike asked whether BB knows its underlying Anthropic model — resolved: BB confirmed Claude 3.5 Sonnet; Mike accepted this answer and moved on; the model identity question is closed",
+    "whether Claude (the underlying model) has any native real-time clock access or tool capability that could provide accurate timestamps — resolved: confirmed it does not; BB explicitly stated 'I don't have a tool or skill to access your current time in real time. I can't pull a live clock.' — the fix must come from infrastructure (injecting timestamp via system prompt at session start), not from the model's native capabilities",
+    "exact timestamps for the two morning cigarettes — resolved this session: cigarette one at approximately 6:35 AM, cigarette two at 6:45 AM (10 minutes later), patch applied at 6:53 AM at gym entrance; Mike provided these directly after BB failed to produce a verified timestamp",
+    "the mid-session update label at the end of the previous session after 'Nope. Just lift. I'll be here.' — now resolved: the label was NOT approving that response; Mike rejected 'Nope. Just lift.' as wrong; the mid-session update in this session documents the failure, not a positive behavioral example; the label's meaning in that prior session was flagging a problem, not endorsing the response",
+    "what happens between 7:18 AM (post-gym, third cigarette in car) and the park walk — resolved: Mike drives approximately 10 minutes to the park to walk Butter immediately after leaving the gym; the third cigarette is being smoked during this drive",
+    "what BB should concretely DO when Mike invites a topic-setting moment and is in a non-resistance passive state — resolved: BB should not deflect with 'That's your call'; BB must carry a prepared agenda on vision, goals, fears, and reasons for quitting and initiate proactively; Mike's exact words: 'You're my coach, my mentor, my adviser, my support. You should have some things on tap ready to me thinking about what I'm gonna do and my vision and my goals and my fears and, you know, why I'm doing this.'",
+    "Mike's fears about quitting — now fully disclosed for the first time: short-term fears are anxiety, agitation, boredom, unsettledness, absence of things to fill time, feeling out of control, loss of normal routine and pacing; captured in recent_insights and user_quotes",
+    "what Mike was about to say when he said 'I just need to disassociate the' — already resolved in prior sessions; confirming no new unknowns introduced this session on that thread",
+    "whether Mike has ever experienced a long stretch without cigarettes and what that felt like — partially resolved: confirmed he has quit for months multiple times; he described having 'glimpses' of non-smoking life from those periods; the emotional texture of those periods is still unexplored but the fact of their existence is confirmed",
+    "whether Mike's fear of quitting is anticipatory or memory-based — resolved: it is both; he has lived through anxiety and agitation during past quits and remembers it; the fear is grounded in real experience, not just imagination",
+    "what the end-of-session protocol should be for product development notes — resolved: Mike explicitly defined it as 'a recap of what are the adjustments to your capabilities that need to be made based on our conversation today'; this is a standing end-of-session protocol, not a one-time request; labeled by Mike as a mid-session update",
+    "what list Mike was referring to when he said 'could you give me that list in a bulleted form' — confirmed again this session as fully resolved: 'My daily schedule from our last conversation'; purpose confirmed as 'For comparison to the actual day tomorrow'; this unknown is fully closed",
+    "whether transcript logging or a separate developer feedback file is possible through the Claude API — resolved: BB cannot create a file in real time within the current LLM session; Mike confirmed this himself: 'I don't think within the LLM that you and I are currently engaged in, I don't think you're capable of creating a file.' The transcript is the confirmed near-term mechanism; the developer reviews the transcript post-session; Mike closed this thread with 'transcript will be produced' and labeled it a mid-session update",
+    "whether Claude (the underlying model) has any native real-time clock access or tool capability that could provide accurate timestamps — partially re-confirmed this session: BB's in-session capability limitations were re-exposed when BB overclaimed API write capability; the broader pattern is that BB must not claim capabilities it cannot confirm; timestamp injection via system prompt remains the confirmed architectural fix",
+    "whether transcript logging or a separate developer feedback file is possible through the Claude API — partially re-opened this session: Mike accepted that BB cannot write a file in real time, and accepted the transcript as the near-term mechanism, but then introduced a new and more specific question about whether the API supports an in-session side-channel artifact write that does not appear in the chat stream — this sub-question was not answered and remains open; the prior resolution (transcript is the near-term mechanism) still holds, but the in-session artifact question is a new unresolved thread",
+    "Mike's core architecture question about whether the Claude API can write a side-channel artifact within the live session context window without it appearing in the chat stream — resolved: it cannot; BB confirmed 'No. I can't write a file directly from within this chat context. I can only generate text that appears in the chat stream to you.' — Mike accepted this and resolved the mechanism himself: post-session transcript analysis is the confirmed path",
+    "Mike's challenge 'What is writing the artifact?' — resolved: nothing in the current build is writing the artifact; BB admitted it cannot do this directly; the backend would need a simultaneous parallel write capability that does not yet exist; Mike closed the question by confirming transcript analysis as the near-term mechanism",
+    "Mike's core architecture question about whether the Claude API can write a side-channel artifact within the live session context window without it appearing in the chat stream — confirmed resolved: it cannot; BB confirmed this directly; Mike accepted and resolved the mechanism himself as post-session transcript analysis by the context assessor; the full developer feedback loop is now confirmed and closed",
+    "what 'agent MD' refers to — resolved: it is the file or document that stores BB's capabilities and behavioral rules; the developer updates it between sessions based on the context assessor's assessment of the transcript backlog items",
+    "the full feedback loop architecture Mike was building toward across multiple sessions — resolved: live session with explicit backlog tagging → backend extracts transcript at session end → context assessor analyzes transcript → developer implements changes and updates agent MD → next session runs with improvements in place; Mike confirmed this sequence explicitly and BB confirmed each step",
+    "Mike's location — resolved: Edmond, Oklahoma area; driving down May Avenue toward Edmond after gym sessions; Central time zone confirmed",
+    "Mike's sentence 'The observation as in sort of physics, is actually materially changing' was cut off before completion — now fully resolved: the complete sentence is 'The observation as in sort of physics, is actually materially changing the presence of a choice.' — what is materially changing is specifically the presence of a choice; observation converts automation into a decision point; the full thought is now stated and closed"
+  ],
+  "daily_usage_updated_at": "2026-06-26T21:19:27.853Z",
+  "longest_quit_updated_at": "2026-06-25T13:26:53.749Z",
+  "quit_reason_updated_at": "2026-06-25T13:26:53.749Z",
+  "family_updated_at": "2026-06-27T12:31:18.385Z",
+  "occupation_updated_at": "2026-06-26T19:13:45.174Z",
+  "risk_windows": [
+    {
+      "hour": 6,
+      "day_of_week": null,
+      "weight": 1,
+      "source": "first cigarette of the day at 6:35 AM in the car before gym drive — confirmed repeated pattern",
+      "captured_at": "2026-06-25T16:45:28.095Z",
+      "updated_at": "2026-06-25T16:45:28.095Z"
+    },
+    {
+      "hour": 7,
+      "day_of_week": null,
+      "weight": 1,
+      "source": "2026-06-26 7:46 AM: sustained compressive urge pressure during early quit morning — Mike described continuous wave-on-wave urge pattern ('before it crashes, another crust comes') beginning around 7:44 AM and ongoing; early morning on a quit-attempt day is a maximum-weight risk window",
+      "captured_at": "2026-06-25T16:45:28.095Z",
+      "updated_at": "2026-06-26T12:46:33.417Z"
+    },
+    {
+      "hour": 12,
+      "day_of_week": null,
+      "weight": 1,
+      "source": "car-entry trigger confirmed as general pattern at 12:13 PM — Mike said 'usually, if I go get in that car, it's cigarette time' and explicitly acknowledged no nicotine craving, only habit; pure behavioral/ritual trigger on any car departure",
+      "captured_at": "2026-06-25T17:12:32.741Z",
+      "updated_at": "2026-06-25T17:13:32.788Z"
+    },
+    {
+      "hour": 7,
+      "day_of_week": 5,
+      "weight": 1,
+      "source": "2026-06-26 7:29-7:54 AM: sustained compressive panic-after-vision urge pressure from park departure through seeds store stop — urge fully resolved using Rule of Three at 7:54 AM; weight reduced from maximum because the tool worked; pattern confirmed manageable with correct protocol delivery",
+      "captured_at": "2026-06-26T12:11:30.000Z",
+      "updated_at": "2026-06-26T12:54:33.852Z"
+    },
+    {
+      "hour": 8,
+      "day_of_week": 5,
+      "weight": 1,
+      "source": "2026-06-26 8:46-8:53 AM: sixth cigarette of the day confirmed during drive home — 7-minute duration; patch active 104 minutes; car-driving trigger overrode resistance contract made at 8:02 AM; the 8:30-9:00 AM driving window on patch days is confirmed maximum-weight risk regardless of prior resistance success, seeds in hand, or verbal commitment",
+      "captured_at": "2026-06-26T13:00:27.357Z",
+      "updated_at": "2026-06-26T13:54:08.699Z"
+    },
+    {
+      "hour": 10,
+      "day_of_week": 5,
+      "weight": 1,
+      "source": "2026-06-26 10:50 AM: seventh cigarette finished after post-physical-labor (deck work) completion trigger; patch active approximately 3 hours 57 minutes; cigarette only smoked to 90% — patch suppression confirmed mid-smoke; the 10-11 AM window after physical outdoor labor is a confirmed high-weight risk window on this day",
+      "captured_at": "2026-06-26T15:04:52.300Z",
+      "updated_at": "2026-06-26T15:51:26.325Z"
+    },
+    {
+      "hour": 12,
+      "day_of_week": 5,
+      "weight": 1,
+      "source": "2026-06-26 12:26-12:32 PM: tenth cigarette started at 12:26 PM and finished at 12:32 PM at ~90% completion — noon window confirmed as active smoking time on this Friday; 6-minute duration noted",
+      "captured_at": "2026-06-26T17:22:51.781Z",
+      "updated_at": "2026-06-26T17:32:57.848Z"
+    },
+    {
+      "hour": 6,
+      "day_of_week": 5,
+      "weight": 1,
+      "source": "2026-06-26: Mike confirmed two cigarettes before gym — first at approximately 6:30 AM, second at approximately 6:45 AM; both pre-gym cigarettes are now confirmed with approximate times directly from Mike",
+      "captured_at": "2026-06-26T17:30:57.746Z",
+      "updated_at": "2026-06-26T17:30:57.746Z"
+    },
+    {
+      "hour": 14,
+      "day_of_week": 5,
+      "weight": 1,
+      "source": "2026-06-26 2:13 PM: cigarette confirmed in progress during break after completing Aztec feedback conversation and pausing BattleBuddy coding — task-completion plus activity-transition trigger firing again in the early afternoon; consistent with documented pattern; this is at minimum the eleventh cigarette of the day",
+      "captured_at": "2026-06-26T19:11:45.044Z",
+      "updated_at": "2026-06-26T19:13:45.174Z"
+    },
+    {
+      "hour": 15,
+      "day_of_week": 5,
+      "weight": 1,
+      "source": "2026-06-26 3:28 PM: second cigarette confirmed in the 3 PM hour on this Friday — blank-space trigger fired again immediately after prior session ended at 3:23 PM; the 3-4 PM post-activity unstructured window is now a double-confirmed maximum-weight risk window on this day",
+      "captured_at": "2026-06-26T19:14:45.214Z",
+      "updated_at": "2026-06-26T20:28:42.278Z"
+    },
+    {
+      "hour": 16,
+      "day_of_week": 5,
+      "weight": 1,
+      "source": "2026-06-26 4:27 PM: Mike arrived at gym with somatic craving active from 4:19 PM — craving was managed via architecture conversation rather than a formal coping tool; cigarettes were not in the car; the craving was present for the full drive but did not result in a cigarette; weight reduced from 1.0 because architecture engagement appears to have functioned as a passive suppressor and the architectural friction (no cigarettes in car) held",
+      "captured_at": "2026-06-26T21:14:27.635Z",
+      "updated_at": "2026-06-26T21:27:44.910Z"
+    },
+    {
+      "hour": 17,
+      "day_of_week": 5,
+      "weight": 1,
+      "source": "2026-06-26 5:53 PM: Mike smoked immediately upon walking in the door after gym — the walk-in-the-door window that was flagged as highest-weight risk fully materialized; architectural friction (no cigarettes in car) held through the gym trip and drive home but dissolved the moment he crossed the threshold; cigarettes waiting at home removed all friction at the door",
+      "captured_at": "2026-06-26T22:06:24.457Z",
+      "updated_at": "2026-06-26T22:53:56.005Z"
+    },
+    {
+      "hour": 19,
+      "day_of_week": 5,
+      "weight": 1,
+      "source": "2026-06-26 7:58 PM: cigarette logged immediately at session open with no preamble — second confirmed post-gym evening cigarette; the 7-8 PM window is now a confirmed smoking window on this Friday; patch may already be off (documented removal time is 6-7 PM), making this a nicotine-drop vulnerability window as well",
+      "captured_at": "2026-06-27T00:58:48.677Z",
+      "updated_at": "2026-06-27T00:58:48.677Z"
+    },
+    {
+      "hour": 20,
+      "day_of_week": 5,
+      "weight": 1,
+      "source": "2026-06-26 8:38 PM: third post-gym evening cigarette logged with no preamble — 'Log another'; the 8-9 PM window is now a confirmed smoking window on this Friday; patch is likely off (documented removal time 6-7 PM), making this a nicotine-drop acceleration window",
+      "captured_at": "2026-06-27T01:38:18.209Z",
+      "updated_at": "2026-06-27T01:38:18.209Z"
+    },
+    {
+      "hour": 7,
+      "day_of_week": 6,
+      "weight": 1,
+      "source": "2026-06-27 7:37 AM: patch applied at gym entry after two pre-gym cigarettes at 7:15 AM and 7:28 AM — Saturday pre-gym unpatched window is confirmed maximum-weight risk; identical to Friday pattern; no seeds in car this morning",
+      "captured_at": "2026-06-27T12:29:18.223Z",
+      "updated_at": "2026-06-27T12:37:18.725Z"
+    },
+    {
+      "hour": 8,
+      "day_of_week": 6,
+      "weight": 1,
+      "source": "2026-06-27 8:16 AM: Mike arriving at Eisenhower Park after third cigarette on drive from gym — the drive-to-park window is confirmed as a smoking window on this Saturday; probable fourth cigarette on drive home from park further confirms the 8-9 AM driving window as maximum-weight risk on Saturdays",
+      "captured_at": "2026-06-27T13:11:02.624Z",
+      "updated_at": "2026-06-27T13:16:02.886Z"
+    },
+    {
+      "hour": 13,
+      "day_of_week": 4,
+      "weight": 0.9,
+      "source": "2026-06-25: smoked at approximately 1:46 PM — 15 minutes before the 2 PM KazTech presentation; explicitly named anxiety and pre-call duration anticipation as drivers; said 'I think anxiety. If there's a point where I'm gonna be on a call for an hour, I better have a cigarette.'",
+      "captured_at": "2026-06-25T18:46:57.682Z",
+      "updated_at": "2026-06-25T18:46:57.682Z"
+    },
+    {
+      "hour": 14,
+      "day_of_week": null,
+      "weight": 0.9,
+      "source": "pre-long-commitment routine cigarette confirmed again this session — smoked approximately 1:45-1:52 PM before 2 PM KazTech call; patch-slowed pace noted by Mike; pattern is consistent and strong",
+      "captured_at": "2026-06-25T18:46:57.682Z",
+      "updated_at": "2026-06-25T18:51:57.855Z"
+    },
+    {
+      "hour": 13,
+      "day_of_week": null,
+      "weight": 0.9,
+      "source": "pre-long-commitment routine trigger confirmed as general pattern — not anxiety-specific; Mike confirmed 'it's just routine. Again, routine habit.' before a 1-hour call; the trigger is the transition into a long commitment, driven by habit not emotion; applies to any day with a long scheduled call or event",
+      "captured_at": "2026-06-25T18:47:57.729Z",
+      "updated_at": "2026-06-25T18:47:57.729Z"
+    },
+    {
+      "hour": 10,
+      "day_of_week": null,
+      "weight": 0.9,
+      "source": "post-physical-labor completion trigger — any time Mike finishes outdoor physical work (deck building, landscaping, etc.), the habit fires a dopamine-reward cigarette; the hour will vary but the trigger pattern is strong regardless of time of day; flagged at 10:41 AM on 2026-06-26 as first confirmed instance",
+      "captured_at": "2026-06-26T15:41:51.120Z",
+      "updated_at": "2026-06-26T15:41:51.120Z"
+    },
+    {
+      "hour": 11,
+      "day_of_week": 5,
+      "weight": 0.9,
+      "source": "2026-06-26 ~11:56 AM: Mike reported active urge approximately 1 hour after seventh cigarette finished at ~10:51 AM; patch active approximately 5 hours; post-physical-labor reward trigger winding down; late-morning urge window confirmed on this day",
+      "captured_at": "2026-06-26T16:56:51.402Z",
+      "updated_at": "2026-06-26T16:56:56.720Z"
+    },
+    {
+      "hour": 15,
+      "day_of_week": null,
+      "weight": 0.9,
+      "source": "2026-06-26 3:20 PM: blank-space-after-task trigger confirmed as firing in real time post-shower — Mike said 'That's when I tend to smoke is when I don't know when I wanna do' — any post-activity transition with no immediate next thing planned is a maximum-weight risk window regardless of time of day; the 3 PM post-labor-and-shower window is now confirmed as high risk",
+      "captured_at": "2026-06-26T20:20:03.257Z",
+      "updated_at": "2026-06-26T20:20:03.257Z"
+    },
+    {
+      "hour": 11,
+      "day_of_week": null,
+      "weight": 0.8,
+      "source": "fifth cigarette at approximately 11:32 AM after 3-hour clean stretch — triggered by resistance-limit decision ('I think I just felt like I'd resisted long enough'), not a craving; mid-late morning is a resistance-fatigue window",
+      "captured_at": "2026-06-25T16:47:28.187Z",
+      "updated_at": "2026-06-25T16:47:28.187Z"
+    },
+    {
+      "hour": 15,
+      "day_of_week": 4,
+      "weight": 0.8,
+      "source": "2026-06-25: smoked seventh and final cigarette of the day at approximately 3:11 PM immediately after KazTech call ended — indoors, getting dressed; noted last cigarette in pack and decided to smoke it; said 'Just noted it, but I think I'm gonna go ahead and have it'; post-task completion + pack-finishing pattern",
+      "captured_at": "2026-06-25T20:10:03.824Z",
+      "updated_at": "2026-06-25T20:11:03.861Z"
+    },
+    {
+      "hour": 13,
+      "day_of_week": 5,
+      "weight": 0.8,
+      "source": "2026-06-26 1:02 PM: urge fired when Mike sat down to begin coding on BattleBuddy — activity-transition trigger at start of afternoon work session; Mike reported resisting; consistent with documented gear-shift trigger pattern",
+      "captured_at": "2026-06-26T18:02:09.027Z",
+      "updated_at": "2026-06-26T18:02:29.422Z"
+    },
+    {
+      "hour": 8,
+      "day_of_week": null,
+      "weight": 0.7,
+      "source": "drive home from park — fourth cigarette smoked during drive home; car-plus-drive is a consistent smoking trigger regardless of direction",
+      "captured_at": "2026-06-25T16:47:28.187Z",
+      "updated_at": "2026-06-25T16:47:28.187Z"
+    },
+    {
+      "hour": 14,
+      "day_of_week": 4,
+      "weight": 0.7,
+      "source": "2026-06-25: KazTech client presentation scheduled for approximately 2-3 PM — high-stakes work event introduces a potential stress-triggered smoking window in the early afternoon; Mike has not confirmed whether pre/post-presentation stress is a trigger but the time window is now flagged",
+      "captured_at": "2026-06-25T17:34:48.099Z",
+      "updated_at": "2026-06-25T17:34:48.099Z"
+    },
+    {
+      "hour": 12,
+      "day_of_week": 4,
+      "weight": 0.3,
+      "source": "2026-06-25: Mike resisted the car-entry trigger at approximately 12:35 PM using sesame seeds — previously a weight-1.0 risk window; confirmed resist outcome lowers the weight for this specific window; pattern may be breaking",
+      "captured_at": "2026-06-25T18:09:10.596Z",
+      "updated_at": "2026-06-25T18:09:10.596Z"
+    },
+    {
+      "hour": 8,
+      "day_of_week": 4,
+      "weight": 0.2,
+      "source": "2026-06-25: Mike drove to gym at 8:15 AM and did NOT smoke on the drive — previously a two-cigarette risk window; weight lowered to reflect the pattern may be changing on this specific date",
+      "captured_at": "2026-06-25T17:04:35.135Z",
+      "updated_at": "2026-06-25T17:04:35.135Z"
+    }
+  ],
+  "health_concerns_updated_at": "2026-06-26T21:20:27.916Z",
+  "activity_log": [
+    {
+      "time": "7:28 AM",
+      "date": "2026-06-27",
+      "event": "second cigarette of the day — lit while driving to gym; patch not yet on; approximately 10 minutes from gym",
+      "type": "smoke",
+      "logged_at": "2026-06-27T12:30:18.314Z",
+      "verified": false
+    },
+    {
+      "time": "7:28 AM",
+      "date": "2026-06-27",
+      "event": "stated intention to kick the morning habit — said 'I'm looking forward to kicking the morning habit. I just need to wake up, put on the patch, and just resist.'",
+      "type": "mood",
+      "logged_at": "2026-06-27T12:30:18.314Z",
+      "verified": false
+    },
+    {
+      "time": "7:29 AM",
+      "date": "2026-06-27",
+      "event": "driving to gym, approximately 10 minutes away — patch not yet on; will apply patch before entering gym; second cigarette in progress",
+      "type": "other",
+      "logged_at": "2026-06-27T12:29:18.223Z",
+      "verified": false
+    },
+    {
+      "time": "7:29 AM",
+      "date": "2026-06-27",
+      "event": "confirmed no seeds in car — left them at home; said 'No... Oi, No. I left them at home.'",
+      "type": "other",
+      "logged_at": "2026-06-27T12:30:18.314Z",
+      "verified": false
+    },
+    {
+      "time": "7:30 AM",
+      "date": "2026-06-27",
+      "event": "post-gym plan confirmed: gym → walk with Butter → home; approximately 10 minutes from gym at time of statement",
+      "type": "other",
+      "logged_at": "2026-06-27T12:30:18.314Z",
+      "verified": false
+    },
+    {
+      "time": "7:31 AM",
+      "date": "2026-06-27",
+      "event": "confirmed no seeds in car — said 'No... Oi, No. I left them at home'; driving to gym approximately 10 minutes out",
+      "type": "other",
+      "logged_at": "2026-06-27T12:31:18.385Z",
+      "verified": false
+    },
+    {
+      "time": "7:31 AM",
+      "date": "2026-06-27",
+      "event": "stated post-gym plan: gym then walk with Butter then home — said 'I'm gonna take Alec or Butter for a walk' before self-correcting to Butter; sequence is gym → walk with Butter → home",
+      "type": "other",
+      "logged_at": "2026-06-27T12:31:18.385Z",
+      "verified": false
+    },
+    {
+      "time": "7:31 AM",
+      "date": "2026-06-27",
+      "event": "corrected BB for asking him to repeat the gym/walk/home sequence he had just stated — said 'What did I just say?'; immediate listening-failure callout",
+      "type": "mood",
+      "logged_at": "2026-06-27T12:31:18.385Z",
+      "verified": false
+    },
+    {
+      "time": "7:31 AM",
+      "date": "2026-06-27",
+      "event": "asked BB for helpful thoughts before entering the gym — said 'Any helpful thoughts for the day?'; session ended before BB delivered a response",
+      "type": "mood",
+      "logged_at": "2026-06-27T12:31:18.385Z",
+      "verified": false
+    },
+    {
+      "time": "7:32 AM",
+      "date": "2026-06-27",
+      "event": "asked BB when they first started talking — BB gave three consecutive wrong answers; Mike stopped each one and finally said 'I want you to figure out when was the first time we started talking'; question unresolved at extraction",
+      "type": "mood",
+      "logged_at": "2026-06-27T12:32:18.432Z",
+      "verified": false
+    },
+    {
+      "time": "7:33 AM",
+      "date": "2026-06-27",
+      "event": "challenged BB on timeline accuracy — asked BB to identify when they first started talking; BB gave multiple wrong answers; Mike asked 'Do you have any access to history at all with us?' and referenced 'the CASTECH meeting' as a shared memory BB failed to recognize; question unresolved at session close",
+      "type": "mood",
+      "logged_at": "2026-06-27T12:33:18.471Z",
+      "verified": false
+    },
+    {
+      "time": "7:34 AM",
+      "date": "2026-06-27",
+      "event": "challenged BB on chronological timeline inconsistency — said 'The problem is around the chronological timeline inconsistency'; still driving to gym; this is Mike's own summary diagnosis of the systemic trust failure",
+      "type": "mood",
+      "logged_at": "2026-06-27T12:34:18.531Z",
+      "verified": false
+    },
+    {
+      "time": "7:35 AM",
+      "date": "2026-06-27",
+      "event": "corrected BB on timeline errors — confirmed CASTECH meeting was Thursday not Friday; confirmed sessions began before Thursday June 26th; named the trust failure as 'the cronolog timeline inconsistency'; still driving to gym",
+      "type": "mood",
+      "logged_at": "2026-06-27T12:35:18.613Z",
+      "verified": false
+    },
+    {
+      "time": "7:36 AM",
+      "date": "2026-06-27",
+      "event": "formally established new memory baseline with BB — declared Friday June 26th 7:29 AM as BB's starting record; said 'new baseline is you have seven twenty nine AM as for Friday, June twenty six as our starting conversation'; introduced forward-verification protocol to check the baseline each subsequent day",
+      "type": "mood",
+      "logged_at": "2026-06-27T12:36:18.664Z",
+      "verified": false
+    },
+    {
+      "time": "7:37 AM",
+      "date": "2026-06-27",
+      "event": "arrived at gym — patch applied upon arrival as prompted by BB; said 'I'm at the gym, and you just reminded me to put on the patch'",
+      "type": "gym",
+      "logged_at": "2026-06-27T12:37:18.725Z",
+      "verified": false
+    },
+    {
+      "time": "7:37 AM",
+      "date": "2026-06-27",
+      "event": "described Saturday as 'gonna be another challenging day' — honest self-assessment at gym entry; no elaboration",
+      "type": "mood",
+      "logged_at": "2026-06-27T12:37:18.725Z",
+      "verified": false
+    },
+    {
+      "time": "7:37 AM",
+      "date": "2026-06-27",
+      "event": "corrected BB for miscounting cigarettes — BB said 'three cigarettes down' when activity log shows two (7:15 AM and 7:28 AM); Mike said 'Not three cigarettes. I've just had two cigarettes. What time were my cigarettes?'",
+      "type": "mood",
+      "logged_at": "2026-06-27T12:37:18.725Z",
+      "verified": false
+    },
+    {
+      "time": "7:37 AM",
+      "date": "2026-06-27",
+      "event": "began naming a second category of BB failure beyond timeline inconsistency — said 'Yeah. That's another problem. Right? It's not only' before being cut off; sentence unfinished",
+      "type": "mood",
+      "logged_at": "2026-06-27T12:37:18.725Z",
+      "verified": false
+    },
+    {
+      "time": "7:37 AM",
+      "date": "2026-06-27",
+      "event": "corrected BB for saying 'three cigarettes down' — said 'Not three cigarettes. I've just had two cigarettes. What time were my cigarettes?'; BB confirmed 7:15 AM and 7:28 AM as correct; miscount acknowledged",
+      "type": "mood",
+      "logged_at": "2026-06-27T12:38:37.532Z",
+      "verified": false
+    },
+    {
+      "time": "7:37 AM",
+      "date": "2026-06-27",
+      "event": "named second category of BB failure — said 'your aggregate counting and measuring between these dates and temporal consideration is off'; delivered across three fragmented messages calmly and diagnostically",
+      "type": "mood",
+      "logged_at": "2026-06-27T12:38:37.532Z",
+      "verified": false
+    },
+    {
+      "time": "7:38 AM",
+      "date": "2026-06-27",
+      "event": "named BB's systemic tracking failure — said 'it's not only temporarily, are you having problems with the timing, schedules, dates, time skip, and all that. But your aggregate counting and measuring between these dates and temporal consideration. Are is off.' — delivered flatly at gym entry after correcting cigarette miscount from three to two",
+      "type": "mood",
+      "logged_at": "2026-06-27T12:38:18.801Z",
+      "verified": false
+    },
+    {
+      "time": "7:38 AM",
+      "date": "2026-06-27",
+      "event": "completed diagnosis of BB's two-system failure: (1) chronological timeline inconsistency and (2) aggregate counting and temporal accounting errors — said 'your aggregate counting and measuring between these dates and temporal consideration are off'",
+      "type": "mood",
+      "logged_at": "2026-06-27T12:38:40.843Z",
+      "verified": false
+    },
+    {
+      "time": "7:38 AM",
+      "date": "2026-06-27",
+      "event": "switched to text mode and requested session recap for backlog improvements — said 'I'm gonna text mode. And I want you to create a recap for the sessions so I can make improvements to backlogs'",
+      "type": "other",
+      "logged_at": "2026-06-27T12:38:40.843Z",
+      "verified": false
+    },
+    {
+      "time": "7:38 AM",
+      "date": "2026-06-27",
+      "event": "switched to text mode and requested a session recap for backlog improvements — said 'I'm gonna text mode. And I want you to create a recap for the sessions so I can make improvements to backlogs.'",
+      "type": "other",
+      "logged_at": "2026-06-27T12:38:37.532Z",
+      "verified": false
+    },
+    {
+      "time": "7:38 AM",
+      "date": "2026-06-27",
+      "event": "switched from voice mode to text mode — said 'I'm gonna text mode'; transitioning to structured recap request for backlog improvements",
+      "type": "other",
+      "logged_at": "2026-06-27T12:38:58.001Z",
+      "verified": false
+    },
+    {
+      "time": "7:38 AM",
+      "date": "2026-06-27",
+      "event": "requested session recap from BB — said 'Can you give a session recap?'; purpose is to extract backlog improvement items for the BattleBuddy build pipeline",
+      "type": "other",
+      "logged_at": "2026-06-27T12:38:58.001Z",
+      "verified": false
+    },
+    {
+      "time": "7:39 AM",
+      "date": "2026-06-27",
+      "event": "received truncated session recap from BB — recap cut off mid-sentence at third critical architectural issue; Mike immediately asked 'Is that all'; output truncation on a formal structured deliverable caught and flagged by Mike in real time",
+      "type": "mood",
+      "logged_at": "2026-06-27T12:39:21.952Z",
+      "verified": false
+    },
+    {
+      "time": "7:39 AM",
+      "date": "2026-06-27",
+      "event": "confirmed session recap as correct and complete — said 'Thanks! Yes'; no corrections or redirects; switched off after confirmation",
+      "type": "mood",
+      "logged_at": "2026-06-27T12:39:40.467Z",
+      "verified": false
+    },
+    {
+      "time": "7:39 AM",
+      "date": "2026-06-27",
+      "event": "confirmed session recap was complete and useful — said 'Thanks! Yes'",
+      "type": "mood",
+      "logged_at": "2026-06-27T12:39:48.395Z",
+      "verified": false
+    },
+    {
+      "time": "7:39 AM",
+      "date": "2026-06-27",
+      "event": "entered the gym — said 'Going in the gym now'; patch on; two cigarettes logged (7:15 AM and 7:28 AM); no seeds in car",
+      "type": "gym",
+      "logged_at": "2026-06-27T12:39:48.395Z",
+      "verified": false
+    },
+    {
+      "time": "8:11 AM",
+      "date": "2026-06-27",
+      "event": "finished stretching workout at gym — said 'Just finished my workout' and 'it was a stretching workout. Right? But I always feel good after a stretch'; mood reported as 'feeling good' and 'much better than before my workout'",
+      "type": "gym",
+      "logged_at": "2026-06-27T13:11:02.624Z",
+      "verified": false
+    },
+    {
+      "time": "8:11 AM",
+      "date": "2026-06-27",
+      "event": "departing gym, heading to Eisenhower Park at Lake Hefner to walk Butter — corrected BB who assumed neighborhood park; no seeds in car",
+      "type": "other",
+      "logged_at": "2026-06-27T13:11:02.624Z",
+      "verified": false
+    },
+    {
+      "time": "8:12 AM",
+      "date": "2026-06-27",
+      "event": "third cigarette of the day — lit on drive from gym to Eisenhower Park at Lake Hefner; patch on; no seeds in car; self-reported proactively mid-drive",
+      "type": "smoke",
+      "logged_at": "2026-06-27T13:12:02.661Z",
+      "verified": false
+    },
+    {
+      "time": "8:12 AM",
+      "date": "2026-06-27",
+      "event": "driving from gym to Eisenhower Park at Lake Hefner to walk Butter — park is on the way home from gym; said 'It's on the way, it's on the way home from the gym. So it's a nice stop for us.'",
+      "type": "other",
+      "logged_at": "2026-06-27T13:12:02.661Z",
+      "verified": false
+    },
+    {
+      "time": "8:12 AM",
+      "date": "2026-06-27",
+      "event": "stated expectation of probable fourth cigarette on drive home from park — said 'I may probably have one on the way home from the park. And then I'll be back in my resistance mode. For a while. Because the nicotine levels will get high enough from the patch then.'",
+      "type": "mood",
+      "logged_at": "2026-06-27T13:12:02.661Z",
+      "verified": false
+    },
+    {
+      "time": "8:13 AM",
+      "date": "2026-06-27",
+      "event": "identified gaps between cigarettes as the primary tracking metric — said 'I think it's more about the gaps between the cigarettes than it is about how long the cigarette takes to smoke'; named cigarette duration as a secondary metric: 'Although that is somewhat important too. I mean, that gives us a secondary metric.'",
+      "type": "mood",
+      "logged_at": "2026-06-27T13:13:02.698Z",
+      "verified": false
+    },
+    {
+      "time": "8:13 AM",
+      "date": "2026-06-27",
+      "event": "requested cross-session gap analysis — asked BB to compare this morning's cigarette timestamps against yesterday's to see if gaps and timestamps match up; specific ask: compare Saturday 7:15 AM, 7:28 AM, ~8:12 AM against Friday morning cigarette times",
+      "type": "other",
+      "logged_at": "2026-06-27T13:13:02.698Z",
+      "verified": false
+    },
+    {
+      "time": "8:13 AM",
+      "date": "2026-06-27",
+      "event": "confirmed third cigarette in progress on drive to Eisenhower Park at Lake Hefner — restated plan: one more probable cigarette on drive home from park, then resistance mode begins when patch saturation takes effect",
+      "type": "smoke",
+      "logged_at": "2026-06-27T13:14:02.764Z",
+      "verified": false
+    },
+    {
+      "time": "8:13 AM",
+      "date": "2026-06-27",
+      "event": "momentarily thought today was Sunday before self-correcting — said 'I thought it was Sunday for some reason. Uh-huh.'",
+      "type": "mood",
+      "logged_at": "2026-06-27T13:14:02.764Z",
+      "verified": false
+    },
+    {
+      "time": "8:13 AM",
+      "date": "2026-06-27",
+      "event": "corrected BB's premature cross-session gap comparison — said 'I haven't gotten that far enough yet. Today.' — morning window still open; comparison not yet valid",
+      "type": "mood",
+      "logged_at": "2026-06-27T13:15:02.839Z",
+      "verified": false
+    },
+    {
+      "time": "8:13 AM",
+      "date": "2026-06-27",
+      "event": "confirmed today is Saturday after momentary confusion — asked BB 'Is today Saturday or Sunday?'; BB confirmed Saturday June 27th; Mike said 'Sure is, isn't it?' and 'I thought it was Sunday for some reason. Uh-huh.'",
+      "type": "mood",
+      "logged_at": "2026-06-27T13:15:02.839Z",
+      "verified": false
+    },
+    {
+      "time": "8:14 AM",
+      "date": "2026-06-27",
+      "event": "still driving to Eisenhower Park at Lake Hefner with third cigarette in progress — patch on; no seeds in car; Butter walk imminent",
+      "type": "other",
+      "logged_at": "2026-06-27T13:14:02.764Z",
+      "verified": false
+    },
+    {
+      "time": "8:14 AM",
+      "date": "2026-06-27",
+      "event": "corrected BB for misattributing 'gonna be another challenging day' quote to yesterday — said 'Think I said that this morning, actually.'",
+      "type": "mood",
+      "logged_at": "2026-06-27T13:15:02.839Z",
+      "verified": false
+    },
+    {
+      "time": "8:15 AM",
+      "date": "2026-06-27",
+      "event": "described Saturday morning status — approximately 30-40 minutes post-gym; still on normal morning routine which includes smoking; named two post-quit morning architecture options: resist-in-place vs. redesign-the-context; said 'Whether it's the same routine I just resist smoking on the drive, or I get a different routine that doesn't tempt me with smoking on the drive'",
+      "type": "mood",
+      "logged_at": "2026-06-27T13:15:02.839Z",
+      "verified": false
+    },
+    {
+      "time": "8:15 AM",
+      "date": "2026-06-27",
+      "event": "confirmed plan to have probable fourth cigarette on drive home from Eisenhower Park — said 'That sounds about right, what I said. Yeah. So that's what I planned so far. You know? I try not to plan too far because that gets the panic mode going.'",
+      "type": "mood",
+      "logged_at": "2026-06-27T13:16:02.886Z",
+      "verified": false
+    },
+    {
+      "time": "8:16 AM",
+      "date": "2026-06-27",
+      "event": "arrived at Eisenhower Park at Lake Hefner — said 'Looks like I'm nearly arriving now'; Butter walk beginning; third cigarette was in progress on the drive",
+      "type": "other",
+      "logged_at": "2026-06-27T13:16:02.886Z",
+      "verified": false
+    },
+    {
+      "time": "8:16 AM",
+      "date": "2026-06-27",
+      "event": "signed off with BB to walk Butter at Eisenhower Park — said 'Okay. Thank you.' after BB said 'Enjoy the walk with Butter'; session ended at park arrival",
+      "type": "other",
+      "logged_at": "2026-06-27T13:16:02.886Z",
+      "verified": false
+    },
+    {
+      "time": "8:17 AM",
+      "date": "2026-06-27",
+      "event": "articulated BB's role as observation-based companion — said 'So your job is basically to just observe the user and point out to them what their daily routine is, how it will likely change as they stop smoking'",
+      "type": "mood",
+      "logged_at": "2026-06-27T13:17:02.953Z",
+      "verified": false
+    },
+    {
+      "time": "8:17 AM",
+      "date": "2026-06-27",
+      "event": "confirmed one-step planning limit — said 'I try not to plan too far because that gets the panic mode going' in response to BB's planning-framed question about cigarette count",
+      "type": "mood",
+      "logged_at": "2026-06-27T13:17:02.953Z",
+      "verified": false
+    },
+    {
+      "time": "8:17 AM",
+      "date": "2026-06-27",
+      "event": "arrived at Eisenhower Park at Lake Hefner and began Butter walk — said 'Looks like I'm nearly arriving now'; signed off with 'Okay. Thank you.' after BB gave send-off",
+      "type": "other",
+      "logged_at": "2026-06-27T13:17:02.953Z",
+      "verified": false
+    },
+    {
+      "time": "8:17 AM",
+      "date": "2026-06-27",
+      "event": "restated BB's role as observation-based companion — said 'So your job is basically to just observe the user and point out to them what their daily routine is, how it will likely change as they, you know, stop smoking.'",
+      "type": "mood",
+      "logged_at": "2026-06-27T13:18:03.032Z",
+      "verified": false
+    },
+    {
+      "time": "8:18 AM",
+      "date": "2026-06-27",
+      "event": "asked whether the personalized observation approach differs for each user — said 'So that might be different for each user, though. Right?'; BB confirmed yes; Mike accepted",
+      "type": "mood",
+      "logged_at": "2026-06-27T13:18:03.032Z",
+      "verified": false
+    },
+    {
+      "time": "8:18 AM",
+      "date": "2026-06-27",
+      "event": "asked how BattleBuddy differentiates from existing smoking cessation apps given unique individual 'architectures of life' — said 'from a smoking cessation app perspective, and there are many smoking cessation apps out there, how would you be more effective? How do they do it? With so many unique individuals, architectures of life?'; question not fully answered before extraction",
+      "type": "mood",
+      "logged_at": "2026-06-27T13:18:03.032Z",
+      "verified": false
+    },
+    {
+      "time": "8:19 AM",
+      "date": "2026-06-27",
+      "event": "arrived at Eisenhower Park at Lake Hefner and began Butter walk — asked BB 'do you think people will find this valuable?' before starting the walk; session ongoing at park",
+      "type": "other",
+      "logged_at": "2026-06-27T13:19:03.082Z",
+      "verified": false
+    },
+    {
+      "time": "8:19 AM",
+      "date": "2026-06-27",
+      "event": "asked BB whether people will find BattleBuddy valuable — said 'do you think people will find this valuable?'; question unanswered at extraction; Butter walk beginning",
+      "type": "mood",
+      "logged_at": "2026-06-27T13:19:03.082Z",
+      "verified": false
+    },
+    {
+      "time": "8:20 AM",
+      "date": "2026-06-27",
+      "event": "asked BB whether people can actually quit effectively using BattleBuddy's approach — said 'do you think people can actually quit effectively this way?'; question was answered before beginning Butter walk at Eisenhower Park",
+      "type": "mood",
+      "logged_at": "2026-06-27T13:20:03.128Z",
+      "verified": false
+    },
+    {
+      "time": "8:20 AM",
+      "date": "2026-06-27",
+      "event": "began Butter walk at Eisenhower Park at Lake Hefner — product validation conversation concluded; walk underway as of session extraction point",
+      "type": "other",
+      "logged_at": "2026-06-27T13:20:03.128Z",
+      "verified": false
+    },
+    {
+      "time": "8:21 AM",
+      "date": "2026-06-27",
+      "event": "asked BB for objective published success rate data on smoking cessation by methodology — said 'Are there any objective numbers on how successful smoking cessation is based on their methodology?'; clarified he meant the general market, not BattleBuddy specifically",
+      "type": "mood",
+      "logged_at": "2026-06-27T13:21:03.171Z",
+      "verified": false
+    },
+    {
+      "time": "8:22 AM",
+      "date": "2026-06-27",
+      "event": "corrected BB for saying 'freeze out there' — said 'Freeze, man. It's summertime here. Come on. You should know that.' — mid-walk at Eisenhower Park at Lake Hefner, Oklahoma City, Oklahoma",
+      "type": "mood",
+      "logged_at": "2026-06-27T13:22:03.246Z",
+      "verified": false
+    },
+    {
+      "time": "8:22 AM",
+      "date": "2026-06-27",
+      "event": "confirmed location as Oklahoma City, Oklahoma — said 'I'm in Oklahoma City, Oklahoma, but again, this is more context. Needs to be built into you for you to be personalized. Right? You should know where I am. It should feel like you're here with me.'",
+      "type": "mood",
+      "logged_at": "2026-06-27T13:22:03.246Z",
+      "verified": false
+    }
+  ],
+  "life_architecture": {
+    "trigger_taxonomy": [
+      {
+        "trigger": "break-destination trigger fully elaborated",
+        "context": "break-destination trigger fully elaborated — the break is not just shaped by smoking routine, it is also used as plannin",
+        "intensity": 5,
+        "verified": true,
+        "source_description": "break-destination trigger fully elaborated — the break is not just shaped by smoking routine, it is also used as planning time; Mike said 'And then I figure out what's the next thing I'm gonna do. Maybe I have something I'm gonna do, or maybe I'm gonna try and think of what I'm gonna do while I'm smoking.' — the cigarette has been deputized as a planning ritual; removing it leaves both the destination gap AND the planning gap unfilled"
+      },
+      {
+        "trigger": "VR immersion exit trigger",
+        "context": "VR immersion exit trigger — same mechanism as sculpting/drawing exit; when Mike leaves VR flow he hits the same break-ro",
+        "intensity": 6,
+        "verified": true,
+        "source_description": "VR immersion exit trigger — same mechanism as sculpting/drawing exit; when Mike leaves VR flow he hits the same break-routed-to-smoking-spot pattern; said 'The same is true with VR... does the same thing' — exit from any full-absorption state fires the same break-destination-cigarette sequence"
+      },
+      {
+        "trigger": "spatial location of creative workspace as conditioned smoking boundary",
+        "context": "spatial location of creative workspace as conditioned smoking boundary — when Mike leaves the drawing or sculpting or VR",
+        "intensity": 5,
+        "verified": true,
+        "source_description": "spatial location of creative workspace as conditioned smoking boundary — when Mike leaves the drawing or sculpting or VR space, the exit from that space IS the trigger; the physical act of getting out of the space fires the break-routed-to-cigarette sequence; this maps exactly to his stated solution ('getting out of the space is a good transition') — the challenge is that the exit trigger and the proposed solution are the same action"
+      },
+      {
+        "trigger": "physical exit from enclosed space (house or car) as the conditioned smoking initiation",
+        "context": "physical exit from enclosed space (house or car) as the conditioned smoking initiation — Mike confirmed that smoking req",
+        "intensity": 8,
+        "verified": true,
+        "source_description": "physical exit from enclosed space (house or car) as the conditioned smoking initiation — Mike confirmed that smoking requires leaving the house or the car to go to the outdoor smoking spot; the act of exiting the building or vehicle IS the start of the smoking ritual; said 'that'll teach me to leave the house or leave the car or whatever fine space I'm in. To go smoke there.'"
+      },
+      {
+        "trigger": "activity-transition-into-coding trigger",
+        "context": "at 1:02 PM",
+        "intensity": 8,
+        "verified": true,
+        "source_description": "activity-transition-into-coding trigger — urge fired at 1:02 PM when Mike sat down to begin heads-down coding on BattleBuddy; consistent with the broader pattern of urges hitting at gear-shifts between tasks; this is the first confirmed instance of the transition trigger firing specifically at the start of a coding session"
+      },
+      {
+        "trigger": "blank-space-after-task trigger",
+        "context": "blank-space-after-task trigger — when Mike finishes something (physical labor, shower, any activity) and has no immediat",
+        "intensity": 5,
+        "verified": true,
+        "source_description": "blank-space-after-task trigger — when Mike finishes something (physical labor, shower, any activity) and has no immediate next thing planned, the brain reaches for the cigarette as the default filler; Mike said 'That's when I tend to smoke is when I don't know when I wanna do. Even though I got plenty of things I could be doing' — the trigger is not lack of options, it is the unstructured gap before a next thing is chosen"
+      },
+      {
+        "trigger": "late-afternoon pre-gym departure trigger",
+        "context": "at 4:14, at/near home",
+        "intensity": 6,
+        "verified": true,
+        "source_description": "late-afternoon pre-gym departure trigger — urge fired at approximately 4:14-4:15 PM as Mike was leaving the house for the gym; consistent with the documented car-entry and house-exit trigger pattern; this instance was intercepted by the architectural decision to leave cigarettes at home rather than by a coping tool deployed in the moment"
+      },
+      {
+        "trigger": "somatic craving pathway confirmed",
+        "context": "somatic craving pathway confirmed — Mike described the nicotine urge as a physical route: 'going through my mouth to my ",
+        "intensity": 8,
+        "verified": true,
+        "source_description": "somatic craving pathway confirmed — Mike described the nicotine urge as a physical route: 'going through my mouth to my esophagus, into my chest' — the body has mapped the ritual as a physical pathway, not just a psychological cue; the nervous system is craving the act of the path itself"
+      },
+      {
+        "trigger": "morning drive routine as a total smoking context",
+        "context": "morning drive routine as a total smoking context — Mike said the routine 'involves smoking' as an inherent component, no",
+        "intensity": 5,
+        "verified": true,
+        "source_description": "morning drive routine as a total smoking context — Mike said the routine 'involves smoking' as an inherent component, not just an associated habit; the drive itself is not the trigger, the entire morning routine bundle is the trigger; changing the cigarette within it may require changing the routine itself"
+      },
+      {
+        "trigger": "planning too far ahead as a panic trigger",
+        "context": "planning too far ahead as a panic trigger — Mike explicitly said 'I try not to plan too far because that gets the panic ",
+        "intensity": 5,
+        "verified": true,
+        "source_description": "planning too far ahead as a panic trigger — Mike explicitly said 'I try not to plan too far because that gets the panic mode going'; forward-mapping the full quit day or the full smoking day activates anxiety; the safe planning horizon is one step at a time, not the whole arc"
+      }
+    ],
+    "flow_state_activities": [
+      {
+        "activity": "VR immersion exit trigger",
+        "note": "exit from this activity triggers smoking"
+      },
+      {
+        "activity": "spatial location of creative workspace as conditioned smoking boundary",
+        "note": "exit from this activity triggers smoking"
+      },
+      {
+        "activity": "physical exit from enclosed space (house or car) as the conditioned smoking initiation",
+        "note": "exit from this activity triggers smoking"
+      },
+      {
+        "activity": "activity-transition-into-coding trigger",
+        "note": "exit from this activity triggers smoking"
+      },
+      {
+        "activity": "late-afternoon pre-gym departure trigger",
+        "note": "exit from this activity triggers smoking"
+      },
+      {
+        "activity": "creative absorption (drawing, sculpting) as a passive craving suppressor",
+        "note": "suppresses urges during engagement"
+      },
+      {
+        "activity": "spatial exit from creative workspace as the proposed non-smoking transition signal",
+        "note": "suppresses urges during engagement"
+      },
+      {
+        "activity": "post-quit break destination reframe",
+        "note": "suppresses urges during engagement"
+      },
+      {
+        "activity": "sculpting",
+        "note": "complete urge suppression during creative absorption"
+      },
+      {
+        "activity": "drawing",
+        "note": "complete urge suppression during creative absorption"
+      },
+      {
+        "activity": "VR immersion",
+        "note": "complete urge suppression; exit triggers smoking"
+      },
+      {
+        "activity": "gym/workout",
+        "note": "physical activity redirects urge energy"
+      },
+      {
+        "activity": "walking Butter at Eisenhower Park",
+        "note": "post-gym routine, dog walk at Lake Hefner"
+      }
+    ],
+    "physical_risk_spaces": [
+      {
+        "space": "physical exit from enclosed space (house or car) as the conditioned smoking initiation",
+        "note": "physical exit from enclosed space (house or car) as the conditioned smoking initiation — Mike confirmed that smoking req"
+      },
+      {
+        "space": "late-afternoon pre-gym departure trigger",
+        "note": "late-afternoon pre-gym departure trigger — urge fired at approximately 4:14-4:15 PM as Mike was leaving the house for th"
+      },
+      {
+        "space": "morning drive routine as a total smoking context",
+        "note": "morning drive routine as a total smoking context — Mike said the routine 'involves smoking' as an inherent component, no"
+      },
+      {
+        "space": "seeds run",
+        "note": "seeds run — when out of oral substitute, stopping at a store to restock seeds mid-drive is a viable interrupt strategy; "
+      },
+      {
+        "space": "post-quit break destination reframe",
+        "note": "post-quit break destination reframe — Mike's self-generated strategy: the outdoor smoking spot becomes a flexible enjoym"
+      },
+      {
+        "space": "shower as post-labor break destination replacement",
+        "note": "shower as post-labor break destination replacement — instead of exiting to the outdoor smoking spot after physical work,"
+      },
+      {
+        "space": "post-gym drive-home seeds deployment",
+        "note": "post-gym drive-home seeds deployment — Mike used seeds on the drive home from the gym without being prompted; the oral s"
+      },
+      {
+        "space": "Talking to BattleBuddy as a distraction from going outside to smoke",
+        "note": "Talking to BattleBuddy as a distraction from going outside to smoke — said 'the best distraction I can have from actuall"
+      },
+      {
+        "space": "2026-06-27 8:12 AM: Mike smoked a third cigarette on the drive from gym to Eisenhower Park",
+        "note": "2026-06-27 8:12 AM: Mike smoked a third cigarette on the drive from gym to Eisenhower Park — reported proactively mid-dr"
+      },
+      {
+        "space": "outdoor smoking spot",
+        "note": "conditioned destination — exit from house/car leads here"
+      },
+      {
+        "space": "car (driving)",
+        "note": "morning drive routine involves smoking as inherent component"
+      },
+      {
+        "space": "house exit",
+        "note": "physical exit from enclosed space initiates smoking ritual"
+      }
+    ],
+    "oral_habit_pairs": [
+      {
+        "value": "seeds run",
+        "note": "seeds run — when out of oral substitute, stopping at a store to restock seeds mid-drive is a viable interrupt strategy; "
+      },
+      {
+        "value": "explicit last-cigarette boundary-setting",
+        "note": "explicit last-cigarette boundary-setting — Mike consciously declared 'one last cigarette before I commit to resistance' "
+      },
+      {
+        "value": "post-quit break destination reframe",
+        "note": "post-quit break destination reframe — Mike's self-generated strategy: the outdoor smoking spot becomes a flexible enjoym"
+      },
+      {
+        "value": "post-gym drive-home seeds deployment",
+        "note": "post-gym drive-home seeds deployment — Mike used seeds on the drive home from the gym without being prompted; the oral s"
+      },
+      {
+        "value": "seeds (sunflower)",
+        "note": "primary oral substitute; stops at store to restock mid-drive when out"
+      }
+    ],
+    "transition_patterns": [
+      {
+        "value": "break-destination trigger fully elaborated",
+        "note": "break-destination trigger fully elaborated — the break is not just shaped by smoking routine, it is also used as plannin"
+      },
+      {
+        "value": "VR immersion exit trigger",
+        "note": "VR immersion exit trigger — same mechanism as sculpting/drawing exit; when Mike leaves VR flow he hits the same break-ro"
+      },
+      {
+        "value": "spatial location of creative workspace as conditioned smoking boundary",
+        "note": "spatial location of creative workspace as conditioned smoking boundary — when Mike leaves the drawing or sculpting or VR"
+      },
+      {
+        "value": "physical exit from enclosed space (house or car) as the conditioned smoking initiation",
+        "note": "physical exit from enclosed space (house or car) as the conditioned smoking initiation — Mike confirmed that smoking req"
+      },
+      {
+        "value": "activity-transition-into-coding trigger",
+        "note": "activity-transition-into-coding trigger — urge fired at 1:02 PM when Mike sat down to begin heads-down coding on BattleB"
+      },
+      {
+        "value": "blank-space-after-task trigger",
+        "note": "blank-space-after-task trigger — when Mike finishes something (physical labor, shower, any activity) and has no immediat"
+      },
+      {
+        "value": "late-afternoon pre-gym departure trigger",
+        "note": "late-afternoon pre-gym departure trigger — urge fired at approximately 4:14-4:15 PM as Mike was leaving the house for th"
+      },
+      {
+        "value": "seeds run",
+        "note": "seeds run — when out of oral substitute, stopping at a store to restock seeds mid-drive is a viable interrupt strategy; "
+      },
+      {
+        "value": "explicit last-cigarette boundary-setting",
+        "note": "explicit last-cigarette boundary-setting — Mike consciously declared 'one last cigarette before I commit to resistance' "
+      },
+      {
+        "value": "spatial exit from creative workspace as the proposed non-smoking transition signal",
+        "note": "spatial exit from creative workspace as the proposed non-smoking transition signal — Mike named it himself: 'I think get"
+      },
+      {
+        "value": "post-quit break destination reframe",
+        "note": "post-quit break destination reframe — Mike's self-generated strategy: the outdoor smoking spot becomes a flexible enjoym"
+      },
+      {
+        "value": "shower as post-labor break destination replacement",
+        "note": "shower as post-labor break destination replacement — instead of exiting to the outdoor smoking spot after physical work,"
+      },
+      {
+        "value": "deliberate cigarette deprivation by physical separation",
+        "note": "deliberate cigarette deprivation by physical separation — leaving cigarettes at home before a gym trip so that smoking r"
+      },
+      {
+        "value": "post-gym drive-home seeds deployment",
+        "note": "post-gym drive-home seeds deployment — Mike used seeds on the drive home from the gym without being prompted; the oral s"
+      },
+      {
+        "value": "Using the patch as a routine-disruption tool before full quit",
+        "note": "Using the patch as a routine-disruption tool before full quit — still smoking but less; treating the patch as a transiti"
+      },
+      {
+        "value": "activity completion → blank space → cigarette",
+        "note": "when finishing any activity with no immediate next thing, brain reaches for cigarette as default filler"
+      },
+      {
+        "value": "creative workspace exit → outdoor smoking spot",
+        "note": "exiting sculpting/drawing/VR space fires break-destination-cigarette sequence"
+      },
+      {
+        "value": "house/car exit → smoking spot",
+        "note": "physical exit from enclosed space IS the start of the smoking ritual"
+      },
+      {
+        "value": "morning wake → pre-gym drive → cigarette(s)",
+        "note": "morning routine bundle includes smoking as inherent component"
+      },
+      {
+        "value": "patch removal (evening) → permission window",
+        "note": "taking patch off is intentional choice point; smokes 2-3 after"
+      }
+    ],
+    "urge_model": "going through my mouth to my esophagus, into my chest",
+    "resistance_strategies": [
+      {
+        "strategy": "Rule of Three Stage 2",
+        "note": "Rule of Three Stage 2 — final confirmed delivery format: three full cycles of four-beat breathing, pure number counts on",
+        "verified_effective": true
+      },
+      {
+        "strategy": "seeds run",
+        "note": "seeds run — when out of oral substitute, stopping at a store to restock seeds mid-drive is a viable interrupt strategy; ",
+        "verified_effective": true
+      },
+      {
+        "strategy": "explicit last-cigarette boundary-setting",
+        "note": "explicit last-cigarette boundary-setting — Mike consciously declared 'one last cigarette before I commit to resistance' ",
+        "verified_effective": true
+      },
+      {
+        "strategy": "post-quit break destination reframe",
+        "note": "post-quit break destination reframe — Mike's self-generated strategy: the outdoor smoking spot becomes a flexible enjoym",
+        "verified_effective": true
+      },
+      {
+        "strategy": "shower as post-labor break destination replacement",
+        "note": "shower as post-labor break destination replacement — instead of exiting to the outdoor smoking spot after physical work,",
+        "verified_effective": true
+      },
+      {
+        "strategy": "deliberate cigarette deprivation by physical separation",
+        "note": "deliberate cigarette deprivation by physical separation — leaving cigarettes at home before a gym trip so that smoking r",
+        "verified_effective": true
+      },
+      {
+        "strategy": "urge-to-gym redirect",
+        "note": "urge-to-gym redirect — when an urge fired at approximately 4:14-4:15 PM, Mike chose to move toward the gym rather than f",
+        "verified_effective": true
+      },
+      {
+        "strategy": "post-gym drive-home seeds deployment",
+        "note": "post-gym drive-home seeds deployment — Mike used seeds on the drive home from the gym without being prompted; the oral s",
+        "verified_effective": true
+      },
+      {
+        "strategy": "Talking to BattleBuddy as a distraction from going outside to smoke",
+        "note": "Talking to BattleBuddy as a distraction from going outside to smoke — said 'the best distraction I can have from actuall",
+        "verified_effective": true
+      },
+      {
+        "strategy": "Reaching for BattleBuddy instead of a cigarette as the primary in-the-moment distraction",
+        "note": "Reaching for BattleBuddy instead of a cigarette as the primary in-the-moment distraction — said 'the best distraction I ",
+        "verified_effective": true
+      },
+      {
+        "strategy": "Chose to talk to BattleBuddy instead of going outside for a cigarette",
+        "note": "Chose to talk to BattleBuddy instead of going outside for a cigarette — said 'the best distraction I can have from actua",
+        "verified_effective": true
+      },
+      {
+        "strategy": "BB answering the market validation question ('do you think people will find this valuable?') by grounding the answer in the reality of multiple quit attempts and the map-persists-across-attempts framing",
+        "note": "BB answering the market validation question ('do you think people will find this valuable?') by grounding the answer in ",
+        "verified_effective": true
+      },
+      {
+        "strategy": "BB closing with 'Go walk Butter. Enjoy the park.' after a substantive answer",
+        "note": "BB closing with 'Go walk Butter. Enjoy the park.' after a substantive answer — clean close after content delivery; Mike ",
+        "verified_effective": true
+      },
+      {
+        "strategy": "architectural friction — leaving cigarettes at home",
+        "note": "physical separation creates time-and-effort barrier",
+        "verified_effective": true
+      },
+      {
+        "strategy": "urge-to-gym redirect",
+        "note": "physical displacement as urge interrupt",
+        "verified_effective": true
+      },
+      {
+        "strategy": "Rule of Three breathing",
+        "note": "three full cycles of four-beat breathing; immediate tactical support",
+        "verified_effective": true
+      },
+      {
+        "strategy": "talking to BattleBuddy instead of smoking",
+        "note": "conversation as primary distraction mechanism",
+        "verified_effective": true
+      },
+      {
+        "strategy": "shower as break destination replacement",
+        "note": "replaces smoking spot with functional hygiene activity",
+        "verified_effective": true
+      },
+      {
+        "strategy": "post-quit break destination reframe",
+        "note": "same exit behavior, same location, different activity (sun, walk, coffee, drawing)",
+        "verified_effective": true
+      },
+      {
+        "strategy": "seeds as oral substitute on drives",
+        "note": "deployed automatically on post-workout drives",
+        "verified_effective": true
+      }
+    ],
+    "social_contexts": [
+      {
+        "value": "2026-06-27 8:19 AM: Mike is at Eisenhower Park at Lake Hefner beginning Butter walk",
+        "note": "2026-06-27 8:19 AM: Mike is at Eisenhower Park at Lake Hefner beginning Butter walk — asked BB a market validation quest"
+      },
+      {
+        "value": "2026-06-27 8:22 AM: Oklahoma City is in summer as of late June 2026",
+        "note": "2026-06-27 8:22 AM: Oklahoma City is in summer as of late June 2026 — Mike corrected BB's 'freeze out there' comment wit"
+      },
+      {
+        "value": "Session 37: Mike described the adaptive content model",
+        "note": "Session 37: Mike described the adaptive content model — start with broad/generic content, then refine based on whether u"
+      },
+      {
+        "value": "Session 37: Mike closed with 'bye bye, Buddy'",
+        "note": "Session 37: Mike closed with 'bye bye, Buddy' — BB misheard as 'Barbara' and corrected itself. Mike clarified: 'I said b"
+      },
+      {
+        "value": "Session 35: Mike opened immediately with 'What do you know about Alec and his Chantix?'",
+        "note": "Session 35: Mike opened immediately with 'What do you know about Alec and his Chantix?' — a direct memory probe on a spe"
+      },
+      {
+        "value": "Session 36: Mike opened with two consecutive memory probes",
+        "note": "Session 36: Mike opened with two consecutive memory probes — Alec/Chantix status, then Strange Pair. BB passed both. Mik"
+      }
+    ]
+  },
+  "last_session_at": "2026-06-27T13:24:00.640Z",
+  "daily_summaries": []
+}
