@@ -178,6 +178,9 @@ export default function AppLayout() {
           <Stack.Screen name="preferences" options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="voice-settings" options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="insights" options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="content-feed" options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="profile" options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="session-chat" options={{ animation: 'slide_from_bottom' }} />
         </Stack>
       </AppDrawer>
     </GestureHandlerRootView>
