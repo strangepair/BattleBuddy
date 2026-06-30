@@ -69,13 +69,13 @@ The workflow loops: 10 themes × `VIDEOS_PER_THEME` (default 3) prompts each
 
 ## How it works
 
-1. **Set Config** — fixes `VIDEO_API`, `VIDEOS_PER_THEME`, and the `THEMES` list for the run.
+1. **Set Config** — fixes `VIDEO_API` (`runway`), `VIDEOS_PER_THEME`, and the `THEMES` list for the run.
 2. **Split By Theme** loops one theme at a time into **Generate Prompts (Claude)**, which asks `claude-haiku-4-5-20251001` for `VIDEOS_PER_THEME` cinematic prompts and returns them as JSON.
 3. **Parse Claude Response** extracts the JSON array; **Split By Prompt** loops one prompt at a time.
-4. **Generate Video (Runway)** kicks off a Gen-3 Alpha Turbo `text_to_video` job (5s, 9:16 portrait) and stores the task ID.
-5. **Wait 30s → Poll Video Status** repeats until Runway reports `SUCCEEDED` or `FAILED`.
-6. On success: **Download Video → Upload to R2 → Save to Supabase** (status `active`), then **Wait Between Videos** (5s, rate-limit friendly) before looping to the next prompt.
-7. On failure: **Log Failure to Supabase** writes a `status: 'failed'` row and the loop continues.
+4. **Generate Video (Runway)** kicks off a **Gen-3 Alpha Turbo** `text_to_video` job (5s, 9:16 portrait `768:1344`) against `api.dev.runwayml.com` and stores the task ID.
+5. **Wait 30s → Poll Video Status → Read Poll Status** checks the task status. This is a quality-first batch job (runs offline overnight), so the poll loop is patient: Runway jobs typically resolve in 60–90s, but the loop tolerates up to **10 retries at a 30s interval** (~5.5 minutes total) before giving up on a single video — **Increment Attempt → Check Retry Limit** tracks the count across loop iterations.
+6. On `SUCCEEDED`: **Download Video → Upload to R2 → Save to Supabase** (status `active`), then **Wait Between Videos** (5s, rate-limit friendly) before looping to the next prompt.
+7. On `FAILED` (Runway-reported) or retry-limit exhaustion (timeout): **Log Failure to Supabase** writes a `status: 'failed'` row — including the last known status and poll-attempt count in `r2_key` for debugging — and the loop continues to the next prompt.
 8. Any unhandled node error anywhere in the run is caught by **Error Trigger → Log Critical Failure**.
 
 ## Estimated cost per run

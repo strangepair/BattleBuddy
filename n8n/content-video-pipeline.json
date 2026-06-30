@@ -208,11 +208,22 @@
       }
     },
     {
+      "id": "a1b2c3d4-0022-4000-8000-000000000022",
+      "name": "Read Poll Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 80],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const pollResponse = $json;\nlet pollAttempts = 0;\ntry {\n  pollAttempts = $('Increment Attempt').item.json.pollAttempts;\n} catch (e) {\n  pollAttempts = 0;\n}\nreturn {\n  json: {\n    status: pollResponse.status,\n    output: pollResponse.output || null,\n    failureReason: pollResponse.failure || pollResponse.failureCode || null,\n    taskId: $('Store Task ID').item.json.taskId,\n    theme: $('Store Task ID').item.json.theme,\n    prompt: $('Store Task ID').item.json.prompt,\n    pollAttempts,\n  },\n};"
+      }
+    },
+    {
       "id": "a1b2c3d4-0013-4000-8000-000000000013",
       "name": "IF Succeeded",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [2000, 80],
+      "position": [2240, 80],
       "parameters": {
         "conditions": {
           "options": {
@@ -238,7 +249,7 @@
       "name": "IF Failed",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
-      "position": [2000, 320],
+      "position": [2240, 320],
       "parameters": {
         "conditions": {
           "options": {
@@ -260,11 +271,48 @@
       }
     },
     {
+      "id": "a1b2c3d4-0023-4000-8000-000000000023",
+      "name": "Increment Attempt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2480, 440],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return {\n  json: {\n    ...$json,\n    pollAttempts: $json.pollAttempts + 1,\n  },\n};"
+      }
+    },
+    {
+      "id": "a1b2c3d4-0024-4000-8000-000000000024",
+      "name": "Check Retry Limit",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2720, 440],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "retry-limit-cond",
+              "leftValue": "={{ $json.pollAttempts }}",
+              "rightValue": 10,
+              "operator": { "type": "number", "operation": "lt" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
       "id": "a1b2c3d4-0015-4000-8000-000000000015",
       "name": "Download Video",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2240, -40],
+      "position": [2480, -40],
       "parameters": {
         "method": "GET",
         "url": "={{ $json.output[0] }}",
@@ -282,7 +330,7 @@
       "name": "Upload to R2",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [2480, -40],
+      "position": [2720, -40],
       "parameters": {
         "operation": "upload",
         "bucketName": "battlebuddy-content",
@@ -303,7 +351,7 @@
       "name": "Save to Supabase",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2720, -40],
+      "position": [2960, -40],
       "parameters": {
         "method": "POST",
         "url": "={{ $env.SUPABASE_URL }}/rest/v1/content_videos",
@@ -327,7 +375,7 @@
       "name": "Wait Between Videos",
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
-      "position": [2960, -40],
+      "position": [3200, -40],
       "parameters": {
         "amount": 5,
         "unit": "seconds"
@@ -338,7 +386,7 @@
       "name": "Log Failure to Supabase",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [2240, 320],
+      "position": [2960, 440],
       "parameters": {
         "method": "POST",
         "url": "={{ $env.SUPABASE_URL }}/rest/v1/content_videos",
@@ -353,7 +401,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ r2_url: \"\", r2_key: `failed/${$('Store Task ID').item.json.taskId}-${Date.now()}`, theme: $('Store Task ID').item.json.theme, tags: [], prompt: $('Store Task ID').item.json.prompt, duration_seconds: null, video_api: $('Set Config').first().json.VIDEO_API, generation_id: $('Store Task ID').item.json.taskId, status: \"failed\" }) }}",
+        "jsonBody": "={{ JSON.stringify({ r2_url: \"\", r2_key: `failed/${$json.taskId}-${$json.status || 'timeout'}-attempt${$json.pollAttempts}-${Date.now()}`, theme: $json.theme, tags: [], prompt: $json.prompt, duration_seconds: null, video_api: $('Set Config').first().json.VIDEO_API, generation_id: $json.taskId, status: \"failed\" }) }}",
         "options": {}
       }
     },
@@ -428,6 +476,9 @@
       "main": [[{ "node": "Poll Video Status", "type": "main", "index": 0 }]]
     },
     "Poll Video Status": {
+      "main": [[{ "node": "Read Poll Status", "type": "main", "index": 0 }]]
+    },
+    "Read Poll Status": {
       "main": [[{ "node": "IF Succeeded", "type": "main", "index": 0 }]]
     },
     "IF Succeeded": {
@@ -439,7 +490,16 @@
     "IF Failed": {
       "main": [
         [{ "node": "Log Failure to Supabase", "type": "main", "index": 0 }],
-        [{ "node": "Wait 30s", "type": "main", "index": 0 }]
+        [{ "node": "Increment Attempt", "type": "main", "index": 0 }]
+      ]
+    },
+    "Increment Attempt": {
+      "main": [[{ "node": "Check Retry Limit", "type": "main", "index": 0 }]]
+    },
+    "Check Retry Limit": {
+      "main": [
+        [{ "node": "Wait 30s", "type": "main", "index": 0 }],
+        [{ "node": "Log Failure to Supabase", "type": "main", "index": 0 }]
       ]
     },
     "Download Video": {
