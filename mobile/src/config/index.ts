@@ -53,6 +53,9 @@ export const ApiConfig = {
 
   // Supabase anon key — safe to expose (RLS enforces access)
   SUPABASE_ANON_KEY: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '',
+
+  // Cloudflare R2 public bucket URL — base for the content video feed
+  CF_R2_PUBLIC_URL: process.env.EXPO_PUBLIC_CF_R2_PUBLIC_URL ?? '',
 } as const;
 
 export const EngagementConfig = {
