@@ -182,7 +182,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ instances: [{ prompt: $json.prompt }], parameters: { aspectRatio: \"9:16\", durationSeconds: 8, personGeneration: \"allow_adult\" } }) }}",
+        "jsonBody": "={{ JSON.stringify({ instances: [{ prompt: $json.prompt }], parameters: { aspectRatio: \"9:16\", durationSeconds: 8, personGeneration: \"allow_all\" } }) }}",
         "options": {},
         "authentication": "genericCredentialType",
         "genericAuthType": "httpCustomAuth"
