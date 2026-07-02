@@ -46,7 +46,7 @@ User speech ──► STT ──► Claude (supportive-coach agent) ──► TT
 | **Sesame CSM-1B (self-host)** | Closest to the Sesame feel you liked; Apache-2.0, free to use | Ultra-low (engineered deployments) | Only if you'll run infra and own all safety. Highest effort. |
 | **Inworld TTS-2** | Topped the realtime-TTS arena (May 2026) | Real-time | Worth A/B testing for naturalness. |
 
-> Note on "without sycophancy": none of these vendors controls that — Claude's persona does. Keep the no-sycophancy rules in `prompts/system.battlebuddy.md`.
+> Note on "without sycophancy": none of these vendors controls that — Claude's persona does. Keep the no-sycophancy rules in `server/prompts/system.battlebuddy.md`.
 
 ## 4. Decision: build on Sesame CSM (chosen)
 

@@ -68,7 +68,7 @@ Personalization profile for this user: {profile}.
 Current context: {trigger_context}.
 ```
 
-> Keep the full, tunable system prompt in `prompts/system.battlebuddy.md` in the repo so it can be edited without code changes.
+> Keep the full, tunable system prompt in `server/prompts/system.battlebuddy.md` in the repo so it can be edited without code changes.
 
 ## 4. Tools (function calls the agent can make)
 
@@ -127,7 +127,7 @@ BattleBuddy is built for **everyday urges, not emergencies.** It is not a crisis
 - US-only for MVP, so the only crisis resource we surface is 988. No localization layer needed.
 
 ### The soft off-ramp (model behavior)
-If a user says something that genuinely sounds like an emergency — suicidal thoughts, self-harm, acute danger — the agent should drop the coaching frame, be plain that it's an AI and not the right help for that moment, point to 988 / emergency services, and **not** try to counsel them through it. This is a prompt instruction (see §3 and `prompts/system.battlebuddy.md`), a reasonable backstop — not a tested safety system. We're honest in the disclaimer that the app isn't for emergencies, which is the real protection.
+If a user says something that genuinely sounds like an emergency — suicidal thoughts, self-harm, acute danger — the agent should drop the coaching frame, be plain that it's an AI and not the right help for that moment, point to 988 / emergency services, and **not** try to counsel them through it. This is a prompt instruction (see §3 and `server/prompts/system.battlebuddy.md`), a reasonable backstop — not a tested safety system. We're honest in the disclaimer that the app isn't for emergencies, which is the real protection.
 
 ### Post-model check (optional, lightweight)
 A simple keyword screen on output (no medical/dosing advice, no shaming, no harmful coping) is fine to keep as cheap insurance, but it is **not** a blocking gate and **not** on the latency-critical crisis path. If it ever costs real latency, drop it.

@@ -23,10 +23,10 @@ def local_now(timezone):
 
 load_dotenv(Path(__file__).parent / ".env")
 
-# Support both local dev layout (agent/ is sibling to prompts/) and container layout (/app/)
+# Support both local dev layout (agent/ is sibling to server/) and container layout (/app/)
 _base = Path(os.environ.get("APP_BASE", Path(__file__).parent.parent))
 
-FALLBACK_PROMPT = (_base / "prompts" / "system.battlebuddy.md").read_text()
+FALLBACK_PROMPT = (_base / "server" / "prompts" / "system.battlebuddy.md").read_text()
 FALLBACK_PROMPT = FALLBACK_PROMPT.replace("{{profile}}", "New user.")
 FALLBACK_PROMPT = FALLBACK_PROMPT.replace("{{trigger_context}}", "User opened a voice session.")
 FALLBACK_PROMPT = FALLBACK_PROMPT.replace("{{recent_history}}", "No prior history.")

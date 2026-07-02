@@ -61,4 +61,12 @@ A running log of significant product/architecture decisions and deviations from 
 
 ---
 
+## 2026-07-02 — `prompts/` moved into `server/prompts/`
+
+**Decision.** Moved `prompts/system.battlebuddy.md` and `prompts/knowledge.rat-park.md` from the repo root into `server/prompts/`. The Dockerfile moved from repo root to `server/Dockerfile` and now uses `server/` as its own build context (`COPY . .` plus a new `server/.dockerignore` excluding `.env`, `node_modules`, `agent.log`, `transcripts`, `context-store`).
+**Why.** The Railway `bb-server` service has its Root Directory set to `/server`, which also scopes the Docker build context to `server/`. The old root Dockerfile did `COPY prompts/ ./prompts/`, which needs the monorepo root as context and silently fails/misses files under a `/server`-scoped build. Moving `prompts/` inside `server/` (rather than duplicating it) was required because `server/agentDesignLoop.js` auto-commits proposal-driven edits straight to `prompts/system.battlebuddy.md` and pushes to `main` — a duplicate copy at the repo root would drift out of sync with what Railway actually serves the moment the design loop wrote to the wrong copy.
+**Affects.** `server/index.js` and `server/agentDesignLoop.js` now resolve prompt paths relative to `server/` (no more `../prompts`). All doc references (`CLAUDE.md`, `docs/*.md`) updated to `server/prompts/system.battlebuddy.md`.
+
+---
+
 > Tip: pre-existing strategic choices that predate this log and still stand — React Native + Expo, Supabase, the hybrid Gemma (on-device) + Claude (cloud) brain, and Sesame CSM for voice — are documented in `CLAUDE.md` and `docs/`. Only log *changes* and *new* decisions here.

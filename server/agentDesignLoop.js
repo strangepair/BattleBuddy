@@ -35,8 +35,8 @@ const client = new Anthropic();
 
 const STORE_DIR = process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store');
 const AGENT_MD = resolve(__dirname, '..', 'agent.md');
-const SYSTEM_PROMPT = resolve(__dirname, '..', 'prompts', 'system.battlebuddy.md');
-const BACKUPS_DIR = resolve(__dirname, '..', 'prompts', 'backups');
+const SYSTEM_PROMPT = resolve(__dirname, 'prompts', 'system.battlebuddy.md');
+const BACKUPS_DIR = resolve(__dirname, 'prompts', 'backups');
 const PROPOSALS_DIR = resolve(__dirname, '..', 'agent-proposals');
 const APPLIED_DIR = resolve(PROPOSALS_DIR, 'applied');
 
@@ -290,7 +290,7 @@ function archiveProposal(filepath) {
 function commitAndPush(appliedSummary) {
   try {
     const repoRoot = resolve(__dirname, '..');
-    execSync('git add prompts/system.battlebuddy.md prompts/backups/', { cwd: repoRoot });
+    execSync('git add server/prompts/system.battlebuddy.md server/prompts/backups/', { cwd: repoRoot });
     const msg = `fix: agent design loop auto-applied HIGH confidence proposals\n\n${appliedSummary}\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>`;
     execSync(`git commit -m ${JSON.stringify(msg)}`, { cwd: repoRoot });
     execSync('git push origin main', { cwd: repoRoot });

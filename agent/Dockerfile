@@ -10,7 +10,7 @@ COPY agent/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY agent/agent.py ./agent.py
-COPY prompts/ /app/prompts/
+COPY server/prompts/ /app/server/prompts/
 COPY server/voice-config.json /app/server/voice-config.json
 
 ENV TORIO_USE_FFMPEG=0

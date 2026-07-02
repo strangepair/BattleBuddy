@@ -39,7 +39,7 @@ try {
 const client = new Anthropic();
 
 // Load the system prompt
-const systemPromptPath = resolve(__dirname, '..', 'prompts', 'system.battlebuddy.md');
+const systemPromptPath = resolve(__dirname, 'prompts', 'system.battlebuddy.md');
 const systemPromptTemplate = readFileSync(systemPromptPath, 'utf-8');
 
 // Path to the CSM venv's Python (for whisper transcription)

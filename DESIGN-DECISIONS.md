@@ -96,7 +96,7 @@ User ↔ Haiku (fast, real-time conversation)
 ### Server (server/index.js)
 - Node.js, no framework, raw HTTP.
 - Endpoints: `/session/turn` (text chat streaming), `/session/report` (post-session Sonnet analysis), `/livekit/token` (token + dispatch), `/transcribe` (Whisper STT), `/push/register`, `/nudge/send`, `/context/profile/:userId`, `/context/analyze`, `/context/seed`, `/admin` (voice selection), `/admin/voice`, `/health`.
-- System prompt loaded from `prompts/system.battlebuddy.md` at startup.
+- System prompt loaded from `server/prompts/system.battlebuddy.md` at startup.
 - For voice: server builds the complete system prompt + greeting and passes via dispatch metadata. Agent doesn't wait for participants.
 - For text: server calls `buildProfileSummary(effectiveUserId)` to get context agent's profile, falls back to client-provided profile.
 - Both paths fire `analyzeAndUpdate()` in background (non-blocking) for mid-conversation Sonnet analysis.
@@ -119,7 +119,7 @@ User ↔ Haiku (fast, real-time conversation)
 
 ## System Prompt Philosophy
 
-The system prompt (`prompts/system.battlebuddy.md`) was iteratively refined during user testing. Key principles:
+The system prompt (`server/prompts/system.battlebuddy.md`) was iteratively refined during user testing. Key principles:
 
 1. **AA Sponsor Model:** The north star. Always available, no judgment, no interrogation, normalize slips, inspire resilience, call bullshit gently, let them sit with hard things.
 2. **The conversation IS the intervention.** Picking up the phone instead of a cigarette. If they're smoking while talking, that's fine — it's data, not shame.
@@ -184,7 +184,7 @@ The system prompt (`prompts/system.battlebuddy.md`) was iteratively refined duri
 
 | File | Purpose |
 |---|---|
-| `prompts/system.battlebuddy.md` | The system prompt — BB's personality, rules, knowledge |
+| `server/prompts/system.battlebuddy.md` | The system prompt — BB's personality, rules, knowledge |
 | `server/index.js` | Node server — all API endpoints |
 | `server/contextAgent.js` | Background Sonnet agent — fact extraction + profile building |
 | `server/logWatcher.js` | Watches agent log for session closures → triggers context analysis |

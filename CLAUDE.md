@@ -39,7 +39,7 @@ BattleBuddy is a mobile (iOS + Android) AI companion that acts as a real-time **
 
 ## The system prompt lives in a file
 
-The buddy persona/system prompt is `prompts/system.battlebuddy.md` so it can be tuned without code changes. Keep it there; don't inline it.
+The buddy persona/system prompt is `server/prompts/system.battlebuddy.md` so it can be tuned without code changes. Keep it there; don't inline it.
 
 ## Working agreement
 

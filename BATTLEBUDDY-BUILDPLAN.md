@@ -17,7 +17,7 @@ These are solid and reusable regardless of navigation changes:
 | Claude Haiku streaming backend | `server/index.js` → `/session/turn` | Working, SSE streaming |
 | LiveKit voice agent (Claude + Deepgram + Sesame CSM) | `agent/agent.py` | Working |
 | LiveKit token endpoint | `server/index.js` → `/livekit/token` | Working |
-| System prompt (persona, tools, safety) | `prompts/system.battlebuddy.md` | Complete |
+| System prompt (persona, tools, safety) | `server/prompts/system.battlebuddy.md` | Complete |
 | Supabase schema + RLS | `supabase/migrations/001_initial_schema.sql` | Complete |
 | Central config module | `mobile/src/config/index.ts` | Complete |
 | Chat streaming logic | `mobile/src/components/feed/ChatSheet.tsx` | Working (will be refactored) |

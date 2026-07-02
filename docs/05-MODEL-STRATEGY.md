@@ -48,7 +48,7 @@ The price is complexity. Because this is a habit app (not a crisis/clinical prod
 ### Tier 0 — on device (Gemma 4, small)
 - Model: **Gemma 4 E4B** (~4.5B effective) where the phone can handle it; **E2B** (~2.3B) on weaker devices. Quantized (e.g., 4-bit) via an on-device runtime (Google AI Edge / MediaPipe LLM Inference, or llama.cpp). Detect device capability at install and pick the size.
 - Handles the **normal supportive conversation** and drives the **urge-wave exercise** (which is mostly scripted UI and needs little model power).
-- Uses the **same** `prompts/system.battlebuddy.md` persona + the same standing scope rules as the cloud — one persona, two runtimes.
+- Uses the **same** `server/prompts/system.battlebuddy.md` persona + the same standing scope rules as the cloud — one persona, two runtimes.
 - Works fully **offline**.
 
 ### Tier 1 — cloud hot path (Claude)
@@ -74,7 +74,7 @@ Each user turn, in order:
 
 There is **no** heavy cross-tier safety system here, because BattleBuddy isn't a crisis or clinical product. The same lightweight rules apply identically on both runtimes:
 
-1. **One persona, both runtimes.** On-device and cloud both load `prompts/system.battlebuddy.md`, including its standing rules (no medical advice, no shaming, honest it's an AI) and the soft "if this sounds like a real emergency → 988, and stop" off-ramp.
+1. **One persona, both runtimes.** On-device and cloud both load `server/prompts/system.battlebuddy.md`, including its standing rules (no medical advice, no shaming, honest it's an AI) and the soft "if this sounds like a real emergency → 988, and stop" off-ramp.
 2. **The "not for emergencies" disclaimer is a product screen**, shipped in the app bundle, so it's reachable on either runtime and **offline**. It does not depend on a model.
 3. **No deterministic crisis gate, no blocking crisis-phrase CI test, no offline crisis-classifier.** That machinery was scoped for an addiction/crisis product; we're not building one. (If the product ever expands into clinical territory, revisit — see `DECISIONS.md`.)
 4. **The optional output keyword screen** applies to on-device output too, the same as cloud — but it's insurance, not a gate.

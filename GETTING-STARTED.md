@@ -74,7 +74,7 @@ stop. I'll review before we start Phase 1.
 
 - Review what Claude Code built, run the app in Expo Go, confirm the health check.
 - Then start **Phase 1 (the circuit-breaker core)** — the heart of the product — with a similar "do only Phase 1" prompt. Phase 1 is **cloud-only on Claude** by design; the on-device Gemma tier and voice come in later phases so the safe, high-quality loop is proven first.
-- The supportive-coach persona Claude Code will wire up in Phase 1 already exists at `prompts/system.battlebuddy.md` — point it there; don't let it inline the prompt.
+- The supportive-coach persona Claude Code will wire up in Phase 1 already exists at `server/prompts/system.battlebuddy.md` — point it there; don't let it inline the prompt.
 
 ## The whole path at a glance
 

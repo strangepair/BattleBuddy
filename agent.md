@@ -2,7 +2,7 @@
 
 > **This document is the source of truth for BattleBuddy's philosophy, operating model, and observed behavior patterns.**
 > It is updated by the agent design loop — a meta-agent that reads session data across users and proposes changes.
-> All proposed changes are reviewed and approved by Mike Pierce before propagating to the runtime system prompt (`prompts/system.battlebuddy.md`).
+> All proposed changes are reviewed and approved by Mike Pierce before propagating to the runtime system prompt (`server/prompts/system.battlebuddy.md`).
 >
 > Last updated: 2026-07-01 — seeded from 108 sessions with Mike Pierce (primary user + founder).
 

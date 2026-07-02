@@ -31,7 +31,7 @@ Goal: a user with a smoking urge can get real help, end-to-end, in text.
 
 - **Panic button** on app open → instant Session screen → create local `urge_event`.
 - **`/session/turn` Edge Function:** assemble context, call Claude **Haiku**, stream tokens back. (Phase 1 is **cloud-only** — the on-device Gemma tier is added later, in Phase 2.5, on top of this proven loop. See `05-MODEL-STRATEGY.md §8`.)
-- **Chat UI** with streaming, supportive-coach persona wired from `prompts/system.battlebuddy.md`.
+- **Chat UI** with streaming, supportive-coach persona wired from `server/prompts/system.battlebuddy.md`.
 - **Three interventions:**
   - talk-it-through (default chat),
   - `start_wave_exercise` — the guided urge-wave / sensory-anatomy flow (doc 3 §5), capturing `intensity_start`/`intensity_end`,
