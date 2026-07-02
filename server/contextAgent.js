@@ -493,6 +493,18 @@ function timeToMinutes(timeStr) {
   return hour * 60 + min;
 }
 
+/**
+ * Chronological comparator for activity_log entries. Times are stored as
+ * 12-hour strings ("2:47 PM"), which string-compare WRONG ("2:47 PM" sorts
+ * before "8:08 AM") — that bug silently pruned afternoon entries as "oldest"
+ * and made computeUsageStats pick a morning smoke as the most recent one.
+ */
+function compareActivityEntries(a, b) {
+  const dateCmp = (a.date || '').localeCompare(b.date || '');
+  if (dateCmp !== 0) return dateCmp;
+  return timeToMinutes(a.time) - timeToMinutes(b.time);
+}
+
 function relativeTime(isoString) {
   if (!isoString) return '';
   const then = new Date(isoString).getTime();
@@ -888,12 +900,8 @@ export function computeUsageStats(rawUserId, timezone = 'America/Chicago') {
   const smokeEvents = (p.activity_log || []).filter(ev => ev.type === 'smoke');
   const todaySmokes = smokeEvents.filter(ev => ev.date === localDate);
 
-  // Sort all smokes chronologically
-  const allSmokes = [...smokeEvents].sort((a, b) => {
-    const da = `${a.date} ${a.time}`;
-    const db = `${b.date} ${b.time}`;
-    return da.localeCompare(db);
-  });
+  // Sort all smokes chronologically (numeric time compare — see compareActivityEntries)
+  const allSmokes = [...smokeEvents].sort(compareActivityEntries);
 
   const lastSmoke = allSmokes.length > 0 ? allSmokes[allSmokes.length - 1] : null;
 
@@ -1200,11 +1208,7 @@ Return ONLY valid JSON. No markdown, no explanation.`;
           });
         }
       }
-      profile.activity_log.sort((a, b) => {
-        const da = `${a.date} ${a.time}`;
-        const db = `${b.date} ${b.time}`;
-        return da.localeCompare(db);
-      });
+      profile.activity_log.sort(compareActivityEntries);
     }
 
     // Handle life_architecture — merge discovered fields
