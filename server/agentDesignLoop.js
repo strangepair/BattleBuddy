@@ -1,17 +1,17 @@
 /**
- * Agent Design Loop — reads accumulated session data across users and proposes
- * targeted, diff-style edits to agent.md.
- *
- * Never auto-applies changes. Writes a proposal file for human review.
- * Run manually or on a nightly schedule.
+ * Agent Design Loop — reads accumulated session data across users, proposes
+ * targeted updates to agent.md, auto-applies HIGH confidence proposals to
+ * system.battlebuddy.md, backs up the previous prompt, commits + pushes,
+ * and emails a summary of what was actually applied.
  *
  * Usage:
- *   node server/agentDesignLoop.js [--dry-run] [--users user1,user2]
+ *   node server/agentDesignLoop.js [--dry-run] [--remote] [--email] [--users=id1,id2]
  */
 
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execSync } from 'node:child_process';
 import Anthropic from '@anthropic-ai/sdk';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -35,7 +35,10 @@ const client = new Anthropic();
 
 const STORE_DIR = process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store');
 const AGENT_MD = resolve(__dirname, '..', 'agent.md');
+const SYSTEM_PROMPT = resolve(__dirname, '..', 'prompts', 'system.battlebuddy.md');
+const BACKUPS_DIR = resolve(__dirname, '..', 'prompts', 'backups');
 const PROPOSALS_DIR = resolve(__dirname, '..', 'agent-proposals');
+const APPLIED_DIR = resolve(PROPOSALS_DIR, 'applied');
 
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes('--dry-run');
@@ -45,7 +48,6 @@ const userFilter = args.find(a => a.startsWith('--users='))?.split('=')[1]?.spli
 
 const EMAIL_TO = process.env.DESIGN_LOOP_EMAIL_TO || 'mike@strangepair.com';
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
-
 const REMOTE_BASE_URL = process.env.BB_SERVER_URL || 'https://bb-server-production-a849.up.railway.app';
 
 // ── Load all user profiles ────────────────────────────────────────────────────
@@ -59,7 +61,6 @@ async function fetchRemoteProfile(userId) {
 
 async function loadAllProfiles() {
   if (REMOTE) {
-    // Pull known user IDs from local store filenames, fetch data from production API
     const files = readdirSync(STORE_DIR).filter(f => f.endsWith('.json') && !f.startsWith('default'));
     const userIds = files.map(f => f.replace('.json', ''));
     const profiles = [];
@@ -76,7 +77,6 @@ async function loadAllProfiles() {
     return profiles;
   }
 
-  // Local mode
   const files = readdirSync(STORE_DIR).filter(f => f.endsWith('.json') && !f.startsWith('default'));
   const profiles = [];
   for (const file of files) {
@@ -104,7 +104,6 @@ function buildSignalDigest(profiles) {
     recentInsights: [],
     nextSessionHints: [],
     openDesignQuestions: [],
-    userLanguage: [],
   };
 
   for (const p of profiles) {
@@ -119,15 +118,13 @@ function buildSignalDigest(profiles) {
     digest.userQuotes.push(...take(p.user_quotes, 10));
     digest.recentInsights.push(...take(p.recent_insights, 10));
     digest.nextSessionHints.push(...take(p.next_session_hints, 10));
-
-    // Pull unknowns as open design questions
     digest.openDesignQuestions.push(...take(p.unknowns, 5));
   }
 
   return digest;
 }
 
-// ── Run the meta-agent ────────────────────────────────────────────────────────
+// ── Propose design updates ────────────────────────────────────────────────────
 
 async function proposeDesignUpdates(agentMd, digest) {
   const systemPrompt = `You are a product design meta-agent for BattleBuddy, a smoking/vaping cessation companion app.
@@ -144,8 +141,8 @@ Rules:
 - Propose additions to "The user's own language" table when new phrases appear.
 - Propose updates to open design questions when sessions provide answers.
 - Never propose removing safety content or the crisis off-ramp.
-- Format each proposal as a clearly labeled diff block: SECTION, CHANGE TYPE (add/update/remove), and the proposed content.
-- Rate each proposal: HIGH (clear evidence), MEDIUM (pattern emerging), LOW (single instance, worth watching).
+- Format each proposal as a clearly labeled block: SECTION, CHANGE TYPE (add/update/remove), and the proposed content.
+- Rate each proposal: HIGH (clear evidence, auto-apply), MEDIUM (pattern emerging, watch), LOW (single instance, watch).
 
 Be concise. One proposal per finding. Do not repeat what's already in agent.md unless it needs updating.`;
 
@@ -194,34 +191,77 @@ Propose specific updates to agent.md. For each proposal, include:
   return response.content[0].text;
 }
 
-// ── Generate change report ────────────────────────────────────────────────────
+// ── Auto-apply HIGH confidence proposals to system prompt ─────────────────────
 
-async function generateChangeReport(proposalText, agentMdBefore, agentMdAfter, digest) {
+async function applyProposalsToSystemPrompt(proposalText, currentSystemPrompt) {
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 8192,
+    system: `You are applying approved changes to a live AI system prompt. You will receive:
+1. A set of proposals labeled HIGH / MEDIUM / LOW confidence
+2. The current system prompt
+
+Your job:
+- Apply ALL HIGH confidence proposals to the system prompt
+- Skip MEDIUM and LOW confidence proposals entirely
+- Make the minimum edit necessary to apply each proposal — don't rewrite surrounding content
+- Preserve ALL existing content not targeted by a proposal
+- Never remove safety content or the crisis off-ramp (988 Suicide & Crisis Lifeline)
+- Never remove the {{placeholder}} template variables — they are filled at runtime
+- Return ONLY the complete updated system prompt with no preamble, no explanation, no markdown wrapper`,
+    messages: [{
+      role: 'user',
+      content: `## HIGH confidence proposals to apply:
+
+${proposalText}
+
+## Current system prompt:
+
+${currentSystemPrompt}
+
+Return the complete updated system prompt with all HIGH confidence proposals applied.`,
+    }],
+  });
+
+  return response.content[0].text;
+}
+
+// ── Summarize what was actually applied ───────────────────────────────────────
+
+async function generateAppliedSummary(proposalText, promptBefore, promptAfter, digest) {
   const response = await client.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 1024,
-    system: `You are a concise technical writer. Given a set of proposed changes and before/after versions of a design document,
-write a short change report (under 300 words) summarizing:
-1. How many proposals were in total, broken down by HIGH/MEDIUM/LOW confidence
-2. A bullet list of what actually changed in the document (inferred from before/after diff)
-3. What was left as open questions or deferred
-Format it as clean markdown, no preamble.`,
+    system: `You are writing a concise change notification email for a developer. Given proposals and before/after system prompt versions:
+- List only what was actually applied (HIGH confidence proposals)
+- One bullet per change, plain English, 1 sentence each
+- Note how many MEDIUM/LOW proposals were skipped and will need more evidence
+- End with the session count analyzed
+No preamble. Clean markdown.`,
     messages: [{
       role: 'user',
-      content: `PROPOSALS:\n${proposalText}\n\nAGENT.MD BEFORE (first 2000 chars):\n${agentMdBefore.slice(0, 2000)}\n\nAGENT.MD AFTER (first 2000 chars):\n${agentMdAfter.slice(0, 2000)}\n\nSessions analyzed: ${digest.totalSessions} across ${digest.totalUsers} user(s).`,
+      content: `PROPOSALS:\n${proposalText}\n\nSYSTEM PROMPT BEFORE (first 3000 chars):\n${promptBefore.slice(0, 3000)}\n\nSYSTEM PROMPT AFTER (first 3000 chars):\n${promptAfter.slice(0, 3000)}\n\nSessions analyzed: ${digest.totalSessions} across ${digest.totalUsers} user(s).`,
     }],
   });
   return response.content[0].text;
 }
 
-// ── Write proposal file ───────────────────────────────────────────────────────
+// ── File management ───────────────────────────────────────────────────────────
+
+function backupSystemPrompt() {
+  mkdirSync(BACKUPS_DIR, { recursive: true });
+  const date = new Date().toISOString().slice(0, 10);
+  const backupPath = resolve(BACKUPS_DIR, `system.battlebuddy.${date}.md`);
+  copyFileSync(SYSTEM_PROMPT, backupPath);
+  console.log(`[DesignLoop] Backed up system prompt to: ${backupPath}`);
+  return backupPath;
+}
 
 function writeProposal(proposalText, digest) {
+  mkdirSync(PROPOSALS_DIR, { recursive: true });
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const filename = `proposal-${timestamp}.md`;
   const filepath = resolve(PROPOSALS_DIR, filename);
-
-  try { mkdirSync(PROPOSALS_DIR, { recursive: true }); } catch {}
 
   const content = `# agent.md Update Proposal — ${new Date().toISOString().slice(0, 10)}
 
@@ -231,110 +271,61 @@ Total sessions: ${digest.totalSessions}
 
 ---
 
-## Review instructions
-
-Each proposal below is labeled HIGH / MEDIUM / LOW confidence.
-- HIGH: apply directly if it looks right
-- MEDIUM: review carefully, may need tuning
-- LOW: watch for more evidence before applying
-
-To apply: edit agent.md directly, then add an entry to the Design Update Log at the bottom.
-To reject: leave the proposal file as-is or delete it.
-
----
-
 ${proposalText}
 `;
-
   writeFileSync(filepath, content);
   return filepath;
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+function archiveProposal(filepath) {
+  mkdirSync(APPLIED_DIR, { recursive: true });
+  const filename = filepath.split('/').pop();
+  const dest = resolve(APPLIED_DIR, filename);
+  writeFileSync(dest, readFileSync(filepath, 'utf-8'));
+  // Overwrite original with a redirect note so old paths still make sense
+  writeFileSync(filepath, `# Moved\nThis proposal was auto-applied and archived to applied/${filename}\n`);
+  console.log(`[DesignLoop] Archived proposal to: ${dest}`);
+}
 
-async function main() {
-  console.log('[DesignLoop] Starting agent design loop...');
-
-  if (!existsSync(AGENT_MD)) {
-    console.error('[DesignLoop] agent.md not found at', AGENT_MD);
-    process.exit(1);
-  }
-
-  const agentMd = readFileSync(AGENT_MD, 'utf-8');
-  console.log(`[DesignLoop] Loaded agent.md (${agentMd.length} chars)`);
-
-  const profiles = await loadAllProfiles();
-  if (profiles.length === 0) {
-    console.error('[DesignLoop] No user profiles found in', STORE_DIR);
-    process.exit(1);
-  }
-  console.log(`[DesignLoop] Loaded ${profiles.length} user profile(s)`);
-
-  const digest = buildSignalDigest(profiles);
-  console.log(`[DesignLoop] Signal digest: ${digest.totalSessions} sessions, ${digest.whatWorks.length} what-works signals, ${digest.whatDoesntWork.length} what-doesnt-work signals`);
-
-  if (DRY_RUN) {
-    console.log('[DesignLoop] DRY RUN — digest built, skipping LLM call');
-    console.log(JSON.stringify(digest, null, 2));
-    return;
-  }
-
-  console.log('[DesignLoop] Calling Sonnet to analyze and propose updates...');
-  const proposal = await proposeDesignUpdates(agentMd, digest);
-
-  const filepath = writeProposal(proposal, digest);
-  console.log(`[DesignLoop] Proposal written to: ${filepath}`);
-
-  // Read agent.md again after any manual edits (in automated mode, same as before)
-  const agentMdAfter = existsSync(AGENT_MD) ? readFileSync(AGENT_MD, 'utf-8') : agentMd;
-
-  console.log('[DesignLoop] Generating change report...');
-  const report = await generateChangeReport(proposal, agentMd, agentMdAfter, digest);
-
-  const reportPath = filepath.replace('proposal-', 'report-').replace('.md', '-report.md');
-  writeFileSync(reportPath, `# Agent Design Loop — Change Report\n${new Date().toISOString().slice(0, 10)}\n\n${report}\n\n---\n\n[Full proposal](${filepath.split('/').pop()})\n`);
-  console.log(`[DesignLoop] Change report written to: ${reportPath}`);
-  console.log('\n── CHANGE REPORT ──────────────────────────────────\n');
-  console.log(report);
-  console.log('\n────────────────────────────────────────────────────\n');
-  console.log('[DesignLoop] Review the proposal, then apply accepted changes to agent.md manually.');
-
-  if (EMAIL) {
-    const reportText = readFileSync(reportPath, 'utf-8');
-    await sendEmailReport(reportText, filepath, digest);
+function commitAndPush(appliedSummary) {
+  try {
+    const repoRoot = resolve(__dirname, '..');
+    execSync('git add prompts/system.battlebuddy.md prompts/backups/', { cwd: repoRoot });
+    const msg = `fix: agent design loop auto-applied HIGH confidence proposals\n\n${appliedSummary}\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>`;
+    execSync(`git commit -m ${JSON.stringify(msg)}`, { cwd: repoRoot });
+    execSync('git push origin main', { cwd: repoRoot });
+    console.log('[DesignLoop] Committed and pushed updated system prompt');
+  } catch (e) {
+    console.warn('[DesignLoop] Git commit/push failed:', e.message);
   }
 }
 
-// ── Send email report ─────────────────────────────────────────────────────────
+// ── Send email ────────────────────────────────────────────────────────────────
 
-async function sendEmailReport(reportText, proposalPath, digest) {
+async function sendAppliedEmail(appliedSummary, digest) {
   if (!RESEND_API_KEY) {
     console.warn('[DesignLoop] RESEND_API_KEY not set — skipping email');
     return;
   }
 
   const date = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
-  const subject = `BattleBuddy Design Loop — ${date}`;
+  const subject = `BattleBuddy — prompt updated ${date}`;
 
-  // Convert markdown report to simple HTML
   const html = `
 <html><body style="font-family: -apple-system, sans-serif; max-width: 640px; margin: 40px auto; color: #1a1a1a; line-height: 1.6;">
-  <h2 style="border-bottom: 2px solid #e5e7eb; padding-bottom: 8px;">🧠 BattleBuddy Agent Design Loop</h2>
-  <p style="color: #6b7280; font-size: 14px;">${date} · ${digest.totalSessions} sessions · ${digest.totalUsers} user(s)</p>
-  <div style="background: #f9fafb; border-left: 4px solid #3b82f6; padding: 16px; margin: 20px 0; border-radius: 4px;">
-    ${reportText
+  <h2 style="border-bottom: 2px solid #e5e7eb; padding-bottom: 8px;">BattleBuddy system prompt updated</h2>
+  <p style="color: #6b7280; font-size: 14px;">${date} · ${digest.totalSessions} sessions analyzed · ${digest.totalUsers} user(s)</p>
+  <div style="background: #f0fdf4; border-left: 4px solid #22c55e; padding: 16px; margin: 20px 0; border-radius: 4px;">
+    ${appliedSummary
       .replace(/^## (.+)$/gm, '<h3 style="margin-top:16px">$1</h3>')
-      .replace(/^### (.+)$/gm, '<h4>$1</h4>')
       .replace(/^- (.+)$/gm, '<li>$1</li>')
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/\*(.+?)\*/g, '<em>$1</em>')
       .replace(/\n\n/g, '</p><p>')
-      .replace(/^(?!<[hlip])/gm, '')
     }
   </div>
   <p style="color: #6b7280; font-size: 13px;">
-    Proposal file: <code>${proposalPath}</code><br>
-    To apply changes: open agent.md and apply the HIGH confidence proposals you want, then redeploy.
+    Changes are live on Railway. Previous prompt backed up to <code>prompts/backups/</code> for rollback if needed.
   </p>
 </body></html>`;
 
@@ -349,7 +340,7 @@ async function sendEmailReport(reportText, proposalPath, digest) {
       to: [EMAIL_TO],
       subject,
       html,
-      text: reportText,
+      text: appliedSummary,
     }),
   });
 
@@ -357,7 +348,76 @@ async function sendEmailReport(reportText, proposalPath, digest) {
     const err = await res.text();
     console.warn(`[DesignLoop] Email failed: ${res.status} ${err}`);
   } else {
-    console.log(`[DesignLoop] Email sent to ${EMAIL_TO}`);
+    console.log(`[DesignLoop] Applied changes email sent to ${EMAIL_TO}`);
+  }
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
+async function main() {
+  console.log('[DesignLoop] Starting agent design loop...');
+
+  if (!existsSync(AGENT_MD)) {
+    console.error('[DesignLoop] agent.md not found at', AGENT_MD);
+    process.exit(1);
+  }
+  if (!existsSync(SYSTEM_PROMPT)) {
+    console.error('[DesignLoop] system.battlebuddy.md not found at', SYSTEM_PROMPT);
+    process.exit(1);
+  }
+
+  const agentMd = readFileSync(AGENT_MD, 'utf-8');
+  const systemPromptBefore = readFileSync(SYSTEM_PROMPT, 'utf-8');
+  console.log(`[DesignLoop] Loaded agent.md (${agentMd.length} chars), system prompt (${systemPromptBefore.length} chars)`);
+
+  const profiles = await loadAllProfiles();
+  if (profiles.length === 0) {
+    console.error('[DesignLoop] No user profiles found in', STORE_DIR);
+    process.exit(1);
+  }
+  console.log(`[DesignLoop] Loaded ${profiles.length} user profile(s)`);
+
+  const digest = buildSignalDigest(profiles);
+  console.log(`[DesignLoop] Signal digest: ${digest.totalSessions} sessions, ${digest.whatWorks.length} what-works, ${digest.whatDoesntWork.length} what-doesnt-work`);
+
+  if (DRY_RUN) {
+    console.log('[DesignLoop] DRY RUN — digest built, skipping LLM calls');
+    console.log(JSON.stringify(digest, null, 2));
+    return;
+  }
+
+  console.log('[DesignLoop] Calling Sonnet to analyze and propose updates...');
+  const proposals = await proposeDesignUpdates(agentMd, digest);
+
+  const proposalPath = writeProposal(proposals, digest);
+  console.log(`[DesignLoop] Proposal written to: ${proposalPath}`);
+
+  console.log('[DesignLoop] Auto-applying HIGH confidence proposals to system prompt...');
+  const systemPromptAfter = await applyProposalsToSystemPrompt(proposals, systemPromptBefore);
+
+  const changed = systemPromptAfter.trim() !== systemPromptBefore.trim();
+  if (!changed) {
+    console.log('[DesignLoop] No changes to apply — system prompt unchanged');
+    return;
+  }
+
+  // Backup, write, archive
+  backupSystemPrompt();
+  writeFileSync(SYSTEM_PROMPT, systemPromptAfter);
+  console.log('[DesignLoop] System prompt updated');
+
+  archiveProposal(proposalPath);
+
+  console.log('[DesignLoop] Generating applied changes summary...');
+  const appliedSummary = await generateAppliedSummary(proposals, systemPromptBefore, systemPromptAfter, digest);
+  console.log('\n── APPLIED CHANGES ─────────────────────────────────\n');
+  console.log(appliedSummary);
+  console.log('\n────────────────────────────────────────────────────\n');
+
+  commitAndPush(appliedSummary);
+
+  if (EMAIL) {
+    await sendAppliedEmail(appliedSummary, digest);
   }
 }
 
