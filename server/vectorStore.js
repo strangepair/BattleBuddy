@@ -7,6 +7,7 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import WebSocket from 'ws';
 
 let supabase = null;
 let initialized = false;
@@ -19,7 +20,13 @@ function init() {
   const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
 
   if (supabaseUrl && supabaseKey) {
-    supabase = createClient(supabaseUrl, supabaseKey);
+    // Node 20 has no native WebSocket global; supabase-js's realtime client
+    // requires one at construction even though we only use REST/RPC calls.
+    // Without this, createClient throws and the vector store is dead for the
+    // life of the process (initialized=true, supabase=null).
+    supabase = createClient(supabaseUrl, supabaseKey, {
+      realtime: { transport: WebSocket },
+    });
   }
 }
 

@@ -9,14 +9,23 @@ import {
   type LocalCravingEvent,
 } from './localDb';
 import { ApiConfig } from '../config';
+import { useAuthStore } from '../stores/authStore';
 
 const SYNC_BATCH_SIZE = 50;
+
+function currentUserId(): string | null {
+  try {
+    return useAuthStore.getState().user?.id ?? null;
+  } catch {
+    return null;
+  }
+}
 
 async function pushMessages(messages: LocalMessage[]): Promise<string[]> {
   const res = await fetch(`${ApiConfig.CHAT_URL}/sync/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({ messages, userId: currentUserId() }),
   });
   if (!res.ok) throw new Error(`Sync messages failed: ${res.status}`);
   const data = await res.json();
@@ -27,7 +36,7 @@ async function pushEvents(events: LocalCravingEvent[]): Promise<string[]> {
   const res = await fetch(`${ApiConfig.CHAT_URL}/sync/events`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ events }),
+    body: JSON.stringify({ events, userId: currentUserId() }),
   });
   if (!res.ok) throw new Error(`Sync events failed: ${res.status}`);
   const data = await res.json();

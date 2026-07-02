@@ -14,6 +14,9 @@ export interface SessionResult {
   messages: SessionMessage[];
   intensityStart: number | null;
   intensityEnd: number | null;
+  /** True only when the session actually ended (not a background checkpoint).
+   *  Drives server-side session_count + session summary extraction. */
+  finalize?: boolean;
 }
 
 export interface TriggerContext {
@@ -22,83 +25,54 @@ export interface TriggerContext {
   time: string;
 }
 
-export async function recordOutcome(result: SessionResult): Promise<void> {
-  if (!result.userId || !ApiConfig.SUPABASE_URL || !ApiConfig.SUPABASE_ANON_KEY) {
-    // Even without Supabase, try to generate the report
-    generateSessionReport(result, null);
-    return;
-  }
-
-  const headers = {
-    'Content-Type': 'application/json',
-    apikey: ApiConfig.SUPABASE_ANON_KEY,
-    Authorization: `Bearer ${ApiConfig.SUPABASE_ANON_KEY}`,
-  };
-
+function getTimezone(): string {
   try {
-    // 1. Insert craving event
-    const eventRes = await fetch(`${ApiConfig.SUPABASE_URL}/rest/v1/craving_events`, {
-      method: 'POST',
-      headers: { ...headers, Prefer: 'return=representation' },
-      body: JSON.stringify({
-        user_id: result.userId,
-        started_at: new Date(result.startedAt).toISOString(),
-        ended_at: new Date(result.endedAt).toISOString(),
-        trigger_context: result.triggerContext ?? {},
-        mode: result.mode === 'idle' ? 'text' : result.mode,
-        outcome: result.outcome === 'submitted' ? 'submitted' : result.outcome,
-        helped: result.helped,
-        intensity_start: result.intensityStart,
-        intensity_end: result.intensityEnd,
-      }),
-    });
-
-    if (!eventRes.ok) return;
-
-    const [event] = await eventRes.json();
-    if (!event?.id) return;
-
-    // 2. Insert messages
-    const messageBatch = result.messages
-      .filter((m) => m.content.length > 0)
-      .map((m) => ({
-        craving_event_id: event.id,
-        user_id: result.userId,
-        role: m.role,
-        content: m.content,
-        modality: m.mode === 'idle' ? 'text' : m.mode,
-        created_at: new Date(m.timestamp).toISOString(),
-      }));
-
-    if (messageBatch.length > 0) {
-      await fetch(`${ApiConfig.SUPABASE_URL}/rest/v1/messages`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(messageBatch),
-      });
-    }
-
-    // 3. Update framing stats
-    if (result.triggerContext) {
-      const framing = inferFraming(result.messages);
-      if (framing) {
-        await fetch(`${ApiConfig.SUPABASE_URL}/rest/v1/rpc/increment_framing_stat`, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            p_user_id: result.userId,
-            p_framing: framing,
-            p_resisted: result.outcome === 'resisted',
-          }),
-        });
-      }
-    }
-
-    // 4. Generate session report (async, non-blocking)
-    generateSessionReport(result, event.id);
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
   } catch {
-    // Silently fail — offline sync will handle this later
+    return 'America/Chicago';
   }
+}
+
+async function resolveUserId(explicit: string | null): Promise<string | null> {
+  if (explicit) return explicit;
+  try {
+    const { useAuthStore } = await import('../stores/authStore');
+    return useAuthStore.getState().user?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// All session persistence goes through the server (service role) — the old
+// direct-to-Supabase writes could never pass RLS with local user ids and
+// silently dropped every row.
+export async function recordOutcome(result: SessionResult): Promise<void> {
+  const userId = await resolveUserId(result.userId);
+  const nonEmpty = result.messages.filter((m) => m.content.length > 0);
+
+  // Finalize text sessions into the memory pipeline: session_count, session
+  // history, and fact extraction. Voice sessions are finalized by the voice
+  // agent itself — sending again would double-count.
+  if (result.finalize && result.mode !== 'voice' && nonEmpty.length >= 2) {
+    try {
+      await fetch(`${ApiConfig.CHAT_URL}/context/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId,
+          sessionId: result.sessionId,
+          messages: nonEmpty.map((m) => ({ role: m.role, content: m.content })),
+          isSessionEnd: true,
+          timezone: getTimezone(),
+        }),
+      });
+    } catch {
+      // Offline — the transcript is in SQLite and will reach the server via sync
+    }
+  }
+
+  // Generate the session report (async, non-blocking)
+  generateSessionReport({ ...result, userId }, null);
 }
 
 async function generateSessionReport(result: SessionResult, cravingEventId: string | null): Promise<void> {
@@ -126,6 +100,7 @@ async function generateSessionReport(result: SessionResult, cravingEventId: stri
         })),
         outcome: result.outcome,
         triggerContext: result.triggerContext,
+        sessionId: result.sessionId,
         cravingEventId,
         userId: result.userId,
       }),
@@ -276,20 +251,3 @@ export async function recordSessionOutcome(
   }
 }
 
-function inferFraming(messages: SessionMessage[]): string | null {
-  const assistantText = messages
-    .filter((m) => m.role === 'assistant')
-    .map((m) => m.content.toLowerCase())
-    .join(' ');
-
-  if (assistantText.includes('gain') || assistantText.includes('freedom') || assistantText.includes('saving')) {
-    return 'encouragement';
-  }
-  if (assistantText.includes('distract') || assistantText.includes('song') || assistantText.includes('video')) {
-    return 'distraction';
-  }
-  if (assistantText.includes('learn') || assistantText.includes('understand') || assistantText.includes('pattern')) {
-    return 'education';
-  }
-  return 'encouragement';
-}

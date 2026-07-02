@@ -149,7 +149,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     if (nonEmpty.length > 0) {
       AsyncStorage.setItem(scopedKey(PERSIST_KEYS.lastSessionMessages), JSON.stringify(nonEmpty.slice(-30))).catch(() => {});
 
-      // Always generate a session report when there's meaningful content
+      // Always generate a session report when there's meaningful content.
+      // finalize:true marks a real session end — the server increments
+      // session_count and records the session summary (voice sessions are
+      // finalized by the voice agent instead; recordOutcome skips those).
       import('../services/outcomeRecorder').then(({ recordOutcome }) => {
         recordOutcome({
           userId: null,
@@ -163,6 +166,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           messages: current.messages,
           intensityStart: null,
           intensityEnd: null,
+          finalize: true,
         });
       }).catch(() => {});
     }

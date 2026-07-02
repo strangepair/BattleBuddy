@@ -24,10 +24,84 @@ const EMPTY_PROFILE: UserProfile = {
   preferredMode: null,
 };
 
-export async function fetchUserProfile(_userId: string | null): Promise<UserProfile> {
-  // Always check local profile first (works without auth)
+async function resolveUserId(explicit: string | null): Promise<string | null> {
+  if (explicit) return explicit;
   try {
-    const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
+    const { useAuthStore } = await import('../stores/authStore');
+    return useAuthStore.getState().user?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch the user's profile from the server's context store — the same living
+ * profile BB itself reads — plus session stats from the event log. Falls back
+ * to the locally-rebuilt profile when offline.
+ *
+ * (The previous version read craving_events/session_reports/framing_stats
+ * directly from Supabase, which RLS made permanently empty for local user
+ * ids — the remote branch never returned data once.)
+ */
+export async function fetchUserProfile(userIdArg: string | null): Promise<UserProfile> {
+  const userId = await resolveUserId(userIdArg);
+
+  if (userId) {
+    try {
+      const [profileRes, eventsRes] = await Promise.all([
+        fetch(`${ApiConfig.CHAT_URL}/context/profile/${encodeURIComponent(userId)}`),
+        fetch(`${ApiConfig.CHAT_URL}/events?userId=${encodeURIComponent(userId)}&eventTypes=session&limit=100`),
+      ]);
+
+      if (profileRes.ok) {
+        const { summary, profile } = await profileRes.json();
+        const events: any[] = eventsRes.ok ? (await eventsRes.json()).events || [] : [];
+
+        const outcomes = events.map((e) => e.metadata?.outcome).filter(Boolean);
+        const resisted = outcomes.filter((o) => o === 'resisted').length;
+        const resistRate = outcomes.length > 0 ? Math.round((resisted / outcomes.length) * 100) : 0;
+
+        let streak = 0;
+        for (const o of outcomes) {
+          if (o === 'resisted') streak++;
+          else break;
+        }
+
+        const textCount = events.filter((e) => e.metadata?.mode === 'text').length;
+        const voiceCount = events.filter((e) => e.metadata?.mode === 'voice').length;
+        const preferredMode =
+          textCount > voiceCount * 1.5 ? 'text' : voiceCount > textCount * 1.5 ? 'voice' : null;
+
+        const topWindow = (profile?.risk_windows || [])
+          .slice()
+          .sort((a: any, b: any) => (b.weight || 0) - (a.weight || 0))[0];
+
+        const hints: string[] = (profile?.next_session_hints || [])
+          .slice(-3)
+          .map((h: any) => (typeof h === 'string' ? h : h?.value || ''))
+          .filter(Boolean);
+
+        if (summary && !summary.includes('New user')) {
+          return {
+            summary,
+            recentHistory: hints.length > 0 ? `Follow up on: ${hints.join(' | ')}` : 'See profile.',
+            streak,
+            totalSessions: profile?.session_count || events.length,
+            resistRate,
+            topMedia: [],
+            preferredFraming: null,
+            hardestTime: topWindow ? formatHour(topWindow.hour) : null,
+            preferredMode,
+          };
+        }
+      }
+    } catch {
+      // Offline — fall through to the local rebuild
+    }
+  }
+
+  // Local fallback: profile rebuilt from locally-saved session reports
+  try {
     const { useSessionStore } = await import('../stores/sessionStore');
     const state = useSessionStore.getState();
     if (state.profileSummary && !state.profileSummary.includes('New user')) {
@@ -35,197 +109,16 @@ export async function fetchUserProfile(_userId: string | null): Promise<UserProf
         ...EMPTY_PROFILE,
         summary: state.profileSummary,
         recentHistory: state.recentHistory,
+        totalSessions: state.sessionCount,
       };
     }
   } catch {}
 
-  if (!_userId || !ApiConfig.SUPABASE_URL || !ApiConfig.SUPABASE_ANON_KEY) {
-    return EMPTY_PROFILE;
-  }
-
-  try {
-    const headers = {
-      apikey: ApiConfig.SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${ApiConfig.SUPABASE_ANON_KEY}`,
-    };
-
-    // Try the pre-computed context profile first (written by batch profiler — cheap to read)
-    const contextRes = await fetch(
-      `${ApiConfig.SUPABASE_URL}/rest/v1/user_context_profiles?user_id=eq.${_userId}&select=profile_text,journey_position,trajectory,what_works,risk_fingerprint`,
-      { headers },
-    );
-    const [contextProfile] = contextRes.ok ? await contextRes.json() : [];
-
-    const [eventsRes, framingRes, reportsRes] = await Promise.all([
-      fetch(
-        `${ApiConfig.SUPABASE_URL}/rest/v1/craving_events?user_id=eq.${_userId}&select=outcome,mode,started_at,intensity_start,intensity_end&order=started_at.desc&limit=100`,
-        { headers },
-      ),
-      fetch(
-        `${ApiConfig.SUPABASE_URL}/rest/v1/user_framing_stats?user_id=eq.${_userId}&select=framing,shown_count,resisted_after&order=resisted_after.desc&limit=4`,
-        { headers },
-      ),
-      fetch(
-        `${ApiConfig.SUPABASE_URL}/rest/v1/session_reports?user_id=eq.${_userId}&select=summary,next_session_hint,what_helped,preferences,trigger_type,emotional_arc,created_at&order=created_at.desc&limit=5`,
-        { headers },
-      ),
-    ]);
-
-    const events: any[] = eventsRes.ok ? await eventsRes.json() : [];
-    const framingStats: any[] = framingRes.ok ? await framingRes.json() : [];
-    const reports: any[] = reportsRes.ok ? await reportsRes.json() : [];
-
-    // If batch profiler has run, use its pre-computed text as the base
-    if (contextProfile?.profile_text && contextProfile.profile_text !== 'New user — no history yet.') {
-      return {
-        summary: contextProfile.profile_text,
-        recentHistory: buildRecentHistory(reports),
-        streak: 0, // batch profile doesn't expose this separately; compute below as fallback
-        totalSessions: events.length,
-        resistRate: events.length > 0 ? Math.round((events.filter((e: any) => e.outcome === 'resisted').length / events.length) * 100) : 0,
-        topMedia: [],
-        preferredFraming: contextProfile.what_works?.framings?.[0] || null,
-        hardestTime: contextProfile.risk_fingerprint?.time_risks?.[0] || null,
-        preferredMode: null,
-      };
-    }
-
-    if (events.length === 0) return EMPTY_PROFILE;
-
-    const total = events.length;
-    const resisted = events.filter((e: any) => e.outcome === 'resisted').length;
-    const resistRate = total > 0 ? Math.round((resisted / total) * 100) : 0;
-
-    let streak = 0;
-    for (const e of events) {
-      if (e.outcome === 'resisted') streak++;
-      else break;
-    }
-
-    const textCount = events.filter((e: any) => e.mode === 'text').length;
-    const voiceCount = events.filter((e: any) => e.mode === 'voice').length;
-    const preferredMode = textCount > voiceCount * 1.5 ? 'text' : voiceCount > textCount * 1.5 ? 'voice' : null;
-
-    const hourCounts: Record<number, number> = {};
-    for (const e of events) {
-      const h = new Date(e.started_at).getHours();
-      hourCounts[h] = (hourCounts[h] || 0) + 1;
-    }
-    const peakHour = Object.entries(hourCounts).sort((a, b) => b[1] - a[1])[0];
-    const hardestTime = peakHour ? formatHour(Number(peakHour[0])) : null;
-
-    const preferredFraming = framingStats.length > 0 && framingStats[0].resisted_after > 0
-      ? framingStats[0].framing
-      : null;
-
-    // Build profile from reports
-    const reportInsights = buildReportInsights(reports);
-    const summary = buildSummary({
-      streak, total, resistRate, preferredFraming, hardestTime, preferredMode, reportInsights,
-    });
-    const recentHistory = buildRecentHistory(reports);
-
-    return {
-      summary,
-      recentHistory,
-      streak,
-      totalSessions: total,
-      resistRate,
-      topMedia: [],
-      preferredFraming,
-      hardestTime,
-      preferredMode,
-    };
-  } catch {
-    return EMPTY_PROFILE;
-  }
+  return EMPTY_PROFILE;
 }
 
 function formatHour(h: number): string {
   if (h === 0) return 'midnight';
   if (h === 12) return 'noon';
   return h < 12 ? `${h}am` : `${h - 12}pm`;
-}
-
-interface ReportInsights {
-  copingStyle: string | null;
-  topHelpers: string[];
-  nextHint: string | null;
-}
-
-function buildReportInsights(reports: any[]): ReportInsights {
-  if (reports.length === 0) return { copingStyle: null, topHelpers: [], nextHint: null };
-
-  const helperCounts: Record<string, number> = {};
-  for (const r of reports) {
-    for (const h of r.what_helped || []) {
-      helperCounts[h] = (helperCounts[h] || 0) + 1;
-    }
-  }
-  const topHelpers = Object.entries(helperCounts)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
-    .map(([k]) => k);
-
-  const copingStyle = reports[0]?.preferences?.coping_style || null;
-  const nextHint = reports[0]?.next_session_hint || null;
-
-  return { copingStyle, topHelpers, nextHint };
-}
-
-function buildSummary(data: {
-  streak: number;
-  total: number;
-  resistRate: number;
-  preferredFraming: string | null;
-  hardestTime: string | null;
-  preferredMode: string | null;
-  reportInsights: ReportInsights;
-}): string {
-  const parts: string[] = [];
-
-  if (data.total === 0) return 'New user — no history yet.';
-
-  parts.push(`${data.total} sessions logged, ${data.resistRate}% resist rate.`);
-
-  if (data.streak > 0) {
-    parts.push(`Current streak: ${data.streak} resists in a row.`);
-  }
-
-  if (data.reportInsights.topHelpers.length > 0) {
-    parts.push(`What works: ${data.reportInsights.topHelpers.join(', ')}.`);
-  }
-
-  if (data.reportInsights.copingStyle) {
-    parts.push(`Preferred coping: ${data.reportInsights.copingStyle}.`);
-  }
-
-  if (data.preferredFraming) {
-    parts.push(`Responds well to: ${data.preferredFraming} framing.`);
-  }
-
-  if (data.hardestTime) {
-    parts.push(`Hardest time: around ${data.hardestTime}.`);
-  }
-
-  if (data.preferredMode) {
-    parts.push(`Prefers ${data.preferredMode} mode.`);
-  }
-
-  if (data.reportInsights.nextHint) {
-    parts.push(`Hint for this session: ${data.reportInsights.nextHint}`);
-  }
-
-  return parts.join(' ');
-}
-
-function buildRecentHistory(reports: any[]): string {
-  if (reports.length === 0) return 'First session with this user.';
-
-  const summaries = reports.slice(0, 3).map((r: any, i: number) => {
-    const ago = i === 0 ? 'Last session' : `${i + 1} sessions ago`;
-    return `${ago}: ${r.summary}`;
-  });
-
-  return summaries.join('\n');
 }

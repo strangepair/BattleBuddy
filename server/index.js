@@ -7,21 +7,17 @@ process.on('unhandledRejection', (err) => {
 });
 
 import { createServer } from 'node:http';
-import { readFileSync, writeFileSync, mkdtempSync, unlinkSync, mkdirSync, readdirSync } from 'node:fs';
-import { resolve, dirname, join } from 'node:path';
+import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { tmpdir } from 'node:os';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import Anthropic from '@anthropic-ai/sdk';
 import { createClient } from '@supabase/supabase-js';
 import WebSocket from 'ws';
 import { AccessToken } from 'livekit-server-sdk';
 import { sendPush, isQuietHours, pickNudgeMessage } from './notifications.js';
-import { analyzeAndUpdate, buildProfileSummary, buildLifeArchitectureSummary, buildCurrentGoal, computeUsageStats, lookupProfileField, loadProfile, seedProfile, mergeProfiles, resolveUserId, saveRawTranscript } from './contextAgent.js';
+import { analyzeAndUpdate, buildProfileSummary, buildLifeArchitectureSummary, buildCurrentGoal, computeUsageStats, lookupProfileField, loadProfile, seedProfile, mergeProfiles, resolveUserId, saveRawTranscript, appendTranscriptMessages, replaceProfile, persistProfile } from './contextAgent.js';
 import { embedAndStore, retrieveRelevant, isConfigured as isVectorConfigured } from './vectorStore.js';
 
-const execFileAsync = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Load .env manually (no dotenv dependency)
@@ -55,8 +51,56 @@ const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY)
 // updates go live without a redeploy)
 const systemPromptPath = resolve(__dirname, 'prompts', 'system.battlebuddy.md');
 
-// Path to the CSM venv's Python (for whisper transcription)
-const WHISPER_PYTHON = resolve(__dirname, '..', 'sesame-csm', '.venv', 'bin', 'python3');
+const DEFAULT_TZ = 'America/Chicago';
+
+// ─── Timezone helpers ────────────────────────────────────────────────────────
+// bb_events stores UTC instants; "today" must be computed in the *user's* day,
+// not the server's (Railway runs in UTC — a 7 PM Central cigarette is
+// tomorrow's date in UTC).
+
+function localDateInTz(timezone = DEFAULT_TZ, at = new Date()) {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(at);
+  } catch {
+    return at.toISOString().slice(0, 10);
+  }
+}
+
+function tzOffsetString(timezone = DEFAULT_TZ, at = new Date()) {
+  try {
+    const name = new Intl.DateTimeFormat('en-US', { timeZone: timezone, timeZoneName: 'longOffset' })
+      .formatToParts(at).find(p => p.type === 'timeZoneName')?.value || 'GMT+00:00';
+    const m = name.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/);
+    if (!m) return '+00:00';
+    return `${m[1]}${m[2].padStart(2, '0')}:${m[3] || '00'}`;
+  } catch {
+    return '+00:00';
+  }
+}
+
+/** UTC start/end instants of a local calendar day (YYYY-MM-DD) in a timezone. */
+function dayRangeInTz(dateStr, timezone = DEFAULT_TZ) {
+  const offset = tzOffsetString(timezone, new Date(`${dateStr}T12:00:00Z`));
+  const start = new Date(`${dateStr}T00:00:00${offset}`);
+  const end = new Date(start.getTime() + 24 * 3600 * 1000 - 1);
+  return { start, end };
+}
+
+/** Convert a profile-style local time ("3:30 PM" on "2026-07-02") to an ISO instant. */
+function localTimeToIso(dateStr, timeStr, timezone = DEFAULT_TZ) {
+  const m = (timeStr || '').match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+  if (!m || !dateStr) return null;
+  let hour = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  const ampm = (m[3] || '').toUpperCase();
+  if (ampm === 'PM' && hour !== 12) hour += 12;
+  if (ampm === 'AM' && hour === 12) hour = 0;
+  const offset = tzOffsetString(timezone, new Date(`${dateStr}T12:00:00Z`));
+  const d = new Date(`${dateStr}T${String(hour).padStart(2, '0')}:${String(min).padStart(2, '0')}:00${offset}`);
+  return isNaN(d.getTime()) ? null : d.toISOString();
+}
 
 function formatLocalTime(timezone) {
   try {
@@ -122,7 +166,7 @@ function buildSessionContext(profile) {
   return context;
 }
 
-function buildSystemPrompt(profile, triggerContext, recentHistory, timezone, lifeArchitecture, sessionContext, currentGoal) {
+function buildSystemPrompt(profile, triggerContext, recentHistory, timezone, lifeArchitecture, sessionContext, currentGoal, relevantMemories) {
   const localTime = formatLocalTime(timezone);
   const timeContext = `User's local time: ${localTime}.` +
     (triggerContext ? ` ${triggerContext}` : '');
@@ -133,7 +177,28 @@ function buildSystemPrompt(profile, triggerContext, recentHistory, timezone, lif
     .replace('{{trigger_context}}', timeContext)
     .replace('{{recent_history}}', recentHistory || 'First message in this session.')
     .replace('{{life_architecture}}', lifeArchitecture || 'Not yet discovered — learn through conversation.')
-    .replace('{{session_context}}', sessionContext || 'No prior session data.');
+    .replace('{{session_context}}', sessionContext || 'No prior session data.')
+    .replace('{{relevant_memories}}', relevantMemories || 'None retrieved for this turn.');
+}
+
+/**
+ * Fetch memories relevant to the current message, capped so a slow Supabase
+ * round-trip can never hold up the first token (latency is the product).
+ */
+async function fetchRelevantMemories(userId, queryText, timeoutMs = 800) {
+  if (!queryText || !isVectorConfigured()) return null;
+  try {
+    const memories = await Promise.race([
+      retrieveRelevant(userId, queryText, 5),
+      new Promise(res => setTimeout(() => res(null), timeoutMs)),
+    ]);
+    if (!memories || memories.length === 0) return null;
+    return memories
+      .map(m => `- [${m.type}, ${new Date(m.created_at).toISOString().slice(0, 10)}] ${m.content}`)
+      .join('\n');
+  } catch {
+    return null;
+  }
 }
 
 // ─── bb_events tool ─────────────────────────────────────────────────────────
@@ -225,7 +290,7 @@ const AGENT_TOOLS = [
   },
 ];
 
-async function queryEvents(userId, { date, eventTypes, limit = 20 } = {}) {
+async function queryEvents(userId, { date, eventTypes, limit = 20, timezone = DEFAULT_TZ } = {}) {
   if (!supabase) return [];
 
   let query = supabase
@@ -236,8 +301,7 @@ async function queryEvents(userId, { date, eventTypes, limit = 20 } = {}) {
     .limit(Math.min(parseInt(limit, 10) || 20, 100));
 
   if (date) {
-    const start = new Date(date); start.setHours(0, 0, 0, 0);
-    const end = new Date(date); end.setHours(23, 59, 59, 999);
+    const { start, end } = dayRangeInTz(date, timezone);
     query = query.gte('occurred_at', start.toISOString()).lte('occurred_at', end.toISOString());
   }
 
@@ -248,6 +312,75 @@ async function queryEvents(userId, { date, eventTypes, limit = 20 } = {}) {
   const { data, error } = await query;
   if (error) throw new Error(error.message);
   return data || [];
+}
+
+/**
+ * One merged usage view served to BOTH modes (text tool + voice /context/stats)
+ * so they can never disagree: the transactional event log is authoritative for
+ * logged events; the profile activity timeline covers conversation-extracted
+ * history that predates the log.
+ */
+async function buildUsageSummary(userId, timezone = DEFAULT_TZ) {
+  const result = { profile_stats: null, event_log: null };
+  try {
+    result.profile_stats = computeUsageStats(userId, timezone);
+  } catch (e) {
+    result.profile_stats = { error: e.message };
+  }
+  try {
+    const today = localDateInTz(timezone);
+    const events = await queryEvents(userId, { date: today, limit: 100, timezone });
+    result.event_log = { date: today, events, summary: summarizeEvents(events) };
+  } catch (e) {
+    result.event_log = { unavailable: true, error: e.message };
+  }
+  return result;
+}
+
+/**
+ * Mirror conversation-extracted smoke/resist activity into bb_events so the
+ * transactional log stays the single source of truth even when the user tells
+ * BB about a cigarette instead of quick-logging it. Dedupes against anything
+ * already logged within ±10 minutes of the same type.
+ */
+async function mirrorActivityToEvents(rawUserId, updates, timezone = DEFAULT_TZ) {
+  if (!supabase || !updates || !Array.isArray(updates.activity_log)) return;
+  const userId = resolveUserId(rawUserId);
+  const TYPE_MAP = { smoke: 'cigarette', resist: 'urge_resisted' };
+
+  for (const ev of updates.activity_log) {
+    const eventType = TYPE_MAP[ev?.type];
+    if (!eventType) continue;
+    const occurredAt = localTimeToIso(ev.date, ev.time, timezone);
+    if (!occurredAt) continue;
+
+    try {
+      const windowStart = new Date(new Date(occurredAt).getTime() - 10 * 60000).toISOString();
+      const windowEnd = new Date(new Date(occurredAt).getTime() + 10 * 60000).toISOString();
+      const { data: nearby } = await supabase
+        .from('bb_events')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('event_type', eventType)
+        .gte('occurred_at', windowStart)
+        .lte('occurred_at', windowEnd)
+        .limit(1);
+      if (nearby && nearby.length > 0) continue;
+
+      await supabase.from('bb_events').insert({
+        user_id: userId,
+        event_type: eventType,
+        occurred_at: occurredAt,
+        metadata: {
+          source: 'extraction',
+          verified: !!ev.verified,
+          event: ev.event || null,
+        },
+      });
+    } catch (e) {
+      console.log(`[EventMirror] Skipped (${e.message})`);
+    }
+  }
 }
 
 function summarizeEvents(events) {
@@ -267,16 +400,39 @@ function summarizeEvents(events) {
   };
 }
 
-async function executeToolUse(toolUse, userId) {
+/** Shared correct/delete logic for the text tool and the voice /events/update endpoint. */
+async function updateEvent(userId, { event_id, action, event_type, occurred_at, notes } = {}) {
+  if (!supabase) return { error: 'Event store unavailable' };
+  if (!event_id || !action) return { error: 'event_id and action required' };
+
+  if (action === 'delete') {
+    const { error } = await supabase.from('bb_events').delete().eq('id', event_id).eq('user_id', userId);
+    return error ? { error: error.message } : { ok: true, deleted: event_id };
+  }
+
+  const updates = {};
+  if (event_type) updates.event_type = event_type;
+  if (occurred_at) updates.occurred_at = occurred_at;
+  if (notes !== undefined && notes !== '') updates.metadata = { notes };
+
+  const { error } = await supabase.from('bb_events').update(updates).eq('id', event_id).eq('user_id', userId);
+  return error ? { error: error.message } : { ok: true, updated: event_id, changes: updates };
+}
+
+async function executeToolUse(toolUse, userId, timezone = DEFAULT_TZ) {
   if (toolUse.name === 'get_usage_stats') {
     try {
       const { date, event_types, limit } = toolUse.input || {};
-      const queryDate = date === 'today' ? new Date().toISOString().split('T')[0] : date;
-      const events = await queryEvents(userId, { date: queryDate, eventTypes: event_types, limit });
+      const queryDate = date === 'today' ? localDateInTz(timezone) : date;
+      const events = await queryEvents(userId, { date: queryDate, eventTypes: event_types, limit, timezone });
+      // Include the profile-derived stats too so text mode sees the same
+      // merged picture the voice agent gets from /context/stats.
+      let profileStats = null;
+      try { profileStats = computeUsageStats(userId, timezone); } catch {}
       return {
         type: 'tool_result',
         tool_use_id: toolUse.id,
-        content: JSON.stringify({ events, summary: summarizeEvents(events) }),
+        content: JSON.stringify({ events, summary: summarizeEvents(events), profile_stats: profileStats }),
       };
     } catch (err) {
       return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: err.message }), is_error: true };
@@ -315,32 +471,13 @@ async function executeToolUse(toolUse, userId) {
   }
 
   if (toolUse.name === 'update_event') {
-    if (!supabase) {
-      return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: 'Event store unavailable' }), is_error: true };
-    }
     const { event_id, action, event_type, occurred_at, notes } = toolUse.input || {};
-
-    if (action === 'delete') {
-      const { error } = await supabase.from('bb_events').delete().eq('id', event_id).eq('user_id', userId);
-      return {
-        type: 'tool_result',
-        tool_use_id: toolUse.id,
-        content: error ? JSON.stringify({ error: error.message }) : JSON.stringify({ ok: true, deleted: event_id }),
-        is_error: !!error,
-      };
-    }
-
-    const updates = {};
-    if (event_type) updates.event_type = event_type;
-    if (occurred_at) updates.occurred_at = occurred_at;
-    if (notes !== undefined) updates.metadata = { notes };
-
-    const { error } = await supabase.from('bb_events').update(updates).eq('id', event_id).eq('user_id', userId);
+    const result = await updateEvent(userId, { event_id, action, event_type, occurred_at, notes });
     return {
       type: 'tool_result',
       tool_use_id: toolUse.id,
-      content: error ? JSON.stringify({ error: error.message }) : JSON.stringify({ ok: true, updated: event_id, changes: updates }),
-      is_error: !!error,
+      content: JSON.stringify(result),
+      is_error: !!result.error,
     };
   }
 
@@ -358,7 +495,7 @@ const CORS = {
 // keeps streaming — the client only ever sees text deltas and [DONE].
 const TOOL_USE_MAX_ROUNDS = 3;
 
-async function streamTextTurn(res, systemPrompt, conversationMessages, effectiveUserId) {
+async function streamTextTurn(res, systemPrompt, conversationMessages, effectiveUserId, timezone = DEFAULT_TZ) {
   const FIRST_TOKEN_TIMEOUT_MS = 25000;
   let headersSent = false;
 
@@ -436,7 +573,7 @@ async function streamTextTurn(res, systemPrompt, conversationMessages, effective
     const toolUseBlocks = finalMessage.content.filter(b => b.type === 'tool_use');
     const toolResults = [];
     for (const toolUse of toolUseBlocks) {
-      toolResults.push(await executeToolUse(toolUse, effectiveUserId));
+      toolResults.push(await executeToolUse(toolUse, effectiveUserId, timezone));
     }
 
     currentMessages = [
@@ -453,35 +590,19 @@ async function streamTextTurn(res, systemPrompt, conversationMessages, effective
   res.end();
 }
 
-// Parse multipart form data (minimal, for audio upload)
-function parseMultipart(buffer, contentType) {
-  const boundaryMatch = contentType.match(/boundary=(.+)/);
-  if (!boundaryMatch) return null;
-  const boundary = boundaryMatch[1];
-  const boundaryBuffer = Buffer.from(`--${boundary}`);
-
-  let start = buffer.indexOf(boundaryBuffer) + boundaryBuffer.length;
-  const end = buffer.indexOf(Buffer.from(`--${boundary}--`));
-  const part = buffer.subarray(start, end);
-
-  const headerEnd = part.indexOf('\r\n\r\n');
-  if (headerEnd === -1) return null;
-
-  return part.subarray(headerEnd + 4).subarray(0, -2); // trim trailing \r\n
-}
-
 const server = createServer(async (req, res) => {
   if (req.method === 'OPTIONS') {
     res.writeHead(204, CORS);
     return res.end();
   }
 
-  // ─── Usage stats tool endpoint (Bug B) ──────────────────────────────────────
+  // ─── Usage stats tool endpoint — merged view (profile timeline + event log)
+  // so voice mode answers from the same data as text mode's get_usage_stats.
   if (req.method === 'GET' && req.url.match(/^\/context\/stats\//)) {
     const parts = req.url.split('/context/stats/');
-    const userId = decodeURIComponent(parts[1] || '');
+    const userId = decodeURIComponent((parts[1] || '').split('?')[0]);
     try {
-      const stats = computeUsageStats(userId);
+      const stats = await buildUsageSummary(resolveUserId(userId), DEFAULT_TZ);
       res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify(stats));
     } catch (err) {
@@ -530,6 +651,11 @@ const server = createServer(async (req, res) => {
       const agentProfile = loadProfile(effectiveUserId);
       const sessionContext = buildSessionContext(agentProfile);
 
+      // Pull memories relevant to what the user just said (bounded at 800ms
+      // so retrieval can never delay the first token past budget).
+      const lastUserMessage = [...(messages || [])].reverse().find(m => m.role === 'user')?.content || '';
+      const relevantMemories = await fetchRelevantMemories(resolveUserId(effectiveUserId), lastUserMessage);
+
       const systemPrompt = buildSystemPrompt(
         finalProfile,
         trigger_context ? JSON.stringify(trigger_context) : undefined,
@@ -538,17 +664,25 @@ const server = createServer(async (req, res) => {
         lifeArchitecture,
         sessionContext,
         currentGoal,
+        relevantMemories,
       );
 
-      // Fire background analysis (non-blocking) — Sonnet extracts facts while Haiku responds
-      if (messages?.length >= 2) {
-        analyzeAndUpdate(effectiveUserId, messages, false, timezone).catch(() => {});
+      // Background fact extraction (non-blocking). Throttled to roughly every
+      // third user turn — session end runs a full extraction anyway, so a
+      // Sonnet call per turn was pure cost. The client sends the full history
+      // with the new user message appended (odd lengths: 1, 3, 5, 7…), so
+      // % 6 === 1 fires at 7, 13, 19… slice(-20) inside analyzeAndUpdate
+      // still covers everything between throttle points.
+      if (messages?.length >= 7 && messages.length % 6 === 1) {
+        analyzeAndUpdate(effectiveUserId, messages, false, timezone)
+          .then(updates => mirrorActivityToEvents(effectiveUserId, updates, timezone))
+          .catch(() => {});
       }
 
       await streamTextTurn(res, systemPrompt, messages.map(m => ({
         role: m.role,
         content: m.content,
-      })), effectiveUserId);
+      })), resolveUserId(effectiveUserId), timezone);
     } catch (err) {
       console.error('Error:', err.message);
       if (!res.headersSent) {
@@ -560,52 +694,6 @@ const server = createServer(async (req, res) => {
         res.write('data: [DONE]\n\n');
         res.end();
       }
-    }
-    return;
-  }
-
-  if (req.method === 'POST' && req.url === '/transcribe') {
-    const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    const buffer = Buffer.concat(chunks);
-
-    try {
-      const contentType = req.headers['content-type'] || '';
-      const audioData = parseMultipart(buffer, contentType);
-
-      if (!audioData || audioData.length < 100) {
-        res.writeHead(400, { ...CORS, 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ error: 'No audio data received' }));
-      }
-
-      // Write audio to temp file
-      const tmpDir = mkdtempSync(join(tmpdir(), 'bb-'));
-      const audioPath = join(tmpDir, 'recording.m4a');
-      writeFileSync(audioPath, audioData);
-
-      // Transcribe with mlx-whisper via the CSM venv
-      const script = `
-import mlx_whisper
-result = mlx_whisper.transcribe("${audioPath}", path_or_hf_repo="mlx-community/whisper-tiny")
-print(result["text"].strip())
-`;
-      const { stdout } = await execFileAsync(WHISPER_PYTHON, ['-c', script], {
-        timeout: 30000,
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-      });
-
-      // Cleanup
-      try { unlinkSync(audioPath); } catch {}
-
-      const text = stdout.trim();
-      console.log('Transcribed:', text);
-
-      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ text }));
-    } catch (err) {
-      console.error('Transcription error:', err.message);
-      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Transcription failed', details: err.message }));
     }
     return;
   }
@@ -849,40 +937,35 @@ print(result["text"].strip())
     return;
   }
 
-  // ─── Offline sync: messages ─────────────────────────────────────────────────
+  // ─── Offline sync: messages → durable transcript store ─────────────────────
+  // The old path wrote to public.messages with a column (urge_event_id) that
+  // doesn't exist and a NOT NULL user_id it never sent — every batch failed
+  // silently and the client re-sent the growing backlog forever. Transcripts
+  // now land next to the voice transcripts on the volume, merged by session.
   if (req.method === 'POST' && req.url === '/sync/messages') {
     let body = '';
     for await (const chunk of req) body += chunk;
 
     try {
-      const { messages } = JSON.parse(body);
-      const supabaseUrl = process.env.SUPABASE_URL;
-      const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+      const { messages, userId } = JSON.parse(body);
       const syncedIds = [];
 
-      if (supabaseUrl && supabaseKey && messages?.length) {
-        const rows = messages.map(m => ({
-          id: m.id,
-          urge_event_id: m.session_id,
-          role: m.role,
-          content: m.content,
-          modality: m.mode === 'voice' ? 'voice' : 'text',
-          created_at: new Date(m.timestamp).toISOString(),
-        }));
-
-        const upsertRes = await fetch(`${supabaseUrl}/rest/v1/messages`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'apikey': supabaseKey,
-            'Authorization': `Bearer ${supabaseKey}`,
-            'Prefer': 'resolution=merge-duplicates',
-          },
-          body: JSON.stringify(rows),
-        });
-
-        if (upsertRes.ok) {
-          syncedIds.push(...messages.map(m => m.id));
+      if (messages?.length) {
+        const bySession = {};
+        for (const m of messages) {
+          const sid = m.session_id || 'unknown-session';
+          if (!bySession[sid]) bySession[sid] = [];
+          bySession[sid].push({
+            id: m.id,
+            role: m.role,
+            content: m.content,
+            mode: m.mode,
+            timestamp: m.timestamp,
+          });
+        }
+        for (const [sessionId, msgs] of Object.entries(bySession)) {
+          appendTranscriptMessages(userId || 'default', sessionId, msgs);
+          syncedIds.push(...msgs.map(m => m.id));
         }
       }
 
@@ -896,44 +979,54 @@ print(result["text"].strip())
     return;
   }
 
-  // ─── Offline sync: craving events ─────────────────────────────────────────
+  // ─── Offline sync: session events → bb_events ──────────────────────────────
+  // craving_events has a uuid FK the app's local text ids can never satisfy
+  // (RLS/type mismatch — the table stayed at 0 rows). Sessions now land in
+  // bb_events as event_type 'session', deduped by the client-side id so
+  // retries are idempotent.
   if (req.method === 'POST' && req.url === '/sync/events') {
     let body = '';
     for await (const chunk of req) body += chunk;
 
     try {
-      const { events } = JSON.parse(body);
-      const supabaseUrl = process.env.SUPABASE_URL;
-      const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+      const { events, userId } = JSON.parse(body);
       const syncedIds = [];
 
-      if (supabaseUrl && supabaseKey && events?.length) {
-        const rows = events.map(e => ({
-          id: e.id,
-          user_id: e.user_id,
-          started_at: new Date(e.started_at).toISOString(),
-          ended_at: e.ended_at ? new Date(e.ended_at).toISOString() : null,
-          mode: e.mode,
-          outcome: e.outcome,
-          helped: e.helped != null ? Boolean(e.helped) : null,
-          intensity_start: e.intensity_start,
-          intensity_end: e.intensity_end,
-          trigger_context: e.trigger_context ? JSON.parse(e.trigger_context) : null,
-        }));
+      if (supabase && events?.length) {
+        const localIds = events.map(e => String(e.id));
+        const { data: existing } = await supabase
+          .from('bb_events')
+          .select('metadata')
+          .eq('event_type', 'session')
+          .in('metadata->>local_id', localIds);
+        const alreadySynced = new Set((existing || []).map(r => r.metadata?.local_id));
 
-        const upsertRes = await fetch(`${supabaseUrl}/rest/v1/craving_events`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'apikey': supabaseKey,
-            'Authorization': `Bearer ${supabaseKey}`,
-            'Prefer': 'resolution=merge-duplicates',
-          },
-          body: JSON.stringify(rows),
-        });
+        for (const e of events) {
+          if (alreadySynced.has(String(e.id))) {
+            syncedIds.push(e.id);
+            continue;
+          }
+          let triggerContext = null;
+          try { triggerContext = e.trigger_context ? JSON.parse(e.trigger_context) : null; } catch {}
 
-        if (upsertRes.ok) {
-          syncedIds.push(...events.map(e => e.id));
+          const { error } = await supabase.from('bb_events').insert({
+            user_id: resolveUserId(e.user_id === 'local' ? (userId || 'default') : (e.user_id || userId || 'default')),
+            event_type: 'session',
+            occurred_at: new Date(e.started_at).toISOString(),
+            metadata: {
+              source: 'app_session',
+              local_id: String(e.id),
+              mode: e.mode,
+              outcome: e.outcome,
+              helped: e.helped != null ? Boolean(e.helped) : null,
+              intensity_start: e.intensity_start,
+              intensity_end: e.intensity_end,
+              ended_at: e.ended_at ? new Date(e.ended_at).toISOString() : null,
+              trigger_context: triggerContext,
+            },
+          });
+          if (!error) syncedIds.push(e.id);
+          else console.error('Sync events insert error:', error.message);
         }
       }
 
@@ -953,7 +1046,7 @@ print(result["text"].strip())
     for await (const chunk of req) body += chunk;
 
     try {
-      const { messages, outcome, triggerContext, cravingEventId, userId } = JSON.parse(body);
+      const { messages, outcome, triggerContext, cravingEventId, sessionId, userId } = JSON.parse(body);
 
       if (!messages?.length) {
         res.writeHead(400, { ...CORS, 'Content-Type': 'application/json' });
@@ -1048,51 +1141,31 @@ Return ONLY the JSON object, no markdown, no explanation.`;
         report = jsonMatch ? JSON.parse(jsonMatch[0]) : {};
       }
 
-      // Store in Supabase if configured
-      const supabaseUrl = process.env.SUPABASE_URL;
-      const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
-
-      if (supabaseUrl && supabaseKey && cravingEventId && userId) {
-        await fetch(`${supabaseUrl}/rest/v1/session_reports`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'apikey': supabaseKey,
-            'Authorization': `Bearer ${supabaseKey}`,
-            'Prefer': 'resolution=ignore-duplicates',
-          },
-          body: JSON.stringify({
-            craving_event_id: cravingEventId,
-            user_id: userId,
-            trigger_type: report.trigger_type || null,
-            trigger_intensity: report.trigger_intensity || null,
+      // Persist the report as a bb_events row. The old session_reports table
+      // required a craving_events uuid FK the app can never produce, so every
+      // report was generated (a paid Sonnet call) and then discarded.
+      const effectiveReportUser = resolveUserId(userId || 'default');
+      if (supabase) {
+        const { error } = await supabase.from('bb_events').insert({
+          user_id: effectiveReportUser,
+          event_type: 'session_report',
+          occurred_at: new Date().toISOString(),
+          metadata: {
+            source: 'session_report',
+            session_id: sessionId || cravingEventId || null,
+            report,
             outcome: report.outcome || outcome || null,
-            emotional_arc: report.emotional_arc || {},
-            what_helped: report.what_helped || [],
-            what_didnt_help: report.what_didnt_help || [],
-            preferences: {
-              ...(report.preferences || {}),
-              trigger_texture: report.trigger_texture || null,
-              trigger_context_detail: report.trigger_context_detail || null,
-              resist_duration_note: report.resist_duration_note || null,
-              mode_switches: report.mode_switches || null,
-              same_or_new_trigger: report.same_or_new_trigger || null,
-              spiral_or_shift: report.spiral_or_shift || null,
-              key_facts_learned: report.key_facts_learned || null,
-              trackable_metrics: report.trackable_metrics || null,
-            },
-            next_session_hint: report.next_session_hint || null,
-            summary: report.summary || 'Session completed.',
-          }),
+          },
         });
-
-        // Embed the session summary into vector store
-        if (report.summary) {
-          embedAndStore(userId, report.summary, 'session_summary', cravingEventId).catch(() => {});
-        }
+        if (error) console.error('Session report store error:', error.message);
       }
 
-      console.log(`Session report generated for event ${cravingEventId}`);
+      // Embed the session summary into the memory store
+      if (report.summary) {
+        embedAndStore(effectiveReportUser, report.summary, 'session_summary', sessionId || cravingEventId).catch(() => {});
+      }
+
+      console.log(`Session report generated for session ${sessionId || cravingEventId || 'unknown'} (user ${effectiveReportUser})`);
       res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true, report }));
     } catch (err) {
@@ -1130,6 +1203,8 @@ Return ONLY the JSON object, no markdown, no explanation.`;
       // Run async — respond immediately
       analyzeAndUpdate(userId || 'default', messages, isSessionEnd, timezone || 'America/Chicago')
         .then(updates => {
+          // Mirror extracted smokes/resists into the transactional event log
+          mirrorActivityToEvents(userId || 'default', updates, timezone || 'America/Chicago').catch(() => {});
           // After analysis, embed observations into vector store
           if (updates && isVectorConfigured()) {
             const effectiveUserId = resolveUserId(userId || 'default');
@@ -1219,10 +1294,7 @@ Return ONLY the JSON object, no markdown, no explanation.`;
         profile.activity_log = profile.activity_log.slice(-60);
       }
 
-      profile.last_updated = new Date().toISOString();
-      const storePath = process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store');
-      try { mkdirSync(storePath, { recursive: true }); } catch {}
-      writeFileSync(resolve(storePath, `${effectiveUserId}.json`), JSON.stringify(profile, null, 2));
+      persistProfile(effectiveUserId);
 
       console.log(`[SessionOutcome] ${effectiveUserId}: ${outcome}`);
       res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
@@ -1251,7 +1323,7 @@ Return ONLY the JSON object, no markdown, no explanation.`;
       const { data, error } = await supabase
         .from('bb_events')
         .insert({
-          user_id: userId,
+          user_id: resolveUserId(userId),
           event_type: eventType,
           occurred_at: occurredAt || new Date().toISOString(),
           metadata: metadata || {},
@@ -1265,6 +1337,23 @@ Return ONLY the JSON object, no markdown, no explanation.`;
       }
       res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ ok: true, id: data.id, occurred_at: data.occurred_at }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  // Correct/delete an event — used by the voice agent's update_event tool
+  if (req.method === 'POST' && req.url === '/events/update') {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const { userId, eventId, action, eventType, occurredAt, notes } = JSON.parse(body);
+      const result = await updateEvent(resolveUserId(userId || 'default'), {
+        event_id: eventId, action, event_type: eventType, occurred_at: occurredAt, notes,
+      });
+      res.writeHead(result.error ? 500 : 200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(result));
     } catch (err) {
       res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: err.message }));
@@ -1285,7 +1374,8 @@ Return ONLY the JSON object, no markdown, no explanation.`;
 
     try {
       const eventTypes = eventTypesParam ? eventTypesParam.split(',') : undefined;
-      const events = await queryEvents(userId, { date, eventTypes, limit });
+      const timezone = url.searchParams.get('timezone') || DEFAULT_TZ;
+      const events = await queryEvents(resolveUserId(userId), { date, eventTypes, limit, timezone });
       res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ events, count: events.length }));
     } catch (err) {
@@ -1334,12 +1424,9 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     for await (const chunk of req) body += chunk;
     try {
       const profile = JSON.parse(body);
-      const storePath = process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store');
-      try { mkdirSync(storePath, { recursive: true }); } catch {}
-      writeFileSync(resolve(storePath, `${userId}.json`), JSON.stringify(profile, null, 2));
-      // Clear the in-memory cache so loadProfile picks up the new file
-      const p = loadProfile(userId);
-      Object.assign(p, profile);
+      // Full replacement of both the file and the in-memory cache — the old
+      // Object.assign merge left deleted fields alive in memory until restart.
+      replaceProfile(userId, profile);
       res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ ok: true, name: profile.name, session_count: profile.session_count }));
     } catch (err) {
@@ -1409,22 +1496,11 @@ Return ONLY the JSON object, no markdown, no explanation.`;
           userId = roomName.replace('bb-', '');
         }
 
+        // Observability only. This webhook used to increment session_count as
+        // a "safety net", but the voice agent's final transcript (3 retries)
+        // already increments it via analyzeAndUpdate — the net effect was
+        // double-counting every voice session.
         console.log(`[Webhook] Room finished: ${roomName} (user: ${userId})`);
-
-        const profile = loadProfile(userId);
-        if (profile && profile.last_updated) {
-          const lastUpdate = new Date(profile.last_updated).getTime();
-          const now = Date.now();
-          if (now - lastUpdate < 5 * 60 * 1000) {
-            profile.session_count = (profile.session_count || 0) + 1;
-            profile.last_session_at = new Date().toISOString();
-            profile.last_updated = new Date().toISOString();
-            const storePath = process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store');
-            try { mkdirSync(storePath, { recursive: true }); } catch {}
-            writeFileSync(resolve(storePath, `${userId}.json`), JSON.stringify(profile, null, 2));
-            console.log(`[Webhook] Session count incremented for ${userId}: ${profile.session_count}`);
-          }
-        }
       }
 
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1445,73 +1521,96 @@ Return ONLY the JSON object, no markdown, no explanation.`;
   res.end('Not found');
 });
 
-// ─── Transcript watcher — picks up files written by the voice agent ──────────
-const TRANSCRIPT_DIR = resolve(__dirname, 'transcripts');
-try { mkdirSync(TRANSCRIPT_DIR, { recursive: true }); } catch {}
+// ─── Proactive nudge scheduler ────────────────────────────────────────────────
+// The piece that was always missing: risk windows were learned into profiles
+// but nothing ever acted on them. Every 15 minutes, check each user's learned
+// risk windows against their local clock and send a history-aware nudge —
+// conservatively: quiet hours respected, ≥90 min between nudges, max 3/day.
 
-setInterval(async () => {
-  try {
-    const files = readdirSync(TRANSCRIPT_DIR).filter(f => f.endsWith('.json'));
-    for (const file of files) {
-      const filePath = resolve(TRANSCRIPT_DIR, file);
-      try {
-        const data = JSON.parse(readFileSync(filePath, 'utf-8'));
-        if (data.messages && data.messages.length >= 2) {
-          console.log(`[TranscriptWatcher] Processing ${file} (${data.messages.length} messages for ${data.userId})`);
-          await analyzeAndUpdate(data.userId || 'default', data.messages, data.isSessionEnd || false);
-          console.log(`[TranscriptWatcher] Profile updated for ${data.userId}`);
-        }
-        unlinkSync(filePath);
-      } catch (e) {
-        console.log(`[TranscriptWatcher] Error processing ${file}: ${e.message}`);
-        try { unlinkSync(filePath); } catch {}
-      }
-    }
-  } catch {}
-}, 5000); // Check every 5 seconds
+const NUDGE_CHECK_INTERVAL_MS = 15 * 60 * 1000;
+const NUDGE_MIN_GAP_MS = 90 * 60 * 1000;
+const NUDGE_MAX_PER_DAY = 3;
+const NUDGE_MIN_WEIGHT = 0.6;
 
-// ─── Nightly risk window sync to Supabase ─────────────────────────────────────
-async function syncRiskWindowsToSupabase() {
+async function runNudgeSweep() {
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
   if (!supabaseUrl || !supabaseKey) return;
 
   const storeDir = process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store');
+  let files = [];
   try {
-    const files = readdirSync(storeDir).filter(f => f.endsWith('.json'));
-    for (const file of files) {
-      try {
-        const profile = JSON.parse(readFileSync(resolve(storeDir, file), 'utf-8'));
-        const userId = file.replace('.json', '');
-        const windows = profile.risk_windows || [];
-        if (!windows.length) continue;
+    files = readdirSync(storeDir).filter(f => f.endsWith('.json') && !f.startsWith('default'));
+  } catch { return; }
 
-        for (const rw of windows) {
-          await fetch(`${supabaseUrl}/rest/v1/risk_windows`, {
-            method: 'POST',
-            headers: {
-              'apikey': supabaseKey,
-              'Authorization': `Bearer ${supabaseKey}`,
-              'Content-Type': 'application/json',
-              'Prefer': 'resolution=merge-duplicates',
-            },
-            body: JSON.stringify({
-              user_id: userId,
-              day_of_week: rw.day_of_week,
-              hour: rw.hour,
-              weight: rw.weight || 0.5,
-            }),
-          });
-        }
-        console.log(`[RiskSync] Synced ${windows.length} windows for ${userId}`);
-      } catch (e) {
-        console.log(`[RiskSync] Error for ${file}: ${e.message}`);
+  for (const file of files) {
+    const userId = file.replace('.json', '');
+    try {
+      const profile = loadProfile(userId);
+      const timezone = profile.timezone || DEFAULT_TZ;
+      const windows = profile.risk_windows || [];
+      if (!windows.length) continue;
+
+      // Quiet hours (default 22:00–08:00 local)
+      if (isQuietHours('22:00', '08:00', timezone)) continue;
+
+      // Rate limits
+      const now = Date.now();
+      const lastNudgeAt = profile.last_nudge_at ? new Date(profile.last_nudge_at).getTime() : 0;
+      if (now - lastNudgeAt < NUDGE_MIN_GAP_MS) continue;
+      const today = localDateInTz(timezone);
+      const sentToday = (profile.nudge_log || []).filter(n => n.date === today).length;
+      if (sentToday >= NUDGE_MAX_PER_DAY) continue;
+
+      // Don't nudge someone who just talked to BB
+      if (profile.last_session_at && now - new Date(profile.last_session_at).getTime() < 60 * 60 * 1000) continue;
+
+      // Is this hour a learned risk window?
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: timezone, hour: 'numeric', hour12: false, weekday: 'short',
+      }).formatToParts(new Date());
+      const hour = parseInt(parts.find(p => p.type === 'hour')?.value || '-1', 10);
+      const dayIdx = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+        .indexOf(parts.find(p => p.type === 'weekday')?.value || '');
+      const match = windows.find(rw =>
+        rw.hour === hour &&
+        (rw.day_of_week === null || rw.day_of_week === undefined || rw.day_of_week === dayIdx) &&
+        (rw.weight || 0) >= NUDGE_MIN_WEIGHT,
+      );
+      if (!match) continue;
+
+      // Fetch push tokens
+      const tokensRes = await fetch(
+        `${supabaseUrl}/rest/v1/push_tokens?user_id=eq.${encodeURIComponent(userId)}&select=token`,
+        { headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` } },
+      );
+      const tokens = tokensRes.ok ? await tokensRes.json() : [];
+      if (!Array.isArray(tokens) || tokens.length === 0) continue;
+
+      const message = pickNudgeMessage('check_in', {
+        anomalyContext: { trigger_type: 'risk_window' },
+        riskMessage: match.source
+          ? `This is usually a tough window for you (${match.source}). What's happening right now?`
+          : undefined,
+      });
+      for (const { token } of tokens) {
+        await sendPush(token, message);
       }
+
+      profile.last_nudge_at = new Date().toISOString();
+      if (!Array.isArray(profile.nudge_log)) profile.nudge_log = [];
+      profile.nudge_log.push({ date: today, hour, sent_at: profile.last_nudge_at, source: match.source || 'risk_window' });
+      if (profile.nudge_log.length > 30) profile.nudge_log = profile.nudge_log.slice(-30);
+      persistProfile(userId);
+
+      console.log(`[Nudge] Risk-window nudge sent to ${userId} (hour ${hour}, weight ${match.weight})`);
+    } catch (e) {
+      console.log(`[Nudge] Error for ${userId}: ${e.message}`);
     }
-  } catch (e) {
-    console.log(`[RiskSync] Failed: ${e.message}`);
   }
 }
+
+setInterval(() => { runNudgeSweep().catch(() => {}); }, NUDGE_CHECK_INTERVAL_MS);
 
 const PORT = process.env.PORT || 3333;
 server.listen(PORT, '0.0.0.0', () => {

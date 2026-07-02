@@ -49,12 +49,12 @@ def get_voice():
         return DEFAULT_VOICE
 
 
-async def send_to_context_agent(user_id, messages, is_session_end=False, timezone="America/Chicago"):
+async def send_to_context_agent(user_id, messages, session_id=None, is_session_end=False, timezone="America/Chicago"):
     try:
         async with aiohttp.ClientSession() as http:
             resp = await http.post(
                 f"{SERVER_URL}/context/analyze",
-                json={"userId": user_id, "messages": messages, "isSessionEnd": is_session_end, "timezone": timezone},
+                json={"userId": user_id, "sessionId": session_id, "messages": messages, "isSessionEnd": is_session_end, "timezone": timezone},
                 timeout=aiohttp.ClientTimeout(total=30),
             )
             print(f"[Agent] Context agent responded: {resp.status} (end={is_session_end}, msgs={len(messages)})")
@@ -81,6 +81,7 @@ async def battlebuddy_session(ctx: agents.JobContext):
     user_id = dispatch_meta.get("userId") or "default"
     timezone = dispatch_meta.get("timezone") or "America/Chicago"
     last_session_at = dispatch_meta.get("last_session_at")
+    session_id = getattr(ctx.room, "name", None) or f"session-{int(time.time())}"
 
     # Compute session gap for the system prompt injection (Bug D)
     session_gap_str = ""
@@ -127,6 +128,54 @@ async def battlebuddy_session(ctx: agents.JobContext):
                     return json.dumps(data)
             except Exception as e:
                 print(f"[Agent] get_usage_stats failed: {e}")
+                return json.dumps({"error": str(e)})
+
+        @function_tool()
+        async def log_event(self, event_type: str, occurred_at: str = "", notes: str = ""):
+            """Log a smoking or urge event the user just told you about. event_type is one of: cigarette, urge_resisted, urge_gave_in, milestone. occurred_at is an ISO 8601 timestamp — leave empty for 'right now'. For slips, always confirm with the user before logging. Confirm back what you logged in one short line."""
+            try:
+                payload = {
+                    "userId": user_id,
+                    "eventType": event_type,
+                    "metadata": {"source": "voice", "notes": notes or None},
+                }
+                if occurred_at:
+                    payload["occurredAt"] = occurred_at
+                async with aiohttp.ClientSession() as http:
+                    resp = await http.post(
+                        f"{SERVER_URL}/events",
+                        json=payload,
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    )
+                    data = await resp.json()
+                    print(f"[Agent] log_event {event_type} for {user_id}: {data}")
+                    return json.dumps(data)
+            except Exception as e:
+                print(f"[Agent] log_event failed: {e}")
+                return json.dumps({"error": str(e)})
+
+        @function_tool()
+        async def update_event(self, event_id: str, action: str, event_type: str = "", occurred_at: str = "", notes: str = ""):
+            """Correct or delete a mislogged event. action is 'update' or 'delete'. Get the event_id from get_usage_stats first. Tell the user what changed."""
+            try:
+                payload = {"userId": user_id, "eventId": event_id, "action": action}
+                if event_type:
+                    payload["eventType"] = event_type
+                if occurred_at:
+                    payload["occurredAt"] = occurred_at
+                if notes:
+                    payload["notes"] = notes
+                async with aiohttp.ClientSession() as http:
+                    resp = await http.post(
+                        f"{SERVER_URL}/events/update",
+                        json=payload,
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    )
+                    data = await resp.json()
+                    print(f"[Agent] update_event {action} {event_id} for {user_id}: {data}")
+                    return json.dumps(data)
+            except Exception as e:
+                print(f"[Agent] update_event failed: {e}")
                 return json.dumps({"error": str(e)})
 
         @function_tool()
@@ -208,7 +257,7 @@ async def battlebuddy_session(ctx: agents.JobContext):
                         lower = content.lower().strip()
                         for phrase in END_PHRASES:
                             if phrase in lower:
-                                asyncio.ensure_future(_end_session(session, ctx, user_id, session_messages, timezone))
+                                asyncio.ensure_future(_end_session(session, ctx, user_id, session_messages, session_id, timezone))
                                 return
         except Exception:
             pass
@@ -229,7 +278,7 @@ async def battlebuddy_session(ctx: agents.JobContext):
             if current_count > last_save_count and current_count >= 2:
                 last_save_count = current_count
                 print(f"[Agent] Periodic save: {current_count} messages for {user_id}")
-                await send_to_context_agent(user_id, list(session_messages), timezone=timezone)
+                await send_to_context_agent(user_id, list(session_messages), session_id=session_id, timezone=timezone)
 
     save_task = asyncio.ensure_future(periodic_save())
 
@@ -256,19 +305,19 @@ async def battlebuddy_session(ctx: agents.JobContext):
 
         if session_messages and len(session_messages) >= 2:
             print(f"[Agent] Session close: sending {len(session_messages)} messages for {user_id} (isSessionEnd=true)")
-            asyncio.ensure_future(_send_final_transcript(user_id, list(session_messages), timezone))
+            asyncio.ensure_future(_send_final_transcript(user_id, list(session_messages), session_id, timezone))
 
     await session.generate_reply(instructions=greeting)
 
 
-async def _send_final_transcript(user_id, messages, timezone="America/Chicago"):
+async def _send_final_transcript(user_id, messages, session_id=None, timezone="America/Chicago"):
     """Send the final transcript with retries — this is the most important call."""
     for attempt in range(3):
         try:
             async with aiohttp.ClientSession() as http:
                 resp = await http.post(
                     f"{SERVER_URL}/context/analyze",
-                    json={"userId": user_id, "messages": messages, "isSessionEnd": True, "timezone": timezone},
+                    json={"userId": user_id, "sessionId": session_id, "messages": messages, "isSessionEnd": True, "timezone": timezone},
                     timeout=aiohttp.ClientTimeout(total=30),
                 )
                 print(f"[Agent] Final transcript sent: {resp.status} ({len(messages)} msgs, attempt {attempt + 1})")
@@ -280,7 +329,7 @@ async def _send_final_transcript(user_id, messages, timezone="America/Chicago"):
                 await asyncio.sleep(2)
 
 
-async def _end_session(session, ctx, user_id, messages, timezone="America/Chicago"):
+async def _end_session(session, ctx, user_id, messages, session_id=None, timezone="America/Chicago"):
     await session.generate_reply(
         instructions="The user said 'bye bye buddy' to end the call. "
         "Say bye and one short sentence of encouragement. Keep it warm and brief."
@@ -288,7 +337,7 @@ async def _end_session(session, ctx, user_id, messages, timezone="America/Chicag
 
     if messages and len(messages) >= 2:
         print(f"[Agent] End session — sending {len(messages)} messages to context agent")
-        await send_to_context_agent(user_id, messages, is_session_end=True, timezone=timezone)
+        await send_to_context_agent(user_id, messages, session_id=session_id, is_session_end=True, timezone=timezone)
 
     await asyncio.sleep(3)
     await ctx.room.disconnect()

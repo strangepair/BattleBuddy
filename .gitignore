@@ -48,3 +48,7 @@ yarn-error.*
 # Python virtual environments
 .venv/
 agent/.venv/
+
+# User profile data — never commit conversation-derived personal data
+server/context-store/
+server/transcripts/

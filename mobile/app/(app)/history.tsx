@@ -5,9 +5,10 @@ import { router } from 'expo-router';
 import { TouchableOpacity } from 'react-native';
 import SessionCard from '../../src/components/history/SessionCard';
 import { ApiConfig } from '../../src/config';
+import { useAuthStore } from '../../src/stores/authStore';
 import { Colors, Spacing } from '../../src/theme';
 
-interface CravingEvent {
+interface SessionEvent {
   id: string;
   started_at: string;
   mode: string;
@@ -18,33 +19,41 @@ interface CravingEvent {
 }
 
 export default function HistoryScreen() {
-  const [events, setEvents] = useState<CravingEvent[]>([]);
+  const [events, setEvents] = useState<SessionEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const userId = useAuthStore((s) => s.user?.id);
 
   useEffect(() => {
     loadEvents();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
 
   const loadEvents = async () => {
     setLoading(true);
     try {
-      if (!ApiConfig.SUPABASE_URL || !ApiConfig.SUPABASE_ANON_KEY) {
+      if (!userId) {
         setLoading(false);
         return;
       }
 
+      // Sessions live in the server-side event log (bb_events) — the app's
+      // local ids can't read the RLS-guarded Supabase tables directly.
       const res = await fetch(
-        `${ApiConfig.SUPABASE_URL}/rest/v1/craving_events?select=id,started_at,mode,outcome,helped,intensity_start,intensity_end&order=started_at.desc&limit=50`,
-        {
-          headers: {
-            apikey: ApiConfig.SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${ApiConfig.SUPABASE_ANON_KEY}`,
-          },
-        },
+        `${ApiConfig.CHAT_URL}/events?userId=${encodeURIComponent(userId)}&eventTypes=session&limit=50`,
       );
 
       if (res.ok) {
-        setEvents(await res.json());
+        const data = await res.json();
+        const rows: SessionEvent[] = (data.events || []).map((e: any) => ({
+          id: e.id,
+          started_at: e.occurred_at,
+          mode: e.metadata?.mode ?? 'text',
+          outcome: e.metadata?.outcome ?? null,
+          helped: e.metadata?.helped ?? null,
+          intensity_start: e.metadata?.intensity_start ?? null,
+          intensity_end: e.metadata?.intensity_end ?? null,
+        }));
+        setEvents(rows);
       }
     } catch {
       // Offline or not configured

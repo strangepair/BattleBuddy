@@ -17,8 +17,8 @@ export const FeatureFlags = {
   // Enables on-device Gemma tier (Phase 2.5+)
   onDeviceModelEnabled: false,
 
-  // Enables voice mode (Phase 2+)
-  voiceEnabled: false,
+  // Enables voice mode (Phase 2+) — live via LiveKit since June 2026
+  voiceEnabled: true,
 
   proactiveNudges: true,
 

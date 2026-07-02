@@ -10,8 +10,8 @@ describe('ModelConfig', () => {
 describe('FeatureFlags', () => {
   it('feature flags have expected values', () => {
     expect(FeatureFlags.onDeviceModelEnabled).toBe(false);
-    expect(FeatureFlags.voiceEnabled).toBe(false);
-    expect(FeatureFlags.proactiveNudges).toBe(false);
+    expect(FeatureFlags.voiceEnabled).toBe(true);
+    expect(FeatureFlags.proactiveNudges).toBe(true);
     expect(FeatureFlags.personalizationV1).toBe(false);
     expect(FeatureFlags.offlineResilience).toBe(true);
   });

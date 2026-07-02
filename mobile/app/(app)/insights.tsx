@@ -4,6 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { TouchableOpacity } from 'react-native';
 import { router } from 'expo-router';
 import { ApiConfig } from '../../src/config';
+import { useAuthStore } from '../../src/stores/authStore';
 import { Colors, Spacing, Radii } from '../../src/theme';
 
 interface SessionReport {
@@ -22,28 +23,49 @@ interface SessionReport {
 export default function InsightsScreen() {
   const [reports, setReports] = useState<SessionReport[]>([]);
   const [loading, setLoading] = useState(true);
+  const userId = useAuthStore((s) => s.user?.id);
 
   useEffect(() => {
     loadReports();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
 
   const loadReports = async () => {
     setLoading(true);
     try {
-      if (!ApiConfig.SUPABASE_URL || !ApiConfig.SUPABASE_ANON_KEY) {
+      if (!userId) {
         setLoading(false);
         return;
       }
+      // Session reports are stored in the server-side event log (bb_events,
+      // event_type 'session_report') — the old session_reports table required
+      // an auth uuid the app doesn't have, so it never received a row.
       const res = await fetch(
-        `${ApiConfig.SUPABASE_URL}/rest/v1/session_reports?select=created_at,summary,trigger_type,trigger_intensity,outcome,emotional_arc,what_helped,what_didnt_help,next_session_hint,preferences&order=created_at.desc&limit=20`,
-        {
-          headers: {
-            apikey: ApiConfig.SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${ApiConfig.SUPABASE_ANON_KEY}`,
-          },
-        },
+        `${ApiConfig.CHAT_URL}/events?userId=${encodeURIComponent(userId)}&eventTypes=session_report&limit=20`,
       );
-      if (res.ok) setReports(await res.json());
+      if (res.ok) {
+        const data = await res.json();
+        const rows: SessionReport[] = (data.events || []).map((e: any) => {
+          const r = e.metadata?.report || {};
+          return {
+            created_at: e.occurred_at,
+            summary: r.summary || 'Session completed.',
+            trigger_type: r.trigger_type ?? null,
+            trigger_intensity: r.trigger_intensity ?? null,
+            outcome: e.metadata?.outcome ?? r.outcome ?? null,
+            emotional_arc: r.emotional_arc || {},
+            what_helped: r.what_helped || [],
+            what_didnt_help: r.what_didnt_help || [],
+            next_session_hint: r.next_session_hint ?? null,
+            preferences: {
+              ...(r.preferences || {}),
+              key_facts_learned: r.key_facts_learned ?? r.preferences?.key_facts_learned ?? null,
+              trackable_metrics: r.trackable_metrics ?? r.preferences?.trackable_metrics ?? null,
+            },
+          };
+        });
+        setReports(rows);
+      }
     } catch {}
     setLoading(false);
   };

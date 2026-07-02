@@ -425,6 +425,59 @@ function saveProfile(userId) {
   writeFileSync(getStorePath(userId), JSON.stringify(profile, null, 2));
 }
 
+/** Persist the (already-mutated) cached profile to disk with pruning applied. */
+export function persistProfile(rawUserId) {
+  saveProfile(resolveUserId(rawUserId));
+}
+
+/**
+ * Full profile replacement: swaps both the file and the in-memory cache.
+ * Unlike Object.assign onto the cached object, fields absent from the new
+ * profile actually disappear.
+ */
+export function replaceProfile(rawUserId, newProfile) {
+  const userId = resolveUserId(rawUserId);
+  profiles[userId] = migrateProfile(newProfile);
+  saveProfile(userId);
+  return profiles[userId];
+}
+
+/**
+ * Merge a batch of synced messages into a session's transcript file without
+ * clobbering fuller copies written by the live session path. Dedupes by
+ * message id, keeps chronological order.
+ */
+export function appendTranscriptMessages(rawUserId, sessionId, newMessages) {
+  if (!newMessages || !newMessages.length) return;
+  const userId = resolveUserId(rawUserId || 'default');
+  const dir = resolve(TRANSCRIPT_DIR, userId);
+  try { mkdirSync(dir, { recursive: true }); } catch {}
+
+  const safeSessionId = String(sessionId || 'unknown-session').replace(/[^a-zA-Z0-9._-]/g, '_');
+  const filePath = resolve(dir, `${safeSessionId}.json`);
+
+  let existing = { userId, sessionId: safeSessionId, messages: [] };
+  try { existing = JSON.parse(readFileSync(filePath, 'utf-8')); } catch {}
+
+  const seen = new Set((existing.messages || []).map(m => m.id).filter(Boolean));
+  const merged = [...(existing.messages || [])];
+  for (const m of newMessages) {
+    if (m.id && seen.has(m.id)) continue;
+    merged.push(m);
+    if (m.id) seen.add(m.id);
+  }
+  merged.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+
+  writeFileSync(filePath, JSON.stringify({
+    ...existing,
+    userId,
+    sessionId: safeSessionId,
+    updatedAt: new Date().toISOString(),
+    messageCount: merged.length,
+    messages: merged,
+  }, null, 2));
+}
+
 /**
  * Parse a clock time string ("6:35 AM", "11:32 PM") into minutes since midnight.
  */
@@ -551,7 +604,7 @@ export function buildProfileSummary(rawUserId) {
       if (!byDate[d]) byDate[d] = [];
       byDate[d].push(ev);
     }
-    const dates = Object.keys(byDate).sort().slice(-3); // last 3 days
+    const dates = Object.keys(byDate).sort().slice(-2); // last 2 days — older days live in daily_summaries
     const lines = dates.map(d => {
       const events = byDate[d]
         .sort((a, b) => timeToMinutes(a.time) - timeToMinutes(b.time))
@@ -572,21 +625,35 @@ export function buildProfileSummary(rawUserId) {
     parts.push(`SESSION OUTCOMES (last ${recent.length}): ${resisted} resisted, ${gaveIn} gave in.`);
   }
 
-  // Session history — the chronological record of our time together
+  // Session history — the chronological record of our time together.
+  // Rendered on a budget: the last few sessions in full, everything older as
+  // one-liners. The prompt is rebuilt every turn, so rendered size is paid on
+  // every single Haiku call — depth of recall must not cost first-token latency.
   if (p.session_history && p.session_history.length > 0) {
+    const FULL_DETAIL_COUNT = 5;
+    const individual = p.session_history.filter(e => !e.gap && !e.boundary);
+    const fullDetailFrom = individual.length > FULL_DETAIL_COUNT
+      ? individual[individual.length - FULL_DETAIL_COUNT]
+      : individual[0];
+
     const historyLines = [];
+    let reachedFullDetail = false;
     for (const entry of p.session_history) {
+      if (entry === fullDetailFrom) reachedFullDetail = true;
       if (entry.gap) {
         const range = entry.sessions || entry.date_range || '?';
         historyLines.push(`[${range}] ${entry.summary}`);
       } else if (entry.boundary) {
         historyLines.push(entry.summary);
-      } else {
+      } else if (reachedFullDetail || individual.length <= FULL_DETAIL_COUNT) {
         const num = entry.session ? `Session ${entry.session}` : entry.date;
         const time = entry.time ? ` ${entry.time}` : '';
         const mood = entry.mood ? ` [${entry.mood}]` : '';
         const moments = entry.key_moments?.length > 0 ? ` — ${entry.key_moments.join('; ')}` : '';
         historyLines.push(`${num} (${entry.date}${time})${mood}: ${entry.summary}${moments}`);
+      } else {
+        const num = entry.session ? `S${entry.session}` : '';
+        historyLines.push(`${num} ${entry.date || ''}: ${(entry.summary || '').slice(0, 80)}`.trim());
       }
     }
     parts.push(`SESSION HISTORY (our chronological journey — reference specific sessions when relevant): ${historyLines.join(' || ')}`);
@@ -603,7 +670,31 @@ export function buildProfileSummary(rawUserId) {
   }
 
   if (parts.length <= 1) return 'New user — no history yet.';
-  return parts.join(' ');
+
+  // Hard budget: the profile is injected into every turn's system prompt.
+  // 12K chars ≈ 3K tokens — beyond that, trim the longest narrative sections
+  // rather than shipping an ever-growing prompt (latency is the product).
+  const MAX_PROFILE_CHARS = 12000;
+  let summary = parts.join(' ');
+  if (summary.length > MAX_PROFILE_CHARS) {
+    const trimmable = ['SESSION HISTORY', 'ACTIVITY TIMELINE', 'Life context'];
+    for (const label of trimmable) {
+      if (summary.length <= MAX_PROFILE_CHARS) break;
+      const idx = parts.findIndex(s => s.startsWith(label));
+      if (idx !== -1) {
+        const excess = summary.length - MAX_PROFILE_CHARS;
+        const target = Math.max(400, parts[idx].length - excess);
+        if (parts[idx].length > target) {
+          parts[idx] = parts[idx].slice(0, target) + ' …[trimmed for length]';
+        }
+        summary = parts.join(' ');
+      }
+    }
+    if (summary.length > MAX_PROFILE_CHARS) {
+      summary = summary.slice(0, MAX_PROFILE_CHARS) + ' …[trimmed for length]';
+    }
+  }
+  return summary;
 }
 
 /**
