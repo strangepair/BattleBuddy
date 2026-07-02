@@ -164,6 +164,65 @@ const AGENT_TOOLS = [
       required: [],
     },
   },
+  {
+    name: 'log_event',
+    description: "Log a new smoking or urge event to the database on behalf of the user. Use this when the user mentions they just smoked, resisted an urge, gave in to an urge, or hit a milestone — and it hasn't been logged yet via the app's quick-log. Always confirm what you logged back to the user.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        event_type: {
+          type: 'string',
+          enum: ['cigarette', 'urge_resisted', 'urge_gave_in', 'milestone'],
+          description: 'The type of event to log',
+        },
+        occurred_at: {
+          type: 'string',
+          description: "ISO 8601 timestamp when the event occurred. Use current time if not specified by the user. If user says 'an hour ago', calculate the correct timestamp.",
+        },
+        notes: {
+          type: 'string',
+          description: "Optional context notes (e.g. 'post-gym', 'in the car', 'with coffee')",
+        },
+        milestone_label: {
+          type: 'string',
+          description: "For milestone events only: human-readable label like '24 hours smoke-free'",
+        },
+      },
+      required: ['event_type', 'occurred_at'],
+    },
+  },
+  {
+    name: 'update_event',
+    description: 'Correct or delete an existing event in the database. Use this when the user says an event was logged incorrectly — wrong type, wrong time, or it shouldn\'t have been logged at all. First call get_usage_stats to find the event ID, then call this to fix it. Tell the user what you changed.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        event_id: {
+          type: 'string',
+          description: 'UUID of the event to update. Get this from get_usage_stats.',
+        },
+        action: {
+          type: 'string',
+          enum: ['update', 'delete'],
+          description: "Whether to update the event's fields or delete it entirely",
+        },
+        event_type: {
+          type: 'string',
+          enum: ['cigarette', 'urge_resisted', 'urge_gave_in', 'milestone'],
+          description: 'New event type (for update only)',
+        },
+        occurred_at: {
+          type: 'string',
+          description: 'Corrected ISO 8601 timestamp (for update only)',
+        },
+        notes: {
+          type: 'string',
+          description: 'Updated notes (for update only)',
+        },
+      },
+      required: ['event_id', 'action'],
+    },
+  },
 ];
 
 async function queryEvents(userId, { date, eventTypes, limit = 20 } = {}) {
@@ -209,22 +268,83 @@ function summarizeEvents(events) {
 }
 
 async function executeToolUse(toolUse, userId) {
-  if (toolUse.name !== 'get_usage_stats') {
-    return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: `Unknown tool: ${toolUse.name}` }), is_error: true };
+  if (toolUse.name === 'get_usage_stats') {
+    try {
+      const { date, event_types, limit } = toolUse.input || {};
+      const queryDate = date === 'today' ? new Date().toISOString().split('T')[0] : date;
+      const events = await queryEvents(userId, { date: queryDate, eventTypes: event_types, limit });
+      return {
+        type: 'tool_result',
+        tool_use_id: toolUse.id,
+        content: JSON.stringify({ events, summary: summarizeEvents(events) }),
+      };
+    } catch (err) {
+      return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: err.message }), is_error: true };
+    }
   }
 
-  try {
-    const { date, event_types, limit } = toolUse.input || {};
-    const queryDate = date === 'today' ? new Date().toISOString().split('T')[0] : date;
-    const events = await queryEvents(userId, { date: queryDate, eventTypes: event_types, limit });
+  if (toolUse.name === 'log_event') {
+    if (!supabase) {
+      return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: 'Event store unavailable' }), is_error: true };
+    }
+    const { event_type, occurred_at, notes, milestone_label } = toolUse.input || {};
+
+    const metadata = {};
+    if (notes) metadata.notes = notes;
+    if (milestone_label) metadata.label = milestone_label;
+
+    const { data, error } = await supabase
+      .from('bb_events')
+      .insert({
+        user_id: userId,
+        event_type,
+        occurred_at,
+        metadata,
+      })
+      .select('id, occurred_at')
+      .single();
+
+    if (error) {
+      return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: error.message }), is_error: true };
+    }
     return {
       type: 'tool_result',
       tool_use_id: toolUse.id,
-      content: JSON.stringify({ events, summary: summarizeEvents(events) }),
+      content: JSON.stringify({ ok: true, id: data.id, occurred_at: data.occurred_at, event_type }),
     };
-  } catch (err) {
-    return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: err.message }), is_error: true };
   }
+
+  if (toolUse.name === 'update_event') {
+    if (!supabase) {
+      return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: 'Event store unavailable' }), is_error: true };
+    }
+    const { event_id, action, event_type, occurred_at, notes } = toolUse.input || {};
+
+    if (action === 'delete') {
+      const { error } = await supabase.from('bb_events').delete().eq('id', event_id).eq('user_id', userId);
+      return {
+        type: 'tool_result',
+        tool_use_id: toolUse.id,
+        content: error ? JSON.stringify({ error: error.message }) : JSON.stringify({ ok: true, deleted: event_id }),
+        is_error: !!error,
+      };
+    }
+
+    const updates = {};
+    if (event_type) updates.event_type = event_type;
+    if (occurred_at) updates.occurred_at = occurred_at;
+    if (notes !== undefined) updates.metadata = { notes };
+
+    const { error } = await supabase.from('bb_events').update(updates).eq('id', event_id).eq('user_id', userId);
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: error ? JSON.stringify({ error: error.message }) : JSON.stringify({ ok: true, updated: event_id, changes: updates }),
+      is_error: !!error,
+    };
+  }
+
+  return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: `Unknown tool: ${toolUse.name}` }), is_error: true };
 }
 
 const CORS = {
