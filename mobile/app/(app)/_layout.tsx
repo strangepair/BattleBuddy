@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Stack, router } from 'expo-router';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { StyleSheet } from 'react-native';
 import AppDrawer from '../../src/components/drawer/AppDrawer';
 import { useUIStore } from '../../src/stores/uiStore';
 import { useOnboarding } from '../../src/hooks/useOnboarding';
@@ -16,9 +14,6 @@ import { startRiskWindowMonitor } from '../../src/services/engagementEngine';
 import { useSessionStore, hydrateSessionStore } from '../../src/stores/sessionStore';
 import { useAuthStore } from '../../src/stores/authStore';
 import { ApiConfig } from '../../src/config';
-
-// Module-level flag — survives component remounts
-let _hasAutoLaunched = false;
 
 export default function AppLayout() {
   const drawerOpen = useUIStore((s) => s.drawerOpen);
@@ -35,11 +30,15 @@ export default function AppLayout() {
 
   usePushSetup(null, FeatureFlags.proactiveNudges);
 
-  // Hydrate persisted session data (session count, profile, history)
+  // Hydrate persisted session data (session count, profile, history) — this
+  // data is namespaced per signed-in user (see scopedStorage.ts), so re-run
+  // whenever the user changes (sign-in/sign-out/switch accounts) rather than
+  // once ever, or a new user would see the previous user's cached data.
   const [hydrated, setHydrated] = useState(false);
   useEffect(() => {
+    if (authLoading) return;
     hydrateSessionStore().then(() => setHydrated(true));
-  }, []);
+  }, [authLoading, authUser?.id]);
 
   useEffect(() => {
     if (!FeatureFlags.offlineResilience) return;
@@ -102,7 +101,8 @@ export default function AppLayout() {
     }
   }, [authUser?.name]);
 
-  // Redirect: auth → onboarding → voice (once per app launch)
+  // Redirect: auth → onboarding. Once onboarding is complete, land on the hub
+  // (index) and let the user choose a direction themselves — no auto-launch.
   const currentRoute = useRef<string | null>(null);
   useEffect(() => {
     if (authLoading) return;
@@ -112,19 +112,19 @@ export default function AppLayout() {
       target = '/(app)/auth';
     } else if (onboardingComplete === false) {
       target = '/(app)/onboarding';
-    } else if (onboardingComplete === true && !_hasAutoLaunched) {
-      target = '/session-voice';
+    } else if (
+      onboardingComplete === true &&
+      (currentRoute.current === '/(app)/auth' || currentRoute.current === '/(app)/onboarding')
+    ) {
+      // Just finished auth/onboarding — escape to the hub. Guarded so this
+      // doesn't fire (and remount the hub) on every normal cold launch.
+      target = '/(app)/';
     }
 
     if (!target || target === currentRoute.current) return;
     currentRoute.current = target;
 
-    if (target === '/session-voice') {
-      _hasAutoLaunched = true;
-      setTimeout(() => router.push(target!), 600);
-    } else {
-      setTimeout(() => router.replace(target!), 0);
-    }
+    setTimeout(() => router.replace(target!), 0);
   }, [authLoading, authUser, onboardingComplete]);
 
   const handleNavigate = useCallback((key: string) => {
@@ -155,40 +155,35 @@ export default function AppLayout() {
   if (authLoading || onboardingComplete === null || !hydrated) return null;
 
   return (
-    <GestureHandlerRootView style={styles.root}>
-      <AppDrawer
-        open={drawerOpen}
-        onClose={closeDrawer}
-        onNavigate={handleNavigate}
+    <AppDrawer
+      open={drawerOpen}
+      onClose={closeDrawer}
+      onNavigate={handleNavigate}
+    >
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: Colors.background },
+        }}
       >
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            contentStyle: { backgroundColor: Colors.background },
-          }}
-        >
-          <Stack.Screen name="index" />
-          <Stack.Screen name="auth" options={{ animation: 'fade' }} />
-          <Stack.Screen name="onboarding" options={{ animation: 'fade' }} />
-          <Stack.Screen name="disclaimer" options={{ animation: 'slide_from_right' }} />
-          <Stack.Screen name="history" options={{ animation: 'slide_from_right' }} />
-          <Stack.Screen name="analytics" options={{ animation: 'slide_from_right' }} />
-          <Stack.Screen name="goals" options={{ animation: 'slide_from_right' }} />
-          <Stack.Screen name="routines" options={{ animation: 'slide_from_right' }} />
-          <Stack.Screen name="preferences" options={{ animation: 'slide_from_right' }} />
-          <Stack.Screen name="voice-settings" options={{ animation: 'slide_from_right' }} />
-          <Stack.Screen name="insights" options={{ animation: 'slide_from_right' }} />
-          <Stack.Screen name="content-feed" options={{ animation: 'slide_from_right' }} />
-          <Stack.Screen name="profile" options={{ animation: 'slide_from_right' }} />
-          <Stack.Screen name="session-chat" options={{ animation: 'slide_from_bottom' }} />
-        </Stack>
-      </AppDrawer>
-    </GestureHandlerRootView>
+        <Stack.Screen name="index" />
+        <Stack.Screen name="auth" options={{ animation: 'fade' }} />
+        <Stack.Screen name="onboarding" options={{ animation: 'fade' }} />
+        <Stack.Screen name="disclaimer" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="history" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="analytics" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="goals" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="routines" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="preferences" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="voice-settings" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="insights" options={{ animation: 'slide_from_right' }} />
+        {/* Hub destinations animate themselves via EdgeEntrance, sliding in
+            from their fixed edge relative to home — native transition is
+            disabled here so the two don't stack. */}
+        <Stack.Screen name="content-feed" options={{ animation: 'none' }} />
+        <Stack.Screen name="profile" options={{ animation: 'none' }} />
+        <Stack.Screen name="session-chat" options={{ animation: 'none' }} />
+      </Stack>
+    </AppDrawer>
   );
 }
-
-const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-  },
-});

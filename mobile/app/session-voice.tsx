@@ -27,6 +27,7 @@ import EndCallOverlay from '../src/components/voice/EndCallOverlay';
 import OutcomeCapture from '../src/components/feed/OutcomeCapture';
 import HomeButton from '../src/components/common/HomeButton';
 import BBNavOverlay from '../src/components/common/BBNavOverlay';
+import EdgeEntrance from '../src/components/common/EdgeEntrance';
 import { useSessionStore } from '../src/stores/sessionStore';
 import { useAuthStore } from '../src/stores/authStore';
 import { recordSessionOutcome } from '../src/services/outcomeRecorder';
@@ -219,6 +220,7 @@ export default function SessionVoiceScreen() {
   }, []);
 
   return (
+    <EdgeEntrance edge="down">
     <View style={styles.container}>
       <StatusBar style="light" />
       <HomeButton />
@@ -309,6 +311,7 @@ export default function SessionVoiceScreen() {
 
       <BBNavOverlay currentDirection="down" anchor="bottom-center" />
     </View>
+    </EdgeEntrance>
   );
 }
 

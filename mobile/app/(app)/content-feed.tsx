@@ -4,6 +4,7 @@ import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
 import FeedPager, { type FeedCard } from '../../src/components/feed/FeedPager';
+import EdgeEntrance from '../../src/components/common/EdgeEntrance';
 import { fetchContentFeed } from '../../src/services/contentFeedService';
 import { Colors, Spacing } from '../../src/theme';
 
@@ -59,6 +60,7 @@ export default function ContentFeedScreen() {
   const goVoice = useCallback(() => router.push('/session-voice'), []);
 
   return (
+    <EdgeEntrance edge="left">
     <View style={styles.container}>
       <StatusBar style="light" />
 
@@ -107,6 +109,7 @@ export default function ContentFeedScreen() {
         </TouchableOpacity>
       </View>
     </View>
+    </EdgeEntrance>
   );
 }
 
