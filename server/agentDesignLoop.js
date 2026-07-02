@@ -40,7 +40,11 @@ const PROPOSALS_DIR = resolve(__dirname, '..', 'agent-proposals');
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes('--dry-run');
 const REMOTE = args.includes('--remote');
+const EMAIL = args.includes('--email') || process.env.DESIGN_LOOP_EMAIL_ON === '1';
 const userFilter = args.find(a => a.startsWith('--users='))?.split('=')[1]?.split(',');
+
+const EMAIL_TO = process.env.DESIGN_LOOP_EMAIL_TO || 'mike@strangepair.com';
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
 
 const REMOTE_BASE_URL = process.env.BB_SERVER_URL || 'https://bb-server-production-a849.up.railway.app';
 
@@ -294,6 +298,67 @@ async function main() {
   console.log(report);
   console.log('\n────────────────────────────────────────────────────\n');
   console.log('[DesignLoop] Review the proposal, then apply accepted changes to agent.md manually.');
+
+  if (EMAIL) {
+    const reportText = readFileSync(reportPath, 'utf-8');
+    await sendEmailReport(reportText, filepath, digest);
+  }
+}
+
+// ── Send email report ─────────────────────────────────────────────────────────
+
+async function sendEmailReport(reportText, proposalPath, digest) {
+  if (!RESEND_API_KEY) {
+    console.warn('[DesignLoop] RESEND_API_KEY not set — skipping email');
+    return;
+  }
+
+  const date = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  const subject = `BattleBuddy Design Loop — ${date}`;
+
+  // Convert markdown report to simple HTML
+  const html = `
+<html><body style="font-family: -apple-system, sans-serif; max-width: 640px; margin: 40px auto; color: #1a1a1a; line-height: 1.6;">
+  <h2 style="border-bottom: 2px solid #e5e7eb; padding-bottom: 8px;">🧠 BattleBuddy Agent Design Loop</h2>
+  <p style="color: #6b7280; font-size: 14px;">${date} · ${digest.totalSessions} sessions · ${digest.totalUsers} user(s)</p>
+  <div style="background: #f9fafb; border-left: 4px solid #3b82f6; padding: 16px; margin: 20px 0; border-radius: 4px;">
+    ${reportText
+      .replace(/^## (.+)$/gm, '<h3 style="margin-top:16px">$1</h3>')
+      .replace(/^### (.+)$/gm, '<h4>$1</h4>')
+      .replace(/^- (.+)$/gm, '<li>$1</li>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/\n\n/g, '</p><p>')
+      .replace(/^(?!<[hlip])/gm, '')
+    }
+  </div>
+  <p style="color: #6b7280; font-size: 13px;">
+    Proposal file: <code>${proposalPath}</code><br>
+    To apply changes: open agent.md and apply the HIGH confidence proposals you want, then redeploy.
+  </p>
+</body></html>`;
+
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: 'BattleBuddy <design-loop@battlebuddy.network>',
+      to: [EMAIL_TO],
+      subject,
+      html,
+      text: reportText,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    console.warn(`[DesignLoop] Email failed: ${res.status} ${err}`);
+  } else {
+    console.log(`[DesignLoop] Email sent to ${EMAIL_TO}`);
+  }
 }
 
 main().catch(err => {
