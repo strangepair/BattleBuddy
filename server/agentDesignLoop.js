@@ -257,6 +257,21 @@ function backupSystemPrompt() {
   return backupPath;
 }
 
+// Bumps the minor version in the PROMPT_VERSION header and re-stamps today's date.
+function bumpPromptVersion(content) {
+  const versionRegex = /<!-- PROMPT_VERSION: v(\d+)\.(\d+) — .+ -->/;
+  const match = content.match(versionRegex);
+  if (!match) {
+    console.log('[DesignLoop] No PROMPT_VERSION header found — skipping version bump');
+    return content;
+  }
+  const [, major, minor] = match;
+  const nextVersion = `v${major}.${Number(minor) + 1}`;
+  const date = new Date().toISOString().slice(0, 10);
+  console.log(`[DesignLoop] Bumping prompt version to ${nextVersion} (${date})`);
+  return content.replace(versionRegex, `<!-- PROMPT_VERSION: ${nextVersion} — ${date} -->`);
+}
+
 function writeProposal(proposalText, digest) {
   mkdirSync(PROPOSALS_DIR, { recursive: true });
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -403,7 +418,8 @@ async function main() {
 
   // Backup, write, archive
   backupSystemPrompt();
-  writeFileSync(SYSTEM_PROMPT, systemPromptAfter);
+  const systemPromptVersioned = bumpPromptVersion(systemPromptAfter);
+  writeFileSync(SYSTEM_PROMPT, systemPromptVersioned);
   console.log('[DesignLoop] System prompt updated');
 
   archiveProposal(proposalPath);

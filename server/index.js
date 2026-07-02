@@ -38,9 +38,9 @@ try {
 
 const client = new Anthropic();
 
-// Load the system prompt
+// Path to the system prompt (read fresh on every call so agentDesignLoop
+// updates go live without a redeploy)
 const systemPromptPath = resolve(__dirname, 'prompts', 'system.battlebuddy.md');
-const systemPromptTemplate = readFileSync(systemPromptPath, 'utf-8');
 
 // Path to the CSM venv's Python (for whisper transcription)
 const WHISPER_PYTHON = resolve(__dirname, '..', 'sesame-csm', '.venv', 'bin', 'python3');
@@ -113,6 +113,7 @@ function buildSystemPrompt(profile, triggerContext, recentHistory, timezone, lif
   const localTime = formatLocalTime(timezone);
   const timeContext = `User's local time: ${localTime}.` +
     (triggerContext ? ` ${triggerContext}` : '');
+  const systemPromptTemplate = readFileSync(systemPromptPath, 'utf-8');
   return systemPromptTemplate
     .replace('{{current_goal}}', currentGoal || 'Build a living map of this person through observation, not interrogation.')
     .replace('{{profile}}', profile || 'New user — no history yet.')
