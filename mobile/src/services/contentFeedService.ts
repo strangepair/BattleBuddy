@@ -1,4 +1,3 @@
-import { supabase } from './supabase';
 import { ApiConfig } from '../config';
 
 export interface ContentVideo {
@@ -48,19 +47,15 @@ function toContentVideo(row: ContentVideoRow): ContentVideo {
   };
 }
 
+// Fetched through the server: content_videos has RLS with no anon-read
+// policy, so the app's direct Supabase query silently returned [] forever.
 export async function fetchContentFeed(limit = 20, offset = 0): Promise<ContentVideo[]> {
-  const { data, error } = await supabase
-    .from('content_videos')
-    .select('*')
-    .eq('status', 'active')
-    .order('created_at', { ascending: false })
-    .range(offset, offset + limit - 1);
-
-  if (error) {
-    throw new Error(`Failed to fetch content feed: ${error.message}`);
+  const res = await fetch(`${ApiConfig.CHAT_URL}/content/feed?limit=${limit}&offset=${offset}`);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch content feed: ${res.status}`);
   }
-
-  return (data ?? []).map(toContentVideo);
+  const { videos } = await res.json();
+  return ((videos ?? []) as ContentVideoRow[]).map(toContentVideo);
 }
 
 export function getVideoUrl(r2Key: string): string {

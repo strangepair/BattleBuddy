@@ -1343,6 +1343,36 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     }
   }
 
+  // ─── Content feed — the curated video library for the Support Scroll ───────
+  // Served through the server because content_videos has RLS enabled with no
+  // anon-read policy: the app's direct Supabase query silently returned [] and
+  // the feed showed its empty state forever.
+  if (req.method === 'GET' && req.url.startsWith('/content/feed')) {
+    if (!supabase) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Content store not configured' }));
+    }
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 20, 50);
+      const offset = parseInt(url.searchParams.get('offset'), 10) || 0;
+
+      const { data, error } = await supabase
+        .from('content_videos')
+        .select('*')
+        .eq('status', 'active')
+        .order('created_at', { ascending: false })
+        .range(offset, offset + limit - 1);
+
+      if (error) throw new Error(error.message);
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ videos: data || [] }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
   // Correct/delete an event — used by the voice agent's update_event tool
   if (req.method === 'POST' && req.url === '/events/update') {
     let body = '';
