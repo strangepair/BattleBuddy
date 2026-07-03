@@ -1514,55 +1514,6 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     }
   }
 
-  // One-shot backfill: embed all historical session transcripts into vector store.
-  // Hit once to backfill, then remove this endpoint.
-  if (req.method === 'POST' && req.url === '/admin/backfill-transcripts') {
-    try {
-      const storeDir = process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store');
-      const transcriptsRoot = resolve(storeDir, 'session-transcripts');
-
-      let userDirs = [];
-      try { userDirs = readdirSync(transcriptsRoot); } catch {}
-
-      let embedded = 0;
-      let skipped = 0;
-      let errors = 0;
-
-      for (const userId of userDirs) {
-        const dir = resolve(transcriptsRoot, userId);
-        let files = [];
-        try { files = readdirSync(dir).filter(f => f.endsWith('.json')); } catch { continue; }
-
-        for (const f of files) {
-          try {
-            const data = JSON.parse(readFileSync(resolve(dir, f), 'utf-8'));
-            const messages = (data.messages || []).filter(m => (m.content || '').trim().length > 0);
-            if (messages.length < 4) { skipped++; continue; }
-
-            const transcriptText = messages
-              .map(m => `${m.role === 'user' ? 'User' : 'BattleBuddy'}: ${m.content}`)
-              .join('\n');
-
-            const summary = `Session ${data.sessionId || f.replace('.json', '')} (${data.updatedAt || 'unknown date'}):\n${transcriptText}`.slice(0, 8000);
-
-            await embedAndStore(userId, summary, 'session_summary', data.sessionId || null);
-            embedded++;
-            console.log(`[Backfill] Embedded session ${f} for user ${userId}`);
-          } catch (e) {
-            console.error(`[Backfill] Error processing ${userId}/${f}:`, e.message);
-            errors++;
-          }
-        }
-      }
-
-      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ ok: true, embedded, skipped, errors }));
-    } catch (err) {
-      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ error: err.message }));
-    }
-  }
-
   // Trigger a transcript audit on demand
   if (req.method === 'POST' && req.url === '/admin/audit/run') {
     try {
