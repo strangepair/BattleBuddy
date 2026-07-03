@@ -8,6 +8,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import WebSocket from 'ws';
+import { resolveUserId } from './contextAgent.js';
 
 let supabase = null;
 let initialized = false;
@@ -42,16 +43,22 @@ export async function embedAndStore(userId, content, type, sessionId = null) {
   if (!supabase) return;
   if (!content || content.length < 10) return;
 
+  // Canonicalize here, not at each call site — a caller that forgets to
+  // resolve aliases silently writes memories under an ID retrieveRelevant()
+  // will never query for again. See the removed /admin/backfill-transcripts
+  // endpoint, which did exactly that.
+  const canonicalUserId = resolveUserId(userId);
+
   try {
     const { error } = await supabase.from('user_memories').insert({
-      user_id: userId,
+      user_id: canonicalUserId,
       content,
       type,
     });
     if (error) {
       console.error('[VectorStore] Insert failed:', error.message);
     } else {
-      console.log(`[VectorStore] Stored ${type} for ${userId} (${content.length} chars)`);
+      console.log(`[VectorStore] Stored ${type} for ${canonicalUserId} (${content.length} chars)`);
     }
   } catch (err) {
     console.error('[VectorStore] Store failed:', err.message);
@@ -70,9 +77,11 @@ export async function retrieveRelevant(userId, queryText, limit = 10) {
   if (!supabase) return [];
   if (!queryText || queryText.length < 3) return [];
 
+  const canonicalUserId = resolveUserId(userId);
+
   try {
     const { data, error } = await supabase.rpc('match_user_memories', {
-      match_user_id: userId,
+      match_user_id: canonicalUserId,
       query_text: queryText,
       match_count: limit,
     });
@@ -86,7 +95,7 @@ export async function retrieveRelevant(userId, queryText, limit = 10) {
       return [];
     }
 
-    console.log(`[VectorStore] Retrieved ${data?.length || 0} memories for ${userId}`);
+    console.log(`[VectorStore] Retrieved ${data?.length || 0} memories for ${canonicalUserId}`);
     return data || [];
   } catch (err) {
     console.error('[VectorStore] Retrieve failed:', err.message);
