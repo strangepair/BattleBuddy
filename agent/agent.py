@@ -133,6 +133,25 @@ async def battlebuddy_session(ctx: agents.JobContext):
                 return json.dumps({"error": str(e)})
 
         @function_tool()
+        async def recall_conversation(self, query: str, date: str = ""):
+            """Search past conversations with this user — full transcript history plus distilled memory entries, all dated. Use whenever the user references something discussed before ('remember when...', 'what did we talk about', 'you said...'), on any memory probe, or when past context would materially improve the response. Cite dates conservatively from what it returns. query: keywords/topics/names. date: optional YYYY-MM-DD filter."""
+            try:
+                params = f"userId={user_id}&query={query}"
+                if date:
+                    params += f"&date={date}"
+                async with aiohttp.ClientSession() as http:
+                    resp = await http.get(
+                        f"{SERVER_URL}/context/recall?{params}",
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    )
+                    data = await resp.json()
+                    print(f"[Agent] recall_conversation '{query}' for {user_id}: {len(data.get('memory_entries', []))} memories, {len(data.get('transcript_excerpts', []))} excerpts")
+                    return json.dumps(data)
+            except Exception as e:
+                print(f"[Agent] recall_conversation failed: {e}")
+                return json.dumps({"error": str(e)})
+
+        @function_tool()
         async def log_event(self, event_type: str, occurred_at: str = "", notes: str = ""):
             """Log a smoking or urge event the user just told you about. event_type is one of: cigarette, urge_resisted, urge_gave_in, milestone. occurred_at is an ISO 8601 timestamp — leave empty for 'right now'. For slips, always confirm with the user before logging. Confirm back what you logged in one short line."""
             try:

@@ -207,6 +207,24 @@ async function fetchRelevantMemories(userId, queryText, timeoutMs = 800) {
 
 const AGENT_TOOLS = [
   {
+    name: 'recall_conversation',
+    description: "Search past conversations with this user — full transcript history plus distilled memory entries, all dated. Use whenever the user references something discussed before ('remember when…', 'what did we talk about', 'you said…'), when a memory probe arrives, or when past context would make the response materially better. Returns dated excerpts; cite dates conservatively from what it returns.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: "Keywords to search for (topics, names, phrases the user used). E.g. 'Alec Chantix', 'garage container', 'car wash cigarette'.",
+        },
+        date: {
+          type: 'string',
+          description: 'Optional YYYY-MM-DD to limit results to conversations from that day.',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
     name: 'get_usage_stats',
     description: "Query the user's smoking and urge event history from the database. Use this for ANY question about cigarette counts, timestamps, last cigarette time, gaps between cigarettes, urges resisted, or milestones. Returns authoritative data — never guess or recall from memory when you can call this tool.",
     input_schema: {
@@ -400,6 +418,62 @@ function summarizeEvents(events) {
   };
 }
 
+/**
+ * Conversation recall — the JIT memory the user expects BB to have.
+ * Merges two sources, both dated:
+ *  1. user_memories (distilled entries + insights, FTS-ranked)
+ *  2. raw transcript scan (most recent ~40 sessions, keyword match with
+ *     surrounding turn for context)
+ */
+async function recallConversation(rawUserId, query, date) {
+  const userId = resolveUserId(rawUserId);
+  const results = { memory_entries: [], transcript_excerpts: [] };
+
+  try {
+    const memories = await retrieveRelevant(userId, query, 8);
+    results.memory_entries = (memories || []).map(m => ({
+      date: (m.created_at || '').slice(0, 10),
+      type: m.type,
+      content: m.content,
+    })).filter(m => !date || m.content.includes(date) || m.date === date);
+  } catch {}
+
+  try {
+    const storeDir = process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store');
+    const dir = resolve(storeDir, 'session-transcripts', userId);
+    const terms = query.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+    if (terms.length) {
+      const files = readdirSync(dir).filter(f => f.endsWith('.json')).map(f => {
+        try {
+          const d = JSON.parse(readFileSync(resolve(dir, f), 'utf-8'));
+          return d;
+        } catch { return null; }
+      }).filter(Boolean)
+        .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+        .slice(0, 40);
+
+      for (const s of files) {
+        if (results.transcript_excerpts.length >= 6) break;
+        const sessionDate = (s.updatedAt || '').slice(0, 10);
+        if (date && sessionDate !== date) continue;
+        const msgs = s.messages || [];
+        for (let i = 0; i < msgs.length; i++) {
+          const content = (msgs[i].content || '').toLowerCase();
+          if (terms.some(t => content.includes(t))) {
+            const excerpt = msgs.slice(Math.max(0, i - 1), i + 2)
+              .map(m => `${m.role === 'user' ? 'User' : 'BB'}: ${(m.content || '').slice(0, 200)}`)
+              .join(' | ');
+            results.transcript_excerpts.push({ date: sessionDate, session: s.sessionId, excerpt });
+            break; // one excerpt per session keeps results diverse
+          }
+        }
+      }
+    }
+  } catch {}
+
+  return results;
+}
+
 /** Shared correct/delete logic for the text tool and the voice /events/update endpoint. */
 async function updateEvent(userId, { event_id, action, event_type, occurred_at, notes } = {}) {
   if (!supabase) return { error: 'Event store unavailable' };
@@ -420,6 +494,16 @@ async function updateEvent(userId, { event_id, action, event_type, occurred_at, 
 }
 
 async function executeToolUse(toolUse, userId, timezone = DEFAULT_TZ) {
+  if (toolUse.name === 'recall_conversation') {
+    try {
+      const { query, date } = toolUse.input || {};
+      const recall = await recallConversation(userId, query || '', date);
+      return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(recall) };
+    } catch (err) {
+      return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: err.message }), is_error: true };
+    }
+  }
+
   if (toolUse.name === 'get_usage_stats') {
     try {
       const { date, event_types, limit } = toolUse.input || {};
@@ -1189,6 +1273,23 @@ Return ONLY the JSON object, no markdown, no explanation.`;
 
   // ─── Context Agent API ──────────────────────────────────────────────────────
 
+  // Conversation recall for the voice agent's recall_conversation tool
+  if (req.method === 'GET' && req.url.startsWith('/context/recall')) {
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const recall = await recallConversation(
+        url.searchParams.get('userId') || 'default',
+        url.searchParams.get('query') || '',
+        url.searchParams.get('date') || undefined,
+      );
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(recall));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
   // List / read raw session transcripts (admin + design-loop tool).
   // GET /context/transcripts/{userId}            → index of sessions
   // GET /context/transcripts/{userId}/{sessionId} → full transcript
@@ -1514,6 +1615,31 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     }
   }
 
+  // Memory consolidation on demand. {"userId": "...", "all": true} backfills
+  // the user's full transcript history in batches of 10 sessions.
+  if (req.method === 'POST' && req.url === '/admin/consolidate') {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const { userId, all } = JSON.parse(body || '{}');
+      const targetUser = resolveUserId(userId || 'default');
+      const sessions = loadRecentSessions(targetUser, {
+        cutoffMs: all ? undefined : Date.now() - 26 * 3600 * 1000,
+        limit: all ? 200 : 12,
+      });
+      let total = 0;
+      const chronological = [...sessions].reverse();
+      for (let i = 0; i < chronological.length; i += 10) {
+        total += await consolidateMemories(targetUser, chronological.slice(i, i + 10));
+      }
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, sessions: sessions.length, memories_stored: total }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
   // Trigger a transcript audit on demand
   if (req.method === 'POST' && req.url === '/admin/audit/run') {
     try {
@@ -1673,6 +1799,77 @@ Return ONLY the JSON object, no markdown, no explanation.`;
 
 const AUDIT_HOUR = 3;
 
+/**
+ * Memory consolidation — distills raw transcripts into dated, searchable
+ * memory entries in user_memories, so JIT recall has dense material beyond
+ * the sparse insights/triggers the extraction pipeline stores. Runs nightly
+ * over the last day's sessions; POST /admin/consolidate {all: true} backfills
+ * the full history in batches.
+ */
+async function consolidateMemories(userId, sessions) {
+  if (!sessions.length || !isVectorConfigured()) return 0;
+
+  let corpus = '';
+  for (const s of sessions) {
+    corpus += `\n\n=== SESSION ${s.sessionId} (${s.updatedAt}) ===\n`;
+    for (const m of s.messages || []) {
+      const line = `${m.role === 'user' ? 'USER' : 'BB'}: ${m.content}\n`;
+      if (corpus.length + line.length > 80000) break;
+      corpus += line;
+    }
+  }
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 2000,
+    messages: [{
+      role: 'user',
+      content: `Distill these conversation transcripts between a user and their quit-smoking companion into durable memory entries.
+
+Rules:
+- Each entry: ONE dense sentence, past tense, concrete details, the user's own words where they matter.
+- Capture: events (cigarettes, resists, activities with times), commitments and plans, corrections the user made, emotional moments, personal facts, product feedback, breakthroughs.
+- Skip: small talk, the agent's own filler, anything already implied by another entry.
+- 5-15 entries total. Start each with the session's date in [YYYY-MM-DD] form (from the session headers).
+
+Return a JSON array of strings only. Example: ["[2026-07-02] Mike had a cigarette at 3:30 PM on the drive home from the car wash and called it a 'reward for resistance'."]
+
+Transcripts:${corpus}`,
+    }],
+  });
+
+  const text = response.content[0]?.text || '[]';
+  let entries = [];
+  try {
+    const { jsonrepair: jr } = await import('jsonrepair');
+    try { entries = JSON.parse(text); } catch {
+      const m = text.match(/\[[\s\S]*\]/);
+      entries = JSON.parse(jr(m ? m[0] : text));
+    }
+  } catch { return 0; }
+
+  let stored = 0;
+  for (const entry of entries) {
+    if (typeof entry !== 'string' || entry.length < 20) continue;
+    await embedAndStore(userId, entry, 'conversation');
+    stored++;
+  }
+  return stored;
+}
+
+function loadRecentSessions(userId, { cutoffMs, limit = 12, minMessages = 4 } = {}) {
+  const storeDir = process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store');
+  const dir = resolve(storeDir, 'session-transcripts', userId);
+  let files = [];
+  try { files = readdirSync(dir).filter(f => f.endsWith('.json')); } catch { return []; }
+  return files.map(f => {
+    try { return JSON.parse(readFileSync(resolve(dir, f), 'utf-8')); } catch { return null; }
+  })
+    .filter(s => s && s.updatedAt && (!cutoffMs || new Date(s.updatedAt).getTime() > cutoffMs) && (s.messages || []).length >= minMessages)
+    .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+    .slice(0, limit);
+}
+
 async function runTranscriptAudit(force = false) {
   if (!supabase) return { error: 'event store not configured' };
   const storeDir = process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store');
@@ -1684,19 +1881,19 @@ async function runTranscriptAudit(force = false) {
   const results = [];
   for (const userId of userDirs) {
     try {
-      const dir = resolve(transcriptsRoot, userId);
-      const cutoff = Date.now() - 26 * 3600 * 1000;
-      const sessions = readdirSync(dir).filter(f => f.endsWith('.json')).map(f => {
-        try { return JSON.parse(readFileSync(resolve(dir, f), 'utf-8')); } catch { return null; }
-      })
-        .filter(s => s && s.updatedAt && new Date(s.updatedAt).getTime() > cutoff && (s.messages || []).length >= 4)
-        // A bulk offline sync can touch every historical file at once (103
-        // sessions matched the window on night one) — audit only the most
-        // recent handful; older material was already covered by prior runs.
-        .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
-        .slice(0, 12);
-
+      // Bulk offline syncs can touch every historical file at once — audit
+      // only the most recent handful; older material was covered by prior runs.
+      const sessions = loadRecentSessions(userId, { cutoffMs: Date.now() - 26 * 3600 * 1000 });
       if (!sessions.length) continue;
+
+      // Consolidate the same sessions into searchable memory entries so JIT
+      // recall keeps pace with the conversations.
+      try {
+        const stored = await consolidateMemories(userId, [...sessions].reverse());
+        if (stored) console.log(`[Consolidate] ${userId}: ${stored} memory entries stored`);
+      } catch (e) {
+        console.log(`[Consolidate] Error for ${userId}: ${e.message}`);
+      }
 
       let corpus = '';
       for (const s of sessions.sort((a, b) => (a.updatedAt || '').localeCompare(b.updatedAt || ''))) {
@@ -1721,6 +1918,11 @@ Return JSON only:
   "agent_failures": ["specific BB behavior that failed or eroded trust — verbatim quote + why it failed"],
   "app_issues": ["bugs, UX problems, or missing capabilities the USER mentioned or that are evident (e.g. data loss, latency complaints, feature requests) — verbatim quote"],
   "proposals": ["concrete, targeted change proposals for the agent prompt or app, each traceable to evidence above; rate each HIGH/MEDIUM/LOW confidence"],
+  "memory_performance": {
+    "probes": ["every moment the user tested or relied on BB's memory — quote it, and mark PASSED or FAILED based on whether BB's answer was accurate"],
+    "chronology_errors": ["any time BB asserted a wrong date/time/sequence for a past event — quote it"],
+    "score": "0-10 rating of BB's memory accuracy and chronological confidence across these sessions, judged only on evidence above"
+  },
   "user_state": "one-paragraph read of where this user is in their quit journey based on these sessions",
   "summary": "2-3 sentences: the single most important thing the developer should act on"
 }
