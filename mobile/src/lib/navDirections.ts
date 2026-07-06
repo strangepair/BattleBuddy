@@ -5,9 +5,9 @@ export type Direction = 'up' | 'down' | 'left' | 'right';
 
 export const NAV_ROUTES: Record<Direction, string> = {
   down: '/session-voice',
-  up: '/(app)/session-chat',
-  left: '/(app)/content-feed',
-  right: '/(app)/profile',
+  up: '/session-chat',
+  left: '/content-feed',
+  right: '/profile',
 };
 
 export const NAV_LABELS: Record<Direction, string> = {

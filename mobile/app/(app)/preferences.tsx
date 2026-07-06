@@ -22,7 +22,7 @@ export default function PreferencesScreen() {
         <Text style={styles.sectionHeader}>ABOUT</Text>
         <TouchableOpacity
           style={styles.row}
-          onPress={() => router.push('/(app)/disclaimer')}
+          onPress={() => router.push('/disclaimer')}
           activeOpacity={0.7}
         >
           <Text style={styles.rowIcon}>ℹ️</Text>
@@ -33,7 +33,7 @@ export default function PreferencesScreen() {
         <Text style={[styles.sectionHeader, styles.sectionGap]}>BUDDY</Text>
         <TouchableOpacity
           style={styles.row}
-          onPress={() => router.push('/(app)/voice-settings')}
+          onPress={() => router.push('/voice-settings')}
           activeOpacity={0.7}
         >
           <Text style={styles.rowIcon}>🎙</Text>

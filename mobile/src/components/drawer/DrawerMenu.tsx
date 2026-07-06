@@ -1,19 +1,21 @@
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import type { ComponentProps } from 'react';
+import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing } from '../../theme';
 
 export interface DrawerItem {
   key: string;
   label: string;
-  icon: string;
+  icon: ComponentProps<typeof Ionicons>['name'];
 }
 
 const ITEMS: DrawerItem[] = [
-  { key: 'history',     label: 'History',     icon: '📋' },
-  { key: 'insights',    label: 'Insights',    icon: '🧠' },
-  { key: 'analytics',   label: 'Analytics',   icon: '📊' },
-  { key: 'goals',       label: 'Goals',       icon: '🎯' },
-  { key: 'routines',    label: 'Routines',    icon: '⏰' },
-  { key: 'preferences', label: 'Preferences', icon: '⚙️' },
+  { key: 'history',     label: 'History',     icon: 'time-outline' },
+  { key: 'insights',    label: 'Insights',    icon: 'sparkles-outline' },
+  { key: 'analytics',   label: 'Analytics',   icon: 'pulse-outline' },
+  { key: 'goals',       label: 'Goals',       icon: 'flag-outline' },
+  { key: 'routines',    label: 'Routines',    icon: 'repeat-outline' },
+  { key: 'preferences', label: 'Preferences', icon: 'settings-outline' },
 ];
 
 interface DrawerMenuProps {
@@ -39,7 +41,7 @@ export default function DrawerMenu({ onSelect, onClose }: DrawerMenuProps) {
             onPress={() => onSelect(key)}
             activeOpacity={0.7}
           >
-            <Text style={styles.itemIcon}>{icon}</Text>
+            <Ionicons name={icon} size={20} color={Colors.textSecondary} style={styles.itemIcon} />
             <Text style={styles.itemLabel}>{label}</Text>
           </TouchableOpacity>
         ))}

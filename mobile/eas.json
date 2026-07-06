@@ -14,13 +14,15 @@
         "EXPO_PUBLIC_CHAT_URL": "https://bb-server-production-a849.up.railway.app",
         "EXPO_PUBLIC_SUPABASE_URL": "https://djskxjjioklsvusgzfeu.supabase.co",
         "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_B6tSNseYclLgC-kxliZjwA_HYQsclBK"
-      }
+      },
+      "channel": "development"
     },
     "development-simulator": {
       "extends": "development",
       "ios": {
         "simulator": true
-      }
+      },
+      "channel": "development-simulator"
     },
     "preview": {
       "distribution": "internal",
@@ -31,7 +33,8 @@
         "EXPO_PUBLIC_CHAT_URL": "https://bb-server-production-a849.up.railway.app",
         "EXPO_PUBLIC_SUPABASE_URL": "https://djskxjjioklsvusgzfeu.supabase.co",
         "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_B6tSNseYclLgC-kxliZjwA_HYQsclBK"
-      }
+      },
+      "channel": "preview"
     },
     "production": {
       "autoIncrement": true,
@@ -39,7 +42,8 @@
         "EXPO_PUBLIC_CHAT_URL": "https://bb-server-production-a849.up.railway.app",
         "EXPO_PUBLIC_SUPABASE_URL": "https://djskxjjioklsvusgzfeu.supabase.co",
         "EXPO_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_B6tSNseYclLgC-kxliZjwA_HYQsclBK"
-      }
+      },
+      "channel": "production"
     }
   },
   "submit": {

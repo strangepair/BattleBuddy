@@ -1,97 +1,35 @@
 import { useState, useEffect } from 'react';
 import { View, Text, ScrollView, StyleSheet, ActivityIndicator } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { TouchableOpacity } from 'react-native';
-import { router } from 'expo-router';
-import { ApiConfig } from '../../src/config';
+import ScreenWithEntity from '../../src/components/common/ScreenWithEntity';
+import EmptyState from '../../src/components/common/EmptyState';
 import { useAuthStore } from '../../src/stores/authStore';
+import { fetchSessionStats, type SessionReportRow } from '../../src/services/sessionStats';
 import { Colors, Spacing, Radii } from '../../src/theme';
 
-interface SessionReport {
-  created_at: string;
-  summary: string;
-  trigger_type: string | null;
-  trigger_intensity: number | null;
-  outcome: string | null;
-  emotional_arc: { start?: string; end?: string };
-  what_helped: string[];
-  what_didnt_help: string[];
-  next_session_hint: string | null;
-  preferences: Record<string, any>;
-}
-
 export default function InsightsScreen() {
-  const [reports, setReports] = useState<SessionReport[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [reports, setReports] = useState<SessionReportRow[] | null>(null);
   const userId = useAuthStore((s) => s.user?.id);
 
   useEffect(() => {
-    loadReports();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let cancelled = false;
+    fetchSessionStats(userId ?? null)
+      .then((stats) => { if (!cancelled) setReports(stats.reports); })
+      .catch(() => { if (!cancelled) setReports([]); });
+    return () => { cancelled = true; };
   }, [userId]);
 
-  const loadReports = async () => {
-    setLoading(true);
-    try {
-      if (!userId) {
-        setLoading(false);
-        return;
-      }
-      // Session reports are stored in the server-side event log (bb_events,
-      // event_type 'session_report') — the old session_reports table required
-      // an auth uuid the app doesn't have, so it never received a row.
-      const res = await fetch(
-        `${ApiConfig.CHAT_URL}/events?userId=${encodeURIComponent(userId)}&eventTypes=session_report&limit=20`,
-      );
-      if (res.ok) {
-        const data = await res.json();
-        const rows: SessionReport[] = (data.events || []).map((e: any) => {
-          const r = e.metadata?.report || {};
-          return {
-            created_at: e.occurred_at,
-            summary: r.summary || 'Session completed.',
-            trigger_type: r.trigger_type ?? null,
-            trigger_intensity: r.trigger_intensity ?? null,
-            outcome: e.metadata?.outcome ?? r.outcome ?? null,
-            emotional_arc: r.emotional_arc || {},
-            what_helped: r.what_helped || [],
-            what_didnt_help: r.what_didnt_help || [],
-            next_session_hint: r.next_session_hint ?? null,
-            preferences: {
-              ...(r.preferences || {}),
-              key_facts_learned: r.key_facts_learned ?? r.preferences?.key_facts_learned ?? null,
-              trackable_metrics: r.trackable_metrics ?? r.preferences?.trackable_metrics ?? null,
-            },
-          };
-        });
-        setReports(rows);
-      }
-    } catch {}
-    setLoading(false);
-  };
-
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton} hitSlop={12}>
-          <Text style={styles.backText}>← Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.title}>Session Insights</Text>
-        <View style={styles.spacer} />
-      </View>
-
-      {loading ? (
+    <ScreenWithEntity title="Session Insights">
+      {reports === null ? (
         <View style={styles.center}>
           <ActivityIndicator color={Colors.coral} />
         </View>
       ) : reports.length === 0 ? (
-        <View style={styles.center}>
-          <Text style={styles.emptyIcon}>🧠</Text>
-          <Text style={styles.emptyTitle}>No insights yet</Text>
-          <Text style={styles.emptySubtitle}>
-            After each session, BB analyzes the conversation and captures what was learned. Those insights will appear here.
-          </Text>
-        </View>
+        <EmptyState
+          icon="sparkles-outline"
+          title="Insights are coming"
+          body="After each session, Buddy reflects on the conversation and captures what it learned about you. Those reflections will appear here."
+        />
       ) : (
         <ScrollView contentContainerStyle={styles.scroll}>
           {reports.map((report, i) => (
@@ -99,18 +37,19 @@ export default function InsightsScreen() {
           ))}
         </ScrollView>
       )}
-    </SafeAreaView>
+    </ScreenWithEntity>
   );
 }
 
-function ReportCard({ report }: { report: SessionReport }) {
-  const date = new Date(report.created_at);
+function ReportCard({ report }: { report: SessionReportRow }) {
+  const date = new Date(report.createdAt);
   const dateStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   const timeStr = date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 
   const outcomeColors: Record<string, string> = {
     resisted: Colors.success,
     submitted: Colors.warning,
+    gave_in: Colors.warning,
     unsure: Colors.textSecondary,
   };
 
@@ -123,46 +62,46 @@ function ReportCard({ report }: { report: SessionReport }) {
         <Text style={styles.cardDate}>{dateStr} {timeStr}</Text>
         {report.outcome && (
           <Text style={[styles.cardOutcome, { color: outcomeColors[report.outcome] || Colors.textSecondary }]}>
-            {report.outcome}
+            {report.outcome.replace('_', ' ')}
           </Text>
         )}
       </View>
 
       <Text style={styles.cardSummary}>{report.summary}</Text>
 
-      {report.emotional_arc?.start && report.emotional_arc?.end && (
+      {report.emotionalArc?.start && report.emotionalArc?.end && (
         <View style={styles.arcRow}>
           <Text style={styles.arcLabel}>Emotional arc:</Text>
-          <Text style={styles.arcValue}>{report.emotional_arc.start} → {report.emotional_arc.end}</Text>
+          <Text style={styles.arcValue}>{report.emotionalArc.start} → {report.emotionalArc.end}</Text>
         </View>
       )}
 
-      {report.trigger_type && (
+      {report.triggerType && (
         <View style={styles.arcRow}>
           <Text style={styles.arcLabel}>Trigger:</Text>
           <Text style={styles.arcValue}>
-            {report.trigger_type}
-            {report.trigger_intensity ? ` (${report.trigger_intensity}/5)` : ''}
+            {report.triggerType}
+            {report.triggerIntensity ? ` (${report.triggerIntensity}/5)` : ''}
           </Text>
         </View>
       )}
 
-      {report.what_helped?.length > 0 && (
+      {report.whatHelped.length > 0 && (
         <View style={styles.tagSection}>
           <Text style={styles.tagLabel}>What helped</Text>
           <View style={styles.tags}>
-            {report.what_helped.map((h, j) => (
+            {report.whatHelped.map((h, j) => (
               <Text key={j} style={styles.tagGreen}>{h}</Text>
             ))}
           </View>
         </View>
       )}
 
-      {report.what_didnt_help?.length > 0 && (
+      {report.whatDidntHelp.length > 0 && (
         <View style={styles.tagSection}>
           <Text style={styles.tagLabel}>What didn't land</Text>
           <View style={styles.tags}>
-            {report.what_didnt_help.map((h, j) => (
+            {report.whatDidntHelp.map((h, j) => (
               <Text key={j} style={styles.tagRed}>{h}</Text>
             ))}
           </View>
@@ -177,10 +116,10 @@ function ReportCard({ report }: { report: SessionReport }) {
         <Text style={styles.factText}>Reported: {tm.cigarettes_today} cigarettes that day</Text>
       )}
 
-      {report.next_session_hint && (
+      {report.nextSessionHint && (
         <View style={styles.hintBox}>
           <Text style={styles.hintLabel}>Next session</Text>
-          <Text style={styles.hintText}>{report.next_session_hint}</Text>
+          <Text style={styles.hintText}>{report.nextSessionHint}</Text>
         </View>
       )}
     </View>
@@ -188,20 +127,7 @@ function ReportCard({ report }: { report: SessionReport }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background },
-  header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: Spacing.md, paddingVertical: Spacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Colors.surfaceBorder,
-  },
-  backButton: { paddingVertical: Spacing.xs, paddingRight: Spacing.sm, minWidth: 60 },
-  backText: { color: Colors.coral, fontSize: 16, fontWeight: '600' },
-  title: { fontSize: 18, fontWeight: '700', color: Colors.textPrimary },
-  spacer: { minWidth: 60 },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: Spacing.xl, gap: Spacing.sm },
-  emptyIcon: { fontSize: 40, marginBottom: Spacing.sm },
-  emptyTitle: { fontSize: 18, fontWeight: '700', color: Colors.textPrimary },
-  emptySubtitle: { fontSize: 14, color: Colors.textTertiary, textAlign: 'center', lineHeight: 20 },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   scroll: { padding: Spacing.md, gap: Spacing.md, paddingBottom: Spacing.xxl },
   card: {
     backgroundColor: Colors.surface, borderRadius: Radii.md, padding: Spacing.md, gap: Spacing.sm,

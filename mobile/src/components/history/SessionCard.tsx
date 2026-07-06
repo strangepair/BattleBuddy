@@ -1,4 +1,5 @@
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing, Radii } from '../../theme';
 
 interface SessionCardProps {
@@ -45,7 +46,12 @@ export default function SessionCard({
 
       <View style={styles.center}>
         <View style={styles.badges}>
-          <Text style={styles.modeBadge}>{mode === 'voice' ? '🎙' : '💬'}</Text>
+          <Ionicons
+            name={mode === 'voice' ? 'mic-outline' : 'chatbubble-outline'}
+            size={14}
+            color={Colors.textSecondary}
+            style={styles.modeBadge}
+          />
           {outcomeInfo && (
             <Text style={[styles.outcomeBadge, { color: outcomeInfo.color }]}>
               {outcomeInfo.text}

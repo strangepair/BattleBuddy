@@ -19,6 +19,7 @@
         "NSMicrophoneUsageDescription": "BattleBuddy needs microphone access for voice conversations with your buddy.",
         "NSCameraUsageDescription": "BattleBuddy does not use the camera.",
         "UIBackgroundModes": [
+          "audio",
           "audio"
         ],
         "ITSAppUsesNonExemptEncryption": false
@@ -50,6 +51,12 @@
       },
       "router": {}
     },
-    "owner": "strangepair"
+    "owner": "strangepair",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/f4d41901-f6d3-46d8-a998-4941d49ba685"
+    }
   }
 }

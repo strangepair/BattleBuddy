@@ -1,4 +1,5 @@
 import { ApiConfig } from '../config';
+import { computeStreakAndRate } from './sessionStats';
 
 export interface UserProfile {
   summary: string;
@@ -57,15 +58,7 @@ export async function fetchUserProfile(userIdArg: string | null): Promise<UserPr
         const { summary, profile } = await profileRes.json();
         const events: any[] = eventsRes.ok ? (await eventsRes.json()).events || [] : [];
 
-        const outcomes = events.map((e) => e.metadata?.outcome).filter(Boolean);
-        const resisted = outcomes.filter((o) => o === 'resisted').length;
-        const resistRate = outcomes.length > 0 ? Math.round((resisted / outcomes.length) * 100) : 0;
-
-        let streak = 0;
-        for (const o of outcomes) {
-          if (o === 'resisted') streak++;
-          else break;
-        }
+        const { streak, resistRate } = computeStreakAndRate(events.map((e) => e.metadata?.outcome));
 
         const textCount = events.filter((e) => e.metadata?.mode === 'text').length;
         const voiceCount = events.filter((e) => e.metadata?.mode === 'voice').length;

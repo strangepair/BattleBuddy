@@ -39,6 +39,15 @@ VOICE_CONFIG_PATH = _base / "server" / "voice-config.json"
 DEFAULT_VOICE = "aura-2-arcas-en"
 SERVER_URL = os.environ.get("SERVER_URL", "http://localhost:3333")
 
+# Deploy stamp — bb-agent has no numbered builds (tarball deploys via
+# `railway up`), so log the code's own timestamp at boot to make "what is
+# the voice agent running right now" answerable from the logs.
+try:
+    _DEPLOY_STAMP = datetime.fromtimestamp(os.path.getmtime(__file__)).strftime("%Y-%m-%d %H:%M UTC")
+except Exception:
+    _DEPLOY_STAMP = "unknown"
+print(f"[Agent] BattleBuddy voice agent — code stamp {_DEPLOY_STAMP}")
+
 END_PHRASES = ["bye bye buddy", "bye-bye buddy", "bye bye, buddy"]
 
 SAVE_INTERVAL_SECONDS = 60

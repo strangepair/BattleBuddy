@@ -1,110 +1,87 @@
 import { useState, useEffect } from 'react';
 import { View, Text, ScrollView, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { TouchableOpacity } from 'react-native';
-import { router } from 'expo-router';
-import { fetchUserProfile, type UserProfile } from '../../src/services/profileBuilder';
+import type { ComponentProps } from 'react';
+import { Ionicons } from '@expo/vector-icons';
+import ScreenWithEntity from '../../src/components/common/ScreenWithEntity';
+import StatHero from '../../src/components/common/StatHero';
+import { useAuthStore } from '../../src/stores/authStore';
+import { fetchSessionStats } from '../../src/services/sessionStats';
 import { Colors, Spacing, Radii } from '../../src/theme';
 
-const MILESTONES = [
-  { count: 1, label: 'First resist', icon: '🌱' },
-  { count: 3, label: '3 in a row', icon: '💪' },
-  { count: 7, label: 'One week', icon: '⭐' },
-  { count: 14, label: 'Two weeks', icon: '🔥' },
-  { count: 30, label: 'One month', icon: '🏆' },
-  { count: 60, label: 'Two months', icon: '👑' },
-  { count: 100, label: 'Triple digits', icon: '💎' },
+type IconName = ComponentProps<typeof Ionicons>['name'];
+
+const MILESTONES: { count: number; label: string; icon: IconName }[] = [
+  { count: 1, label: 'First resist', icon: 'leaf-outline' },
+  { count: 3, label: '3 in a row', icon: 'barbell-outline' },
+  { count: 7, label: 'One week', icon: 'star-outline' },
+  { count: 14, label: 'Two weeks', icon: 'flame-outline' },
+  { count: 30, label: 'One month', icon: 'trophy-outline' },
+  { count: 60, label: 'Two months', icon: 'ribbon-outline' },
+  { count: 100, label: 'Triple digits', icon: 'diamond-outline' },
 ];
 
 export default function GoalsScreen() {
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const userId = useAuthStore((s) => s.user?.id);
+  const [streak, setStreak] = useState(0);
 
   useEffect(() => {
-    fetchUserProfile(null).then(setProfile);
-  }, []);
+    let cancelled = false;
+    fetchSessionStats(userId ?? null)
+      .then((s) => { if (!cancelled) setStreak(s.streak); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [userId]);
 
-  const streak = profile?.streak ?? 0;
+  const next = MILESTONES.find((m) => streak < m.count);
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.backButton} hitSlop={12}>
-          <Text style={styles.backText}>← Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.title}>Goals</Text>
-        <View style={styles.spacer} />
-      </View>
-
+    <ScreenWithEntity title="Goals">
       <ScrollView contentContainerStyle={styles.scroll}>
-        {/* Habit target */}
         <View style={styles.targetCard}>
-          <Text style={styles.targetIcon}>🚭</Text>
+          <Ionicons name="shield-checkmark-outline" size={28} color={Colors.coral} style={styles.targetIcon} />
           <View style={styles.targetInfo}>
             <Text style={styles.targetTitle}>Quitting smoking</Text>
             <Text style={styles.targetSubtitle}>Your current habit target</Text>
           </View>
         </View>
 
-        {/* Current streak */}
-        <View style={styles.streakCard}>
-          <Text style={styles.streakNumber}>{streak}</Text>
-          <Text style={styles.streakLabel}>
-            {streak === 1 ? 'resist in a row' : 'resists in a row'}
-          </Text>
-        </View>
+        <StatHero value={streak} label="resist in a row" pluralLabel="resists in a row" />
 
-        {/* Milestones */}
+        {next && (
+          <Text style={styles.nextUp}>
+            {streak === 0
+              ? 'The first resist is the biggest one — Buddy is ready when the urge hits.'
+              : `Next up: ${next.label.toLowerCase()} at ${next.count}. You're ${next.count - streak} away.`}
+          </Text>
+        )}
+
         <Text style={styles.sectionTitle}>Milestones</Text>
         {MILESTONES.map(({ count, label, icon }) => {
           const reached = streak >= count;
           return (
             <View key={count} style={[styles.milestone, reached && styles.milestoneReached]}>
-              <Text style={[styles.milestoneIcon, !reached && styles.milestoneDim]}>{icon}</Text>
+              <Ionicons
+                name={icon}
+                size={22}
+                color={reached ? Colors.success : Colors.textSecondary}
+                style={[styles.milestoneIcon, !reached && styles.milestoneDim]}
+              />
               <View style={styles.milestoneInfo}>
                 <Text style={[styles.milestoneLabel, !reached && styles.milestoneDim]}>{label}</Text>
                 <Text style={[styles.milestoneCount, !reached && styles.milestoneDim]}>
                   {count} resists
                 </Text>
               </View>
-              {reached && <Text style={styles.milestoneCheck}>✓</Text>}
+              {reached && <Ionicons name="checkmark" size={18} color={Colors.success} />}
             </View>
           );
         })}
       </ScrollView>
-    </SafeAreaView>
+    </ScreenWithEntity>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: Spacing.md,
-    paddingVertical: Spacing.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.surfaceBorder,
-  },
-  backButton: {
-    paddingVertical: Spacing.xs,
-    paddingRight: Spacing.sm,
-    minWidth: 60,
-  },
-  backText: {
-    color: Colors.coral,
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  title: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: Colors.textPrimary,
-  },
-  spacer: { minWidth: 60 },
   scroll: {
     padding: Spacing.md,
     gap: Spacing.md,
@@ -117,29 +94,16 @@ const styles = StyleSheet.create({
     padding: Spacing.md,
     gap: Spacing.md,
   },
-  targetIcon: { fontSize: 32 },
+  targetIcon: { width: 32, textAlign: 'center' },
   targetInfo: { flex: 1 },
   targetTitle: { fontSize: 16, fontWeight: '700', color: Colors.textPrimary },
   targetSubtitle: { fontSize: 13, color: Colors.textSecondary, marginTop: 2 },
-  streakCard: {
-    backgroundColor: Colors.surface,
-    borderRadius: Radii.lg,
-    paddingVertical: Spacing.xl,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: Colors.coral,
-  },
-  streakNumber: {
-    fontSize: 48,
-    fontWeight: '800',
-    color: Colors.coral,
-    fontVariant: ['tabular-nums'],
-  },
-  streakLabel: {
-    fontSize: 15,
-    fontWeight: '600',
+  nextUp: {
+    fontSize: 13,
     color: Colors.textSecondary,
-    marginTop: 4,
+    textAlign: 'center',
+    lineHeight: 19,
+    paddingHorizontal: Spacing.md,
   },
   sectionTitle: {
     fontSize: 16,
@@ -159,10 +123,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: Colors.success,
   },
-  milestoneIcon: { fontSize: 24, width: 32, textAlign: 'center' },
+  milestoneIcon: { width: 32, textAlign: 'center' },
   milestoneInfo: { flex: 1 },
   milestoneLabel: { fontSize: 15, fontWeight: '600', color: Colors.textPrimary },
   milestoneCount: { fontSize: 12, color: Colors.textTertiary, marginTop: 1 },
   milestoneDim: { opacity: 0.35 },
-  milestoneCheck: { fontSize: 18, color: Colors.success, fontWeight: '700' },
 });

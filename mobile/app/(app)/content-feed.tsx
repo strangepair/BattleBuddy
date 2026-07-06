@@ -53,7 +53,7 @@ export default function ContentFeedScreen() {
   }, []);
 
   const handleOpenChat = useCallback(() => {
-    router.push('/(app)/session-chat');
+    router.push('/session-chat');
   }, []);
 
   const goHome = useCallback(() => router.replace('/(app)/'), []);

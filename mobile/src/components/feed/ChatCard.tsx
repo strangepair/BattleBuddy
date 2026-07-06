@@ -1,4 +1,5 @@
 import { View, Text, StyleSheet, Dimensions, TouchableOpacity } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -10,7 +11,7 @@ export default function ChatCard({ onOpenChat }: ChatCardProps) {
   return (
     <View style={styles.container}>
       <View style={styles.content}>
-        <Text style={styles.emoji}>💬</Text>
+        <Ionicons name="chatbubbles-outline" size={44} color="rgba(255,255,255,0.85)" style={styles.emoji} />
         <Text style={styles.heading}>Want to talk it through?</Text>
         <Text style={styles.subtext}>
           Your buddy is here to listen and help you work through the urge.

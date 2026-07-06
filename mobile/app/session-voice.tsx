@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, useWindowDimensions } from 'r
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import Animated, {
   Easing,
@@ -203,7 +204,7 @@ export default function SessionVoiceScreen() {
   const handleSwitchToText = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     switchMode('text');
-    router.replace('/(app)/session-chat');
+    router.replace('/session-chat');
   }, [switchMode]);
 
   const handleOutcomeComplete = useCallback(
@@ -274,7 +275,7 @@ export default function SessionVoiceScreen() {
             activeOpacity={0.7}
           >
             <View style={styles.controlCircle}>
-              <Text style={styles.controlIcon}>💬</Text>
+              <Ionicons name="chatbubble-outline" size={22} color={Colors.textPrimary} />
             </View>
             <Text style={styles.controlLabel}>Text</Text>
           </TouchableOpacity>
@@ -286,7 +287,7 @@ export default function SessionVoiceScreen() {
             activeOpacity={0.7}
           >
             <View style={styles.endCallCircle}>
-              <Text style={styles.endCallIcon}>📞</Text>
+              <Ionicons name="call" size={26} color="#fff" style={styles.endCallIcon} />
             </View>
             <Text style={styles.controlLabel}>End</Text>
           </TouchableOpacity>
@@ -298,7 +299,7 @@ export default function SessionVoiceScreen() {
             activeOpacity={0.7}
           >
             <View style={[styles.controlCircle, muted && styles.controlMuted]}>
-              <Text style={styles.controlIcon}>{muted ? '🔇' : '🎤'}</Text>
+              <Ionicons name={muted ? 'mic-off' : 'mic-outline'} size={22} color={Colors.textPrimary} />
             </View>
             <Text style={styles.controlLabel}>{muted ? 'Unmute' : 'Mute'}</Text>
           </TouchableOpacity>

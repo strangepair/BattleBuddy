@@ -233,7 +233,9 @@ export default function ChatBottomSheet({ open, onClose, onSwitchToVoice }: Chat
 const styles = StyleSheet.create({
   overlay: {
     ...StyleSheet.absoluteFill,
-    backgroundColor: Colors.background,
+    // Translucent so the screen's ambient entity breathes through behind the
+    // conversation — same organism as the hub, dimmed under the messages.
+    backgroundColor: 'rgba(10,10,12,0.86)',
     zIndex: 20,
   },
   container: {

@@ -1,5 +1,7 @@
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
+import { Colors } from '../../theme';
 
 interface CardOverlayProps {
   text?: string;
@@ -28,7 +30,12 @@ export default function CardOverlay({ text, onHelpedTap, helped }: CardOverlayPr
           onPress={onHelpedTap}
           activeOpacity={0.7}
         >
-          <Text style={styles.helpedIcon}>{helped ? '❤️' : '🤍'}</Text>
+          <Ionicons
+            name={helped ? 'heart' : 'heart-outline'}
+            size={22}
+            color={helped ? Colors.coral : 'rgba(255,255,255,0.9)'}
+            style={styles.helpedIcon}
+          />
           <Text style={[styles.helpedLabel, helped && styles.helpedLabelActive]}>
             {helped ? 'Helped' : 'This helped'}
           </Text>

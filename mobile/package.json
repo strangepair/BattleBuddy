@@ -28,6 +28,7 @@
     "expo-speech": "^56.0.3",
     "expo-sqlite": "~56.0.5",
     "expo-status-bar": "~56.0.4",
+    "expo-updates": "~56.0.21",
     "expo-video": "^56.1.4",
     "livekit-client": "^2.19.2",
     "react": "19.2.3",

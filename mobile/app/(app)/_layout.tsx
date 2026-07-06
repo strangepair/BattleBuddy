@@ -131,22 +131,22 @@ export default function AppLayout() {
     closeDrawer();
     switch (key) {
       case 'history':
-        router.push('/(app)/history');
+        router.push('/history');
         break;
       case 'analytics':
-        router.push('/(app)/analytics');
+        router.push('/analytics');
         break;
       case 'goals':
-        router.push('/(app)/goals');
+        router.push('/goals');
         break;
       case 'routines':
-        router.push('/(app)/routines');
+        router.push('/routines');
         break;
       case 'preferences':
-        router.push('/(app)/preferences');
+        router.push('/preferences');
         break;
       case 'insights':
-        router.push('/(app)/insights');
+        router.push('/insights');
         break;
     }
   }, [closeDrawer]);
