@@ -11,7 +11,7 @@
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import Anthropic from '@anthropic-ai/sdk';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -193,10 +193,37 @@ Propose specific updates to agent.md. For each proposal, include:
 
 // ── Auto-apply HIGH confidence proposals to system prompt ─────────────────────
 
+// Markers that MUST survive every rewrite. A full-file "return the complete
+// updated prompt" rewrite can silently drop content if the model runs out of
+// output tokens mid-generation — the response is truncated wherever
+// generation happened to be, with no error raised. This bit us twice
+// (2026-07-03 and 2026-07-04): the {{placeholder}} runtime-context block,
+// the Hard limits section, and the 988 crisis off-ramp all disappeared from
+// the tail of the file because the rewrite ran out of budget before reaching
+// them. Checking stop_reason plus a content-marker sanity check is the only
+// way to catch this — the model's own "never remove X" instruction is not
+// self-enforcing.
+const REQUIRED_MARKERS = [
+  '{{current_goal}}', '{{profile}}', '{{life_architecture}}',
+  '{{trigger_context}}', '{{relevant_memories}}', '{{recent_history}}',
+  '{{session_context}}', '988', '## Hard limits',
+];
+
+function findMissingMarkers(content) {
+  return REQUIRED_MARKERS.filter(marker => !content.includes(marker));
+}
+
 async function applyProposalsToSystemPrompt(proposalText, currentSystemPrompt) {
+  // Generous headroom over the current prompt size: a full rewrite has to
+  // reproduce the entire existing file PLUS whatever new content the
+  // proposals add, so max_tokens must comfortably exceed the input size,
+  // not just the size of the expected diff.
+  const estimatedInputTokens = Math.ceil(currentSystemPrompt.length / 4);
+  const maxTokens = Math.min(16384, Math.max(8192, estimatedInputTokens + 4096));
+
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 8192,
+    max_tokens: maxTokens,
     system: `You are applying approved changes to a live AI system prompt. You will receive:
 1. A set of proposals labeled HIGH / MEDIUM / LOW confidence
 2. The current system prompt
@@ -223,7 +250,23 @@ Return the complete updated system prompt with all HIGH confidence proposals app
     }],
   });
 
-  return response.content[0].text;
+  const text = response.content[0].text;
+
+  if (response.stop_reason === 'max_tokens') {
+    throw new Error(
+      `Rewrite hit max_tokens (${maxTokens}) and was truncated mid-generation — refusing to apply. ` +
+      `Raise maxTokens or shrink the prompt before re-running.`
+    );
+  }
+
+  const missing = findMissingMarkers(text);
+  if (missing.length > 0) {
+    throw new Error(
+      `Rewrite is missing required markers, refusing to apply: ${missing.join(', ')}`
+    );
+  }
+
+  return text;
 }
 
 // ── Summarize what was actually applied ───────────────────────────────────────
@@ -307,7 +350,14 @@ function commitAndPush(appliedSummary) {
     const repoRoot = resolve(__dirname, '..');
     execSync('git add server/prompts/system.battlebuddy.md server/prompts/backups/', { cwd: repoRoot });
     const msg = `fix: agent design loop auto-applied HIGH confidence proposals\n\n${appliedSummary}\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>`;
-    execSync(`git commit -m ${JSON.stringify(msg)}`, { cwd: repoRoot });
+    // execFileSync passes `msg` as a single argv entry with no shell in
+    // between, so real newlines survive intact. The previous version ran
+    // this through execSync(`git commit -m ${JSON.stringify(msg)}`), which
+    // handed the whole thing to `/bin/sh -c`; JSON.stringify re-escapes real
+    // newlines as literal two-character "\n", and double-quoted shell args
+    // don't interpret that as an escape — so commit messages landed as one
+    // giant subject line with visible "\n" text instead of real paragraphs.
+    execFileSync('git', ['commit', '-m', msg], { cwd: repoRoot });
     execSync('git push origin main', { cwd: repoRoot });
     console.log('[DesignLoop] Committed and pushed updated system prompt');
   } catch (e) {
