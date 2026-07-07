@@ -1,74 +1,62 @@
 import { useState, useEffect } from 'react';
 import { View, Text, ScrollView, StyleSheet, ActivityIndicator } from 'react-native';
-import type { ComponentProps } from 'react';
-import { Ionicons } from '@expo/vector-icons';
 import ScreenWithEntity from '../../src/components/common/ScreenWithEntity';
-import EmptyState from '../../src/components/common/EmptyState';
-import StatHero from '../../src/components/common/StatHero';
+import ArcChart from '../../src/components/journey/ArcChart';
+import HoursHeatmap from '../../src/components/journey/HoursHeatmap';
+import WhatWorksList from '../../src/components/journey/WhatWorksList';
+import IndependenceTrend from '../../src/components/journey/IndependenceTrend';
+import InsightCards from '../../src/components/journey/InsightCards';
 import { useAuthStore } from '../../src/stores/authStore';
-import { fetchSessionStats, type SessionStats } from '../../src/services/sessionStats';
-import { fetchUserProfile, type UserProfile } from '../../src/services/profileBuilder';
-import { Colors, Spacing, Radii, Typography } from '../../src/theme';
+import { fetchJourney, fetchInsights, type JourneyData, type Insight } from '../../src/services/statsService';
+import { Colors, Spacing } from '../../src/theme';
 
-export default function AnalyticsScreen() {
+// BB's memory made visible — recognition and meaning, never a clinical
+// readout (doc 08 §5). Replaces the old three-number analytics screen.
+export default function JourneyScreen() {
   const userId = useAuthStore((s) => s.user?.id);
-  const [stats, setStats] = useState<SessionStats | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [journey, setJourney] = useState<JourneyData | null>(null);
+  const [insights, setInsights] = useState<Insight[]>([]);
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([fetchSessionStats(userId ?? null), fetchUserProfile(userId ?? null)])
-      .then(([s, p]) => {
+    Promise.all([fetchJourney(userId ?? null), fetchInsights(userId ?? null)])
+      .then(([j, i]) => {
         if (cancelled) return;
-        setStats(s);
-        setProfile(p);
+        setJourney(j);
+        setInsights(i);
       })
-      .finally(() => { if (!cancelled) setLoading(false); });
+      .catch(() => {});
     return () => { cancelled = true; };
   }, [userId]);
 
   return (
-    <ScreenWithEntity title="Analytics">
-      {loading ? (
+    <ScreenWithEntity title="Journey">
+      {!journey ? (
         <View style={styles.center}>
           <ActivityIndicator color={Colors.coral} />
         </View>
-      ) : !stats || stats.totalSessions === 0 ? (
-        <EmptyState
-          icon="pulse-outline"
-          title="Your first resist starts the story"
-          body="Talk to Buddy through one urge and this screen starts mapping your patterns — when you're strongest, what works, how the streaks build."
-        />
       ) : (
         <ScrollView contentContainerStyle={styles.scroll}>
-          <StatHero value={stats.streak} label="resist in a row" pluralLabel="resists in a row" />
+          <Text style={styles.sectionTitle}>The Arc</Text>
+          <Text style={styles.sectionSub}>Is it working? One glance.</Text>
+          <ArcChart arc={journey.arc} />
 
-          <View style={styles.statsRow}>
-            <StatCard label="Sessions" value={String(stats.totalSessions)} />
-            <StatCard
-              label="Resist rate"
-              value={`${stats.resistRate}%`}
-              color={stats.resistRate >= 60 ? Colors.success : Colors.warning}
-            />
-          </View>
+          <Text style={styles.sectionTitle}>Your Hours</Text>
+          <Text style={styles.sectionSub}>This is what BB watches for you.</Text>
+          <HoursHeatmap data={journey.heatmap} />
 
-          <Text style={styles.sectionTitle}>What works for you</Text>
+          <Text style={styles.sectionTitle}>What Works for You</Text>
+          <WhatWorksList items={journey.whatWorks} />
 
-          {profile?.preferredFraming && (
-            <InsightRow icon="locate-outline" text={`You respond best to ${profile.preferredFraming} framing`} />
-          )}
-          {profile?.hardestTime && (
-            <InsightRow icon="alarm-outline" text={`Toughest time: around ${profile.hardestTime}`} />
-          )}
-          {stats.preferredMode && (
-            <InsightRow
-              icon={stats.preferredMode === 'voice' ? 'mic-outline' : 'chatbubble-outline'}
-              text={`You prefer ${stats.preferredMode} mode`}
-            />
-          )}
-          {!profile?.preferredFraming && !profile?.hardestTime && !stats.preferredMode && (
-            <InsightRow icon="trending-up-outline" text="Patterns are forming — a few more sessions and they'll surface here" />
+          <Text style={styles.sectionTitle}>Independence Trend</Text>
+          <Text style={styles.sectionSub}>More and more, you&apos;re catching it yourself.</Text>
+          <IndependenceTrend weeks={journey.independence} />
+
+          {insights.length > 0 && (
+            <>
+              <Text style={styles.sectionTitle}>Insights</Text>
+              <InsightCards insights={insights} />
+            </>
           )}
         </ScrollView>
       )}
@@ -76,78 +64,22 @@ export default function AnalyticsScreen() {
   );
 }
 
-function StatCard({ label, value, color }: { label: string; value: string; color?: string }) {
-  return (
-    <View style={styles.statCard}>
-      <Text style={[styles.statValue, color ? { color } : null]}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
-    </View>
-  );
-}
-
-function InsightRow({ icon, text }: { icon: ComponentProps<typeof Ionicons>['name']; text: string }) {
-  return (
-    <View style={styles.insightRow}>
-      <Ionicons name={icon} size={20} color={Colors.textSecondary} style={styles.insightIcon} />
-      <Text style={styles.insightText}>{text}</Text>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
-  center: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   scroll: {
     padding: Spacing.md,
     gap: Spacing.md,
-  },
-  statsRow: {
-    flexDirection: 'row',
-    gap: Spacing.md,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: Colors.surface,
-    borderRadius: Radii.md,
-    paddingVertical: Spacing.lg,
-    alignItems: 'center',
-  },
-  statValue: {
-    ...Typography.statValue,
-    fontVariant: ['tabular-nums'],
-  },
-  statLabel: {
-    fontSize: 13,
-    color: Colors.textSecondary,
-    marginTop: 4,
+    paddingBottom: Spacing.xxl,
   },
   sectionTitle: {
-    fontSize: 16,
-    fontWeight: '700',
+    fontSize: 20,
+    fontWeight: '800',
     color: Colors.textPrimary,
     marginTop: Spacing.sm,
-    marginBottom: Spacing.xs,
   },
-  insightRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.surface,
-    borderRadius: Radii.md,
-    paddingVertical: 14,
-    paddingHorizontal: Spacing.md,
-    gap: Spacing.md,
-  },
-  insightIcon: {
-    width: 28,
-    textAlign: 'center',
-  },
-  insightText: {
-    flex: 1,
+  sectionSub: {
     fontSize: 14,
-    color: Colors.textPrimary,
-    lineHeight: 20,
+    color: Colors.textTertiary,
+    marginTop: -8,
   },
 });
