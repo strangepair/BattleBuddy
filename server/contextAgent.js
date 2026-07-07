@@ -553,6 +553,111 @@ function relativeTime(isoString) {
 }
 
 /**
+ * Rank coping strategies by observed efficacy — count of logged resists dated
+ * on/after each strategy's captured_at (day granularity; captured_at is UTC
+ * and activity_log dates are local, so this is a rough ranking signal, not a
+ * precise causal link — bb_events doesn't yet tag which strategy a given
+ * resist used).
+ */
+export function rankCopingStrategies(profile, limit = 5) {
+  const strategies = profile.coping_strategies || [];
+  if (strategies.length === 0) return null;
+
+  const resists = (profile.activity_log || []).filter(ev => ev.type === 'resist');
+
+  const ranked = strategies.map(item => {
+    const val = itemValue(item);
+    const capturedDate = item?.captured_at ? item.captured_at.slice(0, 10) : null;
+    const efficacyCount = capturedDate ? resists.filter(r => (r.date || '') >= capturedDate).length : 0;
+    return { val, capturedAt: item?.captured_at || '', efficacyCount };
+  }).filter(i => i.val);
+
+  ranked.sort((a, b) => b.efficacyCount - a.efficacyCount || b.capturedAt.localeCompare(a.capturedAt));
+
+  const formatted = ranked.slice(0, limit).map(i =>
+    i.efficacyCount > 0 ? `${i.val} (${i.efficacyCount} resists since)` : `${i.val} (not enough data yet)`
+  );
+
+  return `Coping strategies (ranked by observed effectiveness): ${formatted.join('; ')}.`;
+}
+
+/**
+ * Does the user's current local time fall inside one of their documented
+ * risk_windows? Returns the highest-weighted match, or null.
+ */
+export function findActiveRiskWindow(rawUserId, timezone = 'America/Chicago') {
+  const userId = resolveUserId(rawUserId);
+  const p = loadProfile(userId);
+  if (!p.risk_windows || p.risk_windows.length === 0) return null;
+
+  let hour, dow;
+  try {
+    const now = new Date();
+    hour = parseInt(new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone, hour: 'numeric', hour12: false,
+    }).format(now), 10) % 24;
+    const weekdayName = new Intl.DateTimeFormat('en-US', { timeZone: timezone, weekday: 'long' }).format(now);
+    dow = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].indexOf(weekdayName);
+  } catch {
+    return null;
+  }
+
+  const matches = p.risk_windows.filter(rw =>
+    rw.hour === hour && (rw.day_of_week === null || rw.day_of_week === undefined || rw.day_of_week === dow)
+  );
+  if (matches.length === 0) return null;
+
+  matches.sort((a, b) => (b.weight || 0) - (a.weight || 0));
+  return matches[0];
+}
+
+/**
+ * Classify the user's current position on the resistance arc from recent
+ * logged activity. Distinct from buildCurrentGoal's own contemplation /
+ * autopilot / active-resistance phase (which drives conversational stance) —
+ * this reuses batchProfiler.js's three-value taxonomy so the two systems
+ * speak the same language once the batch layer is wired to live data.
+ *
+ * Thresholds (3+ consecutive smokes = "relapse", resists > smokes = "active
+ * resistance", otherwise "tapering") are a starting judgment call, not a
+ * clinical standard — tune freely as real usage data comes in.
+ */
+export function computeJourneyPhase(rawUserId) {
+  const userId = resolveUserId(rawUserId);
+  const p = loadProfile(userId);
+  const recent = (p.activity_log || []).filter(ev => ev.type === 'smoke' || ev.type === 'resist').slice(-14);
+
+  if (recent.length === 0) {
+    return { phase: 'tapering', reasoning: 'Not enough logged activity yet to classify.' };
+  }
+
+  let trailingSmokeRun = 0;
+  for (let i = recent.length - 1; i >= 0; i--) {
+    if (recent[i].type === 'smoke') trailingSmokeRun++;
+    else break;
+  }
+  const resists = recent.filter(e => e.type === 'resist').length;
+  const smokes = recent.filter(e => e.type === 'smoke').length;
+
+  if (trailingSmokeRun >= 3) {
+    return {
+      phase: 'relapse',
+      reasoning: `${trailingSmokeRun} consecutive smokes logged with no resist between them.`,
+    };
+  }
+  if (resists > smokes) {
+    return {
+      phase: 'active_resistance',
+      reasoning: `${resists} resists vs ${smokes} smokes in the last ${recent.length} logged events.`,
+    };
+  }
+  return {
+    phase: 'tapering',
+    reasoning: `${smokes} smokes vs ${resists} resists in the last ${recent.length} logged events.`,
+  };
+}
+
+/**
  * Build a natural language summary from the structured profile.
  * This is what the real-time agent reads in {{profile}}.
  */
@@ -599,7 +704,9 @@ export function buildProfileSummary(rawUserId) {
   formatArray("What doesn't work", p.what_doesnt_work, 3);
   formatArray('Motivations', p.motivations, 5);
   formatArray('Life context', p.life_context, 5);
-  formatArray('Coping strategies', p.coping_strategies, 5);
+
+  const rankedCoping = rankCopingStrategies(p, 5);
+  if (rankedCoping) parts.push(rankedCoping);
 
   if (p.preferred_coping_style) parts.push(`Preferred coping: ${p.preferred_coping_style}.`);
   if (p.response_preference) parts.push(`Prefers: ${p.response_preference}.`);
@@ -883,10 +990,19 @@ export function buildCurrentGoal(rawUserId) {
     'active-resistance': 'ACTIVE RESISTANCE — they are choosing differently right now. Be present. Celebrate without making it precious.',
   }[phase] || 'AUTOPILOT';
 
+  const journey = computeJourneyPhase(userId);
+  const journeyGuidance = {
+    active_resistance: 'They are actively choosing differently right now. Be present, celebrate without making it precious.',
+    tapering: 'Reducing but not yet mostly resisting — real progress. Reflect the trend, not a verdict.',
+    relapse: 'A sustained non-resisting stretch. No judgment, no urgency to fix it — stay present and keep gathering what their life looks like right now.',
+  }[journey.phase];
+
   const lines = [
     'GOAL: Build a living map of this person — not to push them toward quitting, but so you can reflect their own pattern back to them accurately, compassionately, and at the right moment.',
     '',
     `CURRENT PHASE: ${phaseLabel}`,
+    '',
+    `JOURNEY PHASE (internal tone guide — never say this label or the word "phase" to the user): ${journey.phase} — ${journey.reasoning} ${journeyGuidance}`,
     '',
   ];
 

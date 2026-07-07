@@ -15,7 +15,7 @@ import { createClient } from '@supabase/supabase-js';
 import WebSocket from 'ws';
 import { AccessToken } from 'livekit-server-sdk';
 import { sendPush, isQuietHours, pickNudgeMessage } from './notifications.js';
-import { analyzeAndUpdate, buildProfileSummary, buildLifeArchitectureSummary, buildCurrentGoal, computeUsageStats, lookupProfileField, loadProfile, seedProfile, mergeProfiles, resolveUserId, saveRawTranscript, appendTranscriptMessages, replaceProfile, persistProfile } from './contextAgent.js';
+import { analyzeAndUpdate, buildProfileSummary, buildLifeArchitectureSummary, buildCurrentGoal, computeUsageStats, lookupProfileField, loadProfile, seedProfile, mergeProfiles, resolveUserId, saveRawTranscript, appendTranscriptMessages, replaceProfile, persistProfile, findActiveRiskWindow } from './contextAgent.js';
 import { embedAndStore, retrieveRelevant, isConfigured as isVectorConfigured } from './vectorStore.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -353,6 +353,50 @@ async function buildUsageSummary(userId, timezone = DEFAULT_TZ) {
     result.event_log = { unavailable: true, error: e.message };
   }
   return result;
+}
+
+const EVENT_LABELS = {
+  cigarette: 'cigarette',
+  urge: 'urge',
+  urge_resisted: 'resisted urge',
+  urge_gave_in: 'cigarette',
+  decision: 'decision to smoke',
+  milestone: 'milestone',
+};
+
+/**
+ * Compute the "last-event awareness" line injected into trigger_context:
+ * how long since the user's last logged event, plus whether the current
+ * moment falls inside a documented risk window. Deterministic, no LLM call —
+ * this must stay on the fast path ahead of every generation.
+ */
+async function buildLastEventAwareness(rawUserId, timezone = DEFAULT_TZ) {
+  const userId = resolveUserId(rawUserId);
+  const parts = [];
+
+  try {
+    const [lastEvent] = await queryEvents(userId, { limit: 1, timezone });
+    if (lastEvent) {
+      const minutesSince = Math.round((Date.now() - new Date(lastEvent.occurred_at).getTime()) / 60000);
+      const label = EVENT_LABELS[lastEvent.event_type] || lastEvent.event_type;
+      const when = minutesSince < 60 ? `${minutesSince} minutes` : `${Math.round(minutesSince / 60)} hours`;
+      parts.push(`It's been ${when} since his last ${label}.`);
+    }
+  } catch {}
+
+  try {
+    const window = findActiveRiskWindow(userId, timezone);
+    if (window) {
+      const clock = new Intl.DateTimeFormat('en-US', {
+        timeZone: timezone, hour: 'numeric', minute: '2-digit', hour12: true,
+      }).format(new Date()).toLowerCase().replace(/\s/g, '');
+      const pct = Math.round((window.weight || 0.5) * 100);
+      const reason = window.source ? ` — reason: '${window.source}'` : '';
+      parts.push(`Current time (${clock}) is inside a documented risk window (${pct}% confidence)${reason}.`);
+    }
+  } catch {}
+
+  return parts.length > 0 ? parts.join(' ') : null;
 }
 
 /**
@@ -742,10 +786,11 @@ const server = createServer(async (req, res) => {
       // so retrieval can never delay the first token past budget).
       const lastUserMessage = [...(messages || [])].reverse().find(m => m.role === 'user')?.content || '';
       const relevantMemories = await fetchRelevantMemories(resolveUserId(effectiveUserId), lastUserMessage);
+      const lastEventAwareness = await buildLastEventAwareness(effectiveUserId, timezone);
 
       const systemPrompt = buildSystemPrompt(
         finalProfile,
-        trigger_context ? JSON.stringify(trigger_context) : undefined,
+        [trigger_context ? JSON.stringify(trigger_context) : null, lastEventAwareness].filter(Boolean).join(' ') || undefined,
         recent_history || messages?.slice(-6).map(m => `${m.role}: ${m.content}`).join('\n'),
         timezone,
         lifeArchitecture,
@@ -829,10 +874,11 @@ const server = createServer(async (req, res) => {
       const currentGoal = buildCurrentGoal(effectiveUserId);
       const agentProfile = loadProfile(effectiveUserId);
       const sessionContext = buildSessionContext(agentProfile);
+      const lastEventAwareness = await buildLastEventAwareness(effectiveUserId, timezone);
 
       const voiceSystemPrompt = buildSystemPrompt(
         finalProfile,
-        triggerContext ? JSON.stringify(triggerContext) : undefined,
+        [triggerContext ? JSON.stringify(triggerContext) : null, lastEventAwareness].filter(Boolean).join(' ') || undefined,
         priorMessages || recentHistory || undefined,
         timezone,
         lifeArchitecture,
