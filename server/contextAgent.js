@@ -61,6 +61,8 @@ const LIFE_ARCH_ARRAYS = [
   'social_contexts',
 ];
 
+const SCHEDULE_MODEL_ARRAYS = ['routine_blocks', 'vulnerability_windows', 'life_change_watch'];
+
 // Map of user ID aliases — redirects old IDs to the canonical one
 export const USER_ALIASES = {
   'default': 'user-1782351957094',
@@ -184,6 +186,15 @@ function migrateProfile(profile) {
   for (const field of LIFE_ARCH_ARRAYS) {
     if (!Array.isArray(profile.life_architecture[field])) {
       profile.life_architecture[field] = [];
+    }
+  }
+  // Ensure schedule_model exists
+  if (!profile.schedule_model || typeof profile.schedule_model !== 'object') {
+    profile.schedule_model = { routine_blocks: [], vulnerability_windows: [], life_change_watch: [] };
+  }
+  for (const field of SCHEDULE_MODEL_ARRAYS) {
+    if (!Array.isArray(profile.schedule_model[field])) {
+      profile.schedule_model[field] = [];
     }
   }
   return profile;
@@ -332,6 +343,15 @@ function pruneProfile(profile) {
     }
   }
 
+  // Cap schedule_model arrays at 15
+  if (profile.schedule_model) {
+    for (const field of SCHEDULE_MODEL_ARRAYS) {
+      if (Array.isArray(profile.schedule_model[field]) && profile.schedule_model[field].length > 15) {
+        profile.schedule_model[field] = profile.schedule_model[field].slice(-15);
+      }
+    }
+  }
+
   // Session history: keep gap/boundary entries + last 30 individual sessions.
   // Older individual sessions get compressed to one-liners.
   if (profile.session_history && profile.session_history.length > 40) {
@@ -433,6 +453,11 @@ export function loadProfile(rawUserId) {
       urge_model: null,
       resistance_strategies: [],
       social_contexts: [],
+    },
+    schedule_model: {
+      routine_blocks: [],
+      vulnerability_windows: [],
+      life_change_watch: [],
     },
   };
   return profiles[userId];
@@ -740,6 +765,16 @@ export function buildProfileSummary(rawUserId) {
         return `${day}${h} (${Math.round((rw.weight || 0.5) * 100)}% — ${rw.source || 'observed'})`;
       });
     parts.push(`VULNERABILITY WINDOWS (times this user is most at risk): ${windows.join('; ')}.`);
+  }
+
+  if (p.schedule_model?.routine_blocks?.length > 0) {
+    const blocks = p.schedule_model.routine_blocks.map(b => `${b.label}${b.protects ? ' (protective)' : ' (risk)'}`);
+    parts.push(`Daily routine: ${blocks.join('; ')}.`);
+  }
+
+  if (p.schedule_model?.life_change_watch?.length > 0) {
+    const watch = p.schedule_model.life_change_watch.map(w => typeof w === 'string' ? w : (w.note || JSON.stringify(w)));
+    parts.push(`Life changes to watch: ${watch.join('; ')}.`);
   }
 
   // The chronological activity timeline — BB can recite this back precisely
@@ -1121,6 +1156,51 @@ export function lookupProfileField(rawUserId, field) {
   return null;
 }
 
+/** Map a schedule_model day_pattern to the risk_windows day_of_week values it covers. */
+function dayPatternToDaysOfWeek(pattern) {
+  const p = (pattern || '').toLowerCase();
+  const names = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  const idx = names.indexOf(p);
+  if (idx !== -1) return [idx];
+  if (p === 'weekdays') return [1, 2, 3, 4, 5];
+  if (p === 'weekends') return [0, 6];
+  return [null]; // daily / unspecified — applies every day
+}
+
+/**
+ * Keep risk_windows in sync with schedule_model.vulnerability_windows, per
+ * the product requirement that the two never drift apart. vulnerability_windows
+ * carries the richer provenance (day_pattern, confidence, source_session);
+ * risk_windows is the flat hour/day_of_week shape the rest of the system
+ * (findActiveRiskWindow, buildProfileSummary) already reads.
+ */
+function syncVulnerabilityWindowsToRiskWindows(profile, sessionTimestamp) {
+  const vws = profile.schedule_model?.vulnerability_windows || [];
+  if (vws.length === 0) return;
+  if (!Array.isArray(profile.risk_windows)) profile.risk_windows = [];
+
+  for (const vw of vws) {
+    const m = (vw.time || '').match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) continue;
+    const hour = parseInt(m[1], 10);
+    const weight = vw.confidence === 'confirmed' ? 0.8 : 0.5;
+
+    for (const dow of dayPatternToDaysOfWeek(vw.day_pattern)) {
+      const existing = profile.risk_windows.find(rw => rw.hour === hour && rw.day_of_week === dow);
+      if (existing) {
+        existing.weight = Math.max(existing.weight || 0, weight);
+        if (vw.reason) existing.source = vw.reason;
+        existing.updated_at = sessionTimestamp;
+      } else {
+        profile.risk_windows.push({
+          hour, day_of_week: dow, weight, source: vw.reason || '',
+          captured_at: sessionTimestamp, updated_at: sessionTimestamp,
+        });
+      }
+    }
+  }
+}
+
 /**
  * Analyze a batch of messages and update the user's profile.
  * Called asynchronously — never blocks the real-time conversation.
@@ -1238,6 +1318,13 @@ TIME-OF-DAY PATTERNS — RISK WINDOWS:
 - hour: 0-23 (24h format). day_of_week: 0=Sunday through 6=Saturday, or null if not day-specific.
 - weight: 0.0-1.0 (how strong the signal is)
 
+SCHEDULE MODEL — the user's structure, from conversation, not questionnaires:
+Extract into a "schedule_model" object when the user describes their routine, structure, or vulnerability. Only extract what's actually said — don't infer a routine block or vulnerability window from a single passing mention.
+- routine_blocks: daily/weekly routines that PROTECT from risk or increase it → { "label": "work 9-12", "protects": true, "confidence": "confirmed" }. Set "protects": false for a routine that increases risk instead.
+- vulnerability_windows: times of day/week that are hard, with WHY → { "time": "17:00", "day_pattern": "weekdays", "reason": "patch comes off, resistance drops", "confidence": "confirmed" }. time is 24h "HH:MM". day_pattern is one of: daily, weekdays, weekends, or a specific day name (e.g. "monday"). Always include a reason — a window without a reason isn't useful.
+- life_change_watch: new stressors, job changes, travel, or life events that could shift risk → { "note": "started new job", "confidence": "confirmed" }
+- confidence is "confirmed" (the user stated it plainly) or "tentative" (inferred from context, said once, or hedged).
+
 ACTIVITY LOG — THE CHRONOLOGICAL TIMELINE (CRITICAL):
 Every concrete activity, event, cigarette, resist, meal, gym session, work block, or mood the user reports must be captured as an activity_log entry.
 - Format: { "time": "6:35 AM", "date": "${localDate}", "event": "had first cigarette of the day", "type": "smoke", "verified": true }
@@ -1259,6 +1346,7 @@ user_quotes (array), unknowns (array), resolved_unknowns (array),
 risk_windows (array of objects),
 activity_log (array of objects with verified flag),
 life_architecture (object with: trigger_taxonomy, flow_state_activities, physical_risk_spaces, oral_habit_pairs, urge_model, resistance_strategies, social_contexts, transition_patterns),
+schedule_model (object with: routine_blocks, vulnerability_windows, life_change_watch — see SCHEDULE MODEL section above),
 session_summary (object — ONLY at session end: { date, time, summary, key_moments, mood })
 
 Return ONLY valid JSON. No markdown, no explanation.`;
@@ -1284,7 +1372,7 @@ Return ONLY valid JSON. No markdown, no explanation.`;
     for (const [key, value] of Object.entries(updates)) {
       if (value === null || value === undefined) continue;
       if (key === 'resolved_unknowns') continue;
-      if (key === 'risk_windows' || key === 'activity_log' || key === 'life_architecture' || key === 'session_summary') continue; // handled separately below
+      if (key === 'risk_windows' || key === 'activity_log' || key === 'life_architecture' || key === 'schedule_model' || key === 'session_summary') continue; // handled separately below
 
       if (TIMESTAMPED_ARRAYS.includes(key) && Array.isArray(value)) {
         if (!Array.isArray(profile[key])) profile[key] = [];
@@ -1394,6 +1482,68 @@ Return ONLY valid JSON. No markdown, no explanation.`;
           }
         }
       }
+    }
+
+    // Handle schedule_model — merge discovered routine/vulnerability/life-change
+    // entries, then keep risk_windows in sync with vulnerability_windows.
+    if (updates.schedule_model && typeof updates.schedule_model === 'object') {
+      if (!profile.schedule_model) {
+        profile.schedule_model = { routine_blocks: [], vulnerability_windows: [], life_change_watch: [] };
+      }
+      const sm = updates.schedule_model;
+      // source_session is assigned here, not trusted from the LLM, to avoid a hallucinated id.
+      const sourceSession = `session-${profile.session_count || 0}`;
+
+      if (Array.isArray(sm.routine_blocks)) {
+        for (const rb of sm.routine_blocks) {
+          if (!rb?.label) continue;
+          const exists = profile.schedule_model.routine_blocks.some(e => e.label === rb.label);
+          if (!exists) {
+            profile.schedule_model.routine_blocks.push({
+              label: rb.label,
+              protects: !!rb.protects,
+              source_session: sourceSession,
+              confidence: rb.confidence || 'tentative',
+            });
+          }
+        }
+      }
+
+      if (Array.isArray(sm.vulnerability_windows)) {
+        for (const vw of sm.vulnerability_windows) {
+          if (!vw?.time) continue;
+          const dayPattern = vw.day_pattern || 'daily';
+          const exists = profile.schedule_model.vulnerability_windows.some(
+            e => e.time === vw.time && e.day_pattern === dayPattern
+          );
+          if (!exists) {
+            profile.schedule_model.vulnerability_windows.push({
+              time: vw.time,
+              day_pattern: dayPattern,
+              reason: vw.reason || '',
+              source_session: sourceSession,
+              confidence: vw.confidence || 'tentative',
+            });
+          }
+        }
+      }
+
+      if (Array.isArray(sm.life_change_watch)) {
+        for (const note of sm.life_change_watch) {
+          const noteText = typeof note === 'string' ? note : note?.note;
+          if (!noteText) continue;
+          const exists = profile.schedule_model.life_change_watch.some(e => (e.note || e) === noteText);
+          if (!exists) {
+            profile.schedule_model.life_change_watch.push({
+              note: noteText,
+              source_session: sourceSession,
+              confidence: (typeof note === 'object' && note.confidence) || 'tentative',
+            });
+          }
+        }
+      }
+
+      syncVulnerabilityWindowsToRiskWindows(profile, sessionTimestamp);
     }
 
     // Handle resolved unknowns
@@ -1527,6 +1677,21 @@ export function mergeProfiles(sourceId, targetId) {
           return existStr === itemStr;
         });
         if (!isDup) target.life_architecture[field].push(item);
+      }
+    }
+  }
+
+  // Merge schedule_model
+  if (source.schedule_model) {
+    if (!target.schedule_model) {
+      target.schedule_model = { routine_blocks: [], vulnerability_windows: [], life_change_watch: [] };
+    }
+    for (const field of SCHEDULE_MODEL_ARRAYS) {
+      if (!Array.isArray(target.schedule_model[field])) target.schedule_model[field] = [];
+      for (const item of (source.schedule_model[field] || [])) {
+        const itemStr = JSON.stringify(item);
+        const isDup = target.schedule_model[field].some(existing => JSON.stringify(existing) === itemStr);
+        if (!isDup) target.schedule_model[field].push(item);
       }
     }
   }
