@@ -969,6 +969,90 @@ export function buildLifeArchitectureSummary(rawUserId) {
  * dark on the map, and what insights are queued to surface when the moment is right.
  * Deterministic — no LLM call, always on the fast path.
  */
+/**
+ * An insight is "ready" when there's enough pattern data to name something
+ * the user hasn't named themselves. Shared by buildCurrentGoal (surfaced as
+ * background guidance) and computeEligibleStarters (surfaced as an explicit
+ * "pattern_spotlight" conversation-starter offer).
+ */
+function computeInsightReady(p) {
+  const insightReady = [];
+  const triggers = p.triggers || [];
+  const triggerStr = t => (typeof t === 'string' ? t : (t.value || t.trigger || '')).toLowerCase();
+  const transitionTriggers = triggers.filter(t =>
+    triggerStr(t).includes('transit') || triggerStr(t).includes('exit')
+  );
+  if (transitionTriggers.length >= 2) {
+    insightReady.push('transition-exit trigger cluster — they keep naming the same pattern in different words; it\'s ready to be reflected back');
+  }
+
+  const la2 = p.life_architecture || {};
+  if ((la2.trigger_taxonomy || []).length >= 3 && (la2.flow_state_activities || []).length >= 1) {
+    insightReady.push('flow-state as natural circuit breaker — their absorption activities already create smoke-free windows; name this as progress, not accident');
+  }
+
+  const resistCount = (p.activity_log || []).filter(ev => ev.type === 'resist').length;
+  if (resistCount >= 3) {
+    insightReady.push(`${resistCount} logged resists — they may not be counting these; surfacing this number can shift self-perception`);
+  }
+
+  const sessionCount = p.session_count || 0;
+  if (sessionCount >= 5 && triggers.length >= 5) {
+    insightReady.push('trigger map is rich enough to name a pattern they haven\'t seen: most of their triggers are about transitions and unstructured time, not nicotine itself');
+  }
+
+  return insightReady;
+}
+
+/**
+ * Deterministic, no-LLM-call eligibility check for the conversation-starter
+ * library (server/prompts/conversation-starters.md). Each category fires
+ * only once real data backs it — this must never invite BB to offer a
+ * recap/pattern/etc. it can't actually deliver on.
+ *
+ * Deliberately stateless for v1 (no cross-session cooldown/repetition
+ * tracking) — the system prompt instructs BB to pick at most one eligible
+ * category per session and not repeat one just declined. Add cooldown
+ * bookkeeping later only if repetition turns out to be a real problem.
+ */
+export function computeEligibleStarters(rawUserId) {
+  const userId = resolveUserId(rawUserId);
+  const p = loadProfile(userId);
+  const eligible = [];
+
+  if ((p.session_count || 0) >= 5) {
+    eligible.push({ id: 'full_recap', label: 'Enough history exists for a full journey recap.' });
+  }
+
+  if (computeInsightReady(p).length > 0) {
+    eligible.push({ id: 'pattern_spotlight', label: 'A pattern is confident enough to reflect back.' });
+  }
+
+  const rankedCoping = (p.coping_strategies || []).length > 0 ? rankCopingStrategies(p, 5) : null;
+  if (rankedCoping && /\(\d+ resists since\)/.test(rankedCoping)) {
+    eligible.push({ id: 'whats_working', label: 'At least one coping strategy has observed resists behind it.' });
+  }
+
+  const sm = p.schedule_model || {};
+  if ((sm.vulnerability_windows || []).length >= 1 || (p.risk_windows || []).length >= 2) {
+    eligible.push({ id: 'your_hours', label: 'Risk windows are mapped with enough signal to walk through.' });
+  }
+
+  if ((sm.routine_blocks || []).length >= 1) {
+    eligible.push({ id: 'daily_rhythm', label: 'At least one routine block has been discovered.' });
+  }
+
+  if ((p.session_outcomes || []).length >= 5) {
+    eligible.push({ id: 'progress_check', label: 'Enough session outcomes exist to show the arc, not just today.' });
+  }
+
+  if ((p.unknowns || []).length > 0) {
+    eligible.push({ id: 'open_thread', label: 'At least one open thread was never followed up on.' });
+  }
+
+  return eligible;
+}
+
 export function buildCurrentGoal(rawUserId) {
   const userId = resolveUserId(rawUserId);
   const p = loadProfile(userId);
@@ -1008,32 +1092,7 @@ export function buildCurrentGoal(rawUserId) {
     dark.push('social contexts around use — who are they usually with? what social rituals are tied to it?');
 
   // ── Identify insights ready to surface ──────────────────────────────────
-  // An insight is "ready" when there's enough pattern data to name something
-  // the user hasn't named themselves.
-  const insightReady = [];
-  const triggers = p.triggers || [];
-  const triggerStr = t => (typeof t === 'string' ? t : (t.value || t.trigger || '')).toLowerCase();
-  const transitionTriggers = triggers.filter(t =>
-    triggerStr(t).includes('transit') || triggerStr(t).includes('exit')
-  );
-  if (transitionTriggers.length >= 2) {
-    insightReady.push('transition-exit trigger cluster — they keep naming the same pattern in different words; it\'s ready to be reflected back');
-  }
-
-  const la2 = p.life_architecture || {};
-  if ((la2.trigger_taxonomy || []).length >= 3 && (la2.flow_state_activities || []).length >= 1) {
-    insightReady.push('flow-state as natural circuit breaker — their absorption activities already create smoke-free windows; name this as progress, not accident');
-  }
-
-  const resistCount = (p.activity_log || []).filter(ev => ev.type === 'resist').length;
-  if (resistCount >= 3) {
-    insightReady.push(`${resistCount} logged resists — they may not be counting these; surfacing this number can shift self-perception`);
-  }
-
-  const sessionCount = p.session_count || 0;
-  if (sessionCount >= 5 && triggers.length >= 5) {
-    insightReady.push('trigger map is rich enough to name a pattern they haven\'t seen: most of their triggers are about transitions and unstructured time, not nicotine itself');
-  }
+  const insightReady = computeInsightReady(p);
 
   // ── Assemble the goal block ──────────────────────────────────────────────
   const phaseLabel = {
@@ -1067,6 +1126,13 @@ export function buildCurrentGoal(rawUserId) {
   if (insightReady.length > 0) {
     lines.push('INSIGHTS QUEUED TO SURFACE (when the moment fits naturally):');
     insightReady.forEach(i => lines.push(`  • ${i}`));
+    lines.push('');
+  }
+
+  const eligibleStarters = computeEligibleStarters(userId);
+  if (eligibleStarters.length > 0) {
+    lines.push('ELIGIBLE CONVERSATION STARTERS (see server/prompts/conversation-starters.md for phrasing and what each one executes — offer AT MOST ONE, only if it actually fits this moment, never as a listed menu, never one just declined this session):');
+    eligibleStarters.forEach(s => lines.push(`  • ${s.id} — ${s.label}`));
     lines.push('');
   }
 
