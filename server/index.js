@@ -16,7 +16,7 @@ import { createClient } from '@supabase/supabase-js';
 import WebSocket from 'ws';
 import { AccessToken } from 'livekit-server-sdk';
 import { sendPush, isQuietHours, pickNudgeMessage } from './notifications.js';
-import { analyzeAndUpdate, buildProfileSummary, buildLifeArchitectureSummary, buildCurrentGoal, computeUsageStats, lookupProfileField, loadProfile, seedProfile, mergeProfiles, resolveUserId, saveRawTranscript, appendTranscriptMessages, replaceProfile, persistProfile, findActiveRiskWindow } from './contextAgent.js';
+import { analyzeAndUpdate, buildProfileSummary, buildLifeArchitectureSummary, buildCurrentGoal, computeUsageStats, lookupProfileField, loadProfile, seedProfile, mergeProfiles, resolveUserId, saveRawTranscript, appendTranscriptMessages, replaceProfile, persistProfile, findActiveRiskWindow, computeJourneyPhase } from './contextAgent.js';
 import { embedAndStore, retrieveRelevant, isConfigured as isVectorConfigured } from './vectorStore.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1499,6 +1499,45 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     const lifeArchitecture = buildLifeArchitectureSummary(userId);
     res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ summary, profile, lifeArchitecture }));
+  }
+
+  // Full audit dump: everything /context/profile, /context/stats, and /events
+  // would otherwise take three separate calls to assemble — one shot at
+  // exactly what BB knows about a user, including the rendered strings that
+  // actually get injected into the system prompt (not just the raw JSON).
+  // Same per-user auth gate as /context/profile.
+  if (req.method === 'GET' && req.url.startsWith('/context/dump/')) {
+    const userId = decodeURIComponent(req.url.split('/context/dump/')[1]);
+    const auth = await authorizeProfileAccess(req, userId);
+    if (!auth.ok) return send401(res, auth.status, auth.error);
+    try {
+      const profile = loadProfile(userId);
+      const timezone = profile.timezone || DEFAULT_TZ;
+      const resolvedUserId = resolveUserId(userId);
+
+      const [usageStats, recentEvents] = await Promise.all([
+        buildUsageSummary(resolvedUserId, timezone),
+        queryEvents(resolvedUserId, { limit: 100, timezone }),
+      ]);
+
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        userId: resolvedUserId,
+        profile,
+        rendered: {
+          summary: buildProfileSummary(userId),
+          lifeArchitecture: buildLifeArchitectureSummary(userId),
+          currentGoal: buildCurrentGoal(userId),
+        },
+        journey_phase: computeJourneyPhase(userId),
+        active_risk_window: findActiveRiskWindow(userId, timezone),
+        usage_stats: usageStats,
+        recent_events: recentEvents,
+      }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
   }
 
   // Set the user's TTS voice preference (mobile-facing narrow write — mirrors
