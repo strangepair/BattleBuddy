@@ -18,6 +18,7 @@ import { AccessToken } from 'livekit-server-sdk';
 import { sendPush, isQuietHours, pickNudgeMessage } from './notifications.js';
 import { analyzeAndUpdate, buildProfileSummary, buildLifeArchitectureSummary, buildCurrentGoal, computeUsageStats, lookupProfileField, loadProfile, seedProfile, mergeProfiles, resolveUserId, saveRawTranscript, appendTranscriptMessages, replaceProfile, persistProfile, findActiveRiskWindow, computeJourneyPhase, buildAdminInjections } from './contextAgent.js';
 import { handleAdminConsole } from './admin-api.js';
+import { runDesignLoop } from './agentDesignLoop.js';
 import { embedAndStore, retrieveRelevant, isConfigured as isVectorConfigured } from './vectorStore.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2335,6 +2336,45 @@ async function runNudgeSweep() {
 }
 
 setInterval(() => { runNudgeSweep().catch(() => {}); }, NUDGE_CHECK_INTERVAL_MS);
+
+// ─── Design loop scheduler ────────────────────────────────────────────────────
+// The design loop used to run only from Mike's machine (which is where its git
+// commits came from) — a laptop that's asleep is a design loop that doesn't
+// run. Now it runs in-process: daily, only when there are new sessions since
+// the last run. First boot seeds the state file instead of running, so a
+// deploy never triggers a surprise prompt rewrite; POST
+// /admin/console/design-loop/run covers "I want it now".
+const DESIGN_LOOP_CHECK_MS = 60 * 60 * 1000;
+const DESIGN_LOOP_MIN_GAP_MS = 23 * 3600 * 1000;
+const designLoopStatePath = () => resolve(process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store'), 'design-loop-state.json');
+
+async function runScheduledDesignLoop() {
+  let state = {};
+  try { state = JSON.parse(readFileSync(designLoopStatePath(), 'utf-8')); } catch {}
+  const now = Date.now();
+  if (!state.last_run_at) {
+    writeFileSync(designLoopStatePath(), JSON.stringify({ last_run_at: now }));
+    return;
+  }
+  if (now - state.last_run_at < DESIGN_LOOP_MIN_GAP_MS) return;
+
+  const storeDir = process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store');
+  let userDirs = [];
+  try { userDirs = readdirSync(resolve(storeDir, 'session-transcripts')); } catch { return; }
+  const hasNewSessions = userDirs.some(u => loadRecentSessions(u, { cutoffMs: state.last_run_at, limit: 1 }).length > 0);
+  if (!hasNewSessions) return;
+
+  writeFileSync(designLoopStatePath(), JSON.stringify({ last_run_at: now }));
+  console.log('[DesignLoop] Scheduled daily run starting');
+  try {
+    const result = await runDesignLoop({ email: true, trigger: 'schedule' });
+    console.log(`[DesignLoop] Scheduled run finished: ${result.changed ? 'prompt updated' : 'no changes applied'}`);
+  } catch (e) {
+    console.error('[DesignLoop] Scheduled run failed:', e.message);
+  }
+}
+
+setInterval(() => { runScheduledDesignLoop().catch(() => {}); }, DESIGN_LOOP_CHECK_MS);
 
 const PORT = process.env.PORT || 3333;
 server.listen(PORT, '0.0.0.0', () => {

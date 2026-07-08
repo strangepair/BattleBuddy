@@ -15,9 +15,10 @@
  * so BB can reference when something was learned: "you mentioned this last Tuesday."
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import Anthropic from '@anthropic-ai/sdk';
 import { jsonrepair } from 'jsonrepair';
 
@@ -72,6 +73,76 @@ export function isDirectiveActive(directive, timezone = 'America/Chicago') {
     return true;
   }
 }
+
+// ─── Prompt store: live-edit persistence across deploys ─────────────────────
+// The system prompt file ships inside the (ephemeral) container image. Writers
+// at runtime — the admin console and the in-process design loop — mirror their
+// edits to the volume; on boot the edit is restored IF the image still ships
+// the same prompt it was based on. If a deploy ships a DIFFERENT prompt (a dev
+// commit), the repo wins and the runtime edit is archived, never silently lost.
+
+export const SYSTEM_PROMPT_PATH = resolve(__dirname, 'prompts', 'system.battlebuddy.md');
+const PROMPT_LIVE_DIR = resolve(ADMIN_DATA_ROOT, 'prompt-live');
+const PROMPT_LIVE_PATH = resolve(PROMPT_LIVE_DIR, 'system.battlebuddy.md');
+const PROMPT_LIVE_META = resolve(PROMPT_LIVE_DIR, 'meta.json');
+const PROMPT_BACKUPS_DIR = resolve(ADMIN_DATA_ROOT, 'prompt-backups');
+const MAX_PROMPT_BACKUPS = 20;
+
+const sha256 = s => createHash('sha256').update(s).digest('hex');
+
+// Hash of the prompt as shipped in this image — captured at import time,
+// before any restore touches the file.
+export const bundledPromptHash = (() => {
+  try { return sha256(readFileSync(SYSTEM_PROMPT_PATH, 'utf-8')); } catch { return null; }
+})();
+
+export function promptDivergedFromRepo(content) {
+  return !!bundledPromptHash && sha256(content) !== bundledPromptHash;
+}
+
+/** Timestamped copy of the current prompt onto the volume before every
+ * overwrite, pruned to the newest MAX_PROMPT_BACKUPS. */
+export function backupPromptToVolume() {
+  mkdirSync(PROMPT_BACKUPS_DIR, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  writeFileSync(resolve(PROMPT_BACKUPS_DIR, `system.battlebuddy.${stamp}.md`), readFileSync(SYSTEM_PROMPT_PATH, 'utf-8'));
+  const backups = readdirSync(PROMPT_BACKUPS_DIR).filter(f => f.endsWith('.md')).sort();
+  for (const old of backups.slice(0, Math.max(0, backups.length - MAX_PROMPT_BACKUPS))) {
+    try { unlinkSync(resolve(PROMPT_BACKUPS_DIR, old)); } catch {}
+  }
+}
+
+/** Write a new prompt: container file (hot-reloads on the next turn) plus the
+ * volume mirror + provenance meta so it survives redeploys. */
+export function persistPromptLive(content) {
+  backupPromptToVolume();
+  writeFileSync(SYSTEM_PROMPT_PATH, content);
+  mkdirSync(PROMPT_LIVE_DIR, { recursive: true });
+  writeFileSync(PROMPT_LIVE_PATH, content);
+  writeFileSync(PROMPT_LIVE_META, JSON.stringify({ savedAt: new Date().toISOString(), bundledHash: bundledPromptHash }, null, 2));
+}
+
+(function restoreLiveEditOnBoot() {
+  try {
+    if (!existsSync(PROMPT_LIVE_PATH) || !existsSync(PROMPT_LIVE_META)) return;
+    const meta = JSON.parse(readFileSync(PROMPT_LIVE_META, 'utf-8'));
+    const saved = readFileSync(PROMPT_LIVE_PATH, 'utf-8');
+    if (meta.bundledHash === bundledPromptHash) {
+      if (sha256(saved) !== bundledPromptHash) {
+        writeFileSync(SYSTEM_PROMPT_PATH, saved);
+        console.log(`[PromptStore] Restored runtime-edited prompt from volume (saved ${meta.savedAt})`);
+      }
+    } else {
+      const stamp = String(meta.savedAt || new Date().toISOString()).replace(/[:.]/g, '-');
+      writeFileSync(resolve(PROMPT_LIVE_DIR, `superseded-${stamp}.md`), saved);
+      unlinkSync(PROMPT_LIVE_PATH);
+      unlinkSync(PROMPT_LIVE_META);
+      console.warn(`[PromptStore] Deploy shipped a newer prompt — repo version wins; runtime edit archived as superseded-${stamp}.md`);
+    }
+  } catch (e) {
+    console.warn('[PromptStore] Prompt restore skipped:', e.message);
+  }
+})();
 
 // Resources are injected whole, so a few oversized pastes could quietly blow
 // the prompt budget (latency + cost on every turn). Injection stops once the

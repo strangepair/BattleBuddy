@@ -27,13 +27,14 @@ import { readFileSync, writeFileSync, readdirSync, unlinkSync, statSync, mkdirSy
 import { resolve, dirname, basename, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { ADMIN_DATA_ROOT, RESOURCES_DIR, DIRECTIVES_PATH, loadDirectives, isDirectiveActive } from './contextAgent.js';
+import {
+  ADMIN_DATA_ROOT, RESOURCES_DIR, DIRECTIVES_PATH, loadDirectives, isDirectiveActive,
+  SYSTEM_PROMPT_PATH, persistPromptLive, promptDivergedFromRepo,
+} from './contextAgent.js';
+import { runDesignLoop, AGENT_MD_VOLUME_PATH, readAgentMd } from './agentDesignLoop.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const systemPromptPath = resolve(__dirname, 'prompts', 'system.battlebuddy.md');
 const consoleHtmlPath = resolve(__dirname, 'admin-console.html');
-const PROMPT_BACKUPS_DIR = resolve(ADMIN_DATA_ROOT, 'prompt-backups');
-const MAX_PROMPT_BACKUPS = 20;
 
 // Every one of these must survive a prompt edit — buildSystemPrompt fills them
 // per turn, and .replace() silently no-ops on a missing placeholder, so losing
@@ -73,59 +74,42 @@ function saveDirectives(list) {
   writeFileSync(DIRECTIVES_PATH, JSON.stringify(list, null, 2));
 }
 
-/** Timestamped copy of the current prompt onto the volume before every
- * overwrite, pruned to the newest MAX_PROMPT_BACKUPS. The container file is
- * ephemeral; these survive redeploys. */
-function backupPrompt() {
-  mkdirSync(PROMPT_BACKUPS_DIR, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  writeFileSync(resolve(PROMPT_BACKUPS_DIR, `system.battlebuddy.${stamp}.md`), readFileSync(systemPromptPath, 'utf-8'));
-  const backups = readdirSync(PROMPT_BACKUPS_DIR).filter(f => f.endsWith('.md')).sort();
-  for (const old of backups.slice(0, Math.max(0, backups.length - MAX_PROMPT_BACKUPS))) {
-    try { unlinkSync(resolve(PROMPT_BACKUPS_DIR, old)); } catch {}
+/** Shared by POST /directives and POST /insights/apply. Throws with .status
+ * on validation failure. */
+function addDirective(text, expires) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) throw Object.assign(new Error('Directive text is empty.'), { status: 400 });
+  if (trimmed.length > MAX_DIRECTIVE_CHARS) {
+    throw Object.assign(new Error(`Directives are short instructions — max ${MAX_DIRECTIVE_CHARS} chars. Longer material belongs in Resources.`), { status: 400 });
   }
+  if (expires && !/^\d{4}-\d{2}-\d{2}$/.test(expires)) {
+    throw Object.assign(new Error('Expiry must be YYYY-MM-DD.'), { status: 400 });
+  }
+  const directive = {
+    id: `d-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+    text: trimmed,
+    expires: expires || null,
+    createdAt: new Date().toISOString(),
+  };
+  saveDirectives([...loadDirectives(), directive]);
+  return directive;
 }
 
-// ─── Console-edit persistence across deploys ─────────────────────────────────
-// The prompt file lives in the (ephemeral) container image; console saves are
-// mirrored to the volume and restored on boot. Provenance rule: the volume
-// copy remembers the hash of the prompt the image shipped with at save time.
-// If a later deploy ships that same prompt, the console edit is still the
-// newest intent → restore it. If the deploy ships a DIFFERENT prompt (design
-// loop or a dev commit), the repo wins → archive the console edit instead.
-const PROMPT_LIVE_DIR = resolve(ADMIN_DATA_ROOT, 'prompt-live');
-const PROMPT_LIVE_PATH = resolve(PROMPT_LIVE_DIR, 'system.battlebuddy.md');
-const PROMPT_LIVE_META = resolve(PROMPT_LIVE_DIR, 'meta.json');
-
+// ─── Insights apply-state ─────────────────────────────────────────────────────
+// Recommendations Mike has turned into directives disappear from the Insights
+// list. Keyed by report id + a hash of the ORIGINAL proposal text (he may edit
+// the directive wording), stored on the volume.
+const INSIGHTS_STATE_PATH = resolve(ADMIN_DATA_ROOT, 'insights-state.json');
 const sha256 = s => createHash('sha256').update(s).digest('hex');
+const proposalKey = (reportId, proposalText) => `${reportId}#${sha256(String(proposalText)).slice(0, 16)}`;
 
-// Hash of the prompt as shipped in this image — captured at import time,
-// before any restore touches the file.
-const bundledPromptHash = (() => {
-  try { return sha256(readFileSync(systemPromptPath, 'utf-8')); } catch { return null; }
-})();
-
-(function restoreConsoleEditOnBoot() {
-  try {
-    if (!existsSync(PROMPT_LIVE_PATH) || !existsSync(PROMPT_LIVE_META)) return;
-    const meta = JSON.parse(readFileSync(PROMPT_LIVE_META, 'utf-8'));
-    const saved = readFileSync(PROMPT_LIVE_PATH, 'utf-8');
-    if (meta.bundledHash === bundledPromptHash) {
-      if (sha256(saved) !== bundledPromptHash) {
-        writeFileSync(systemPromptPath, saved);
-        console.log(`[AdminConsole] Restored console-edited prompt from volume (saved ${meta.savedAt})`);
-      }
-    } else {
-      const stamp = String(meta.savedAt || new Date().toISOString()).replace(/[:.]/g, '-');
-      writeFileSync(resolve(PROMPT_LIVE_DIR, `superseded-${stamp}.md`), saved);
-      unlinkSync(PROMPT_LIVE_PATH);
-      unlinkSync(PROMPT_LIVE_META);
-      console.warn(`[AdminConsole] Deploy shipped a newer prompt — repo version wins; console edit archived as superseded-${stamp}.md`);
-    }
-  } catch (e) {
-    console.warn('[AdminConsole] Prompt restore skipped:', e.message);
-  }
-})();
+function loadInsightsState() {
+  try { return JSON.parse(readFileSync(INSIGHTS_STATE_PATH, 'utf-8')); } catch { return { applied: {} }; }
+}
+function saveInsightsState(state) {
+  mkdirSync(ADMIN_DATA_ROOT, { recursive: true });
+  writeFileSync(INSIGHTS_STATE_PATH, JSON.stringify(state, null, 2));
+}
 
 export async function handleAdminConsole(req, res, { checkAdminSecret, CORS, send401, runTranscriptAudit, fetchAuditReports }) {
   const url = req.url.split('?')[0];
@@ -147,11 +131,11 @@ export async function handleAdminConsole(req, res, { checkAdminSecret, CORS, sen
   try {
     // ─── System prompt ────────────────────────────────────────────────────
     if (req.method === 'GET' && url === '/admin/console/prompt') {
-      const content = readFileSync(systemPromptPath, 'utf-8');
+      const content = readFileSync(SYSTEM_PROMPT_PATH, 'utf-8');
       return json(res, CORS, 200, {
         content,
         chars: content.length,
-        divergedFromRepo: !!bundledPromptHash && sha256(content) !== bundledPromptHash,
+        divergedFromRepo: promptDivergedFromRepo(content),
       });
     }
 
@@ -167,16 +151,12 @@ export async function handleAdminConsole(req, res, { checkAdminSecret, CORS, sen
           missing,
         });
       }
-      backupPrompt();
-      writeFileSync(systemPromptPath, content);
-      mkdirSync(PROMPT_LIVE_DIR, { recursive: true });
-      writeFileSync(PROMPT_LIVE_PATH, content);
-      writeFileSync(PROMPT_LIVE_META, JSON.stringify({ savedAt: new Date().toISOString(), bundledHash: bundledPromptHash }, null, 2));
+      persistPromptLive(content);
       console.log(`[AdminConsole] System prompt saved (${content.length} chars) — live on next turn, persisted to volume`);
       return json(res, CORS, 200, {
         ok: true,
         chars: content.length,
-        divergedFromRepo: !!bundledPromptHash && sha256(content) !== bundledPromptHash,
+        divergedFromRepo: promptDivergedFromRepo(content),
       });
     }
 
@@ -234,22 +214,8 @@ export async function handleAdminConsole(req, res, { checkAdminSecret, CORS, sen
 
     if (req.method === 'POST' && url === '/admin/console/directives') {
       const { text, expires } = JSON.parse(await readBody(req));
-      const trimmed = String(text || '').trim();
-      if (!trimmed) return json(res, CORS, 400, { error: 'Directive text is empty.' });
-      if (trimmed.length > MAX_DIRECTIVE_CHARS) {
-        return json(res, CORS, 400, { error: `Directives are short instructions — max ${MAX_DIRECTIVE_CHARS} chars. Longer material belongs in Resources.` });
-      }
-      if (expires && !/^\d{4}-\d{2}-\d{2}$/.test(expires)) {
-        return json(res, CORS, 400, { error: 'Expiry must be YYYY-MM-DD.' });
-      }
-      const directive = {
-        id: `d-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
-        text: trimmed,
-        expires: expires || null,
-        createdAt: new Date().toISOString(),
-      };
-      saveDirectives([...loadDirectives(), directive]);
-      console.log(`[AdminConsole] Directive added: "${trimmed.slice(0, 60)}"${expires ? ` (expires ${expires})` : ''}`);
+      const directive = addDirective(text, expires);
+      console.log(`[AdminConsole] Directive added: "${directive.text.slice(0, 60)}"${expires ? ` (expires ${expires})` : ''}`);
       return json(res, CORS, 200, { ok: true, directive: { ...directive, active: isDirectiveActive(directive) } });
     }
 
@@ -258,7 +224,34 @@ export async function handleAdminConsole(req, res, { checkAdminSecret, CORS, sen
     // one analysis pipeline, surfaced here so Mike can read the reports and
     // trigger a fresh pass without waiting for the hourly sweep.
     if (req.method === 'GET' && url === '/admin/console/insights') {
-      return json(res, CORS, 200, await fetchAuditReports(15));
+      const result = await fetchAuditReports(15);
+      // Hide recommendations already turned into directives.
+      const applied = loadInsightsState().applied || {};
+      for (const r of result.reports || []) {
+        if (r.report?.proposals?.length) {
+          r.report.proposals = r.report.proposals.filter(p => !applied[proposalKey(r.id, p)]);
+        }
+      }
+      return json(res, CORS, 200, result);
+    }
+
+    // Turn a recommendation into a directive in one step and remove it from
+    // the Insights list. `proposal` is the ORIGINAL recommendation text (used
+    // for the dedup key); `text` is Mike's possibly-edited directive wording.
+    if (req.method === 'POST' && url === '/admin/console/insights/apply') {
+      const { reportId, proposal, text, expires } = JSON.parse(await readBody(req));
+      if (!reportId || !proposal) return json(res, CORS, 400, { error: 'reportId and proposal are required.' });
+      const directive = addDirective(text, expires);
+      const state = loadInsightsState();
+      state.applied = state.applied || {};
+      state.applied[proposalKey(reportId, proposal)] = {
+        directiveId: directive.id,
+        appliedAt: new Date().toISOString(),
+        text: directive.text,
+      };
+      saveInsightsState(state);
+      console.log(`[AdminConsole] Recommendation applied as directive ${directive.id}`);
+      return json(res, CORS, 200, { ok: true, directive: { ...directive, active: isDirectiveActive(directive) } });
     }
 
     if (req.method === 'POST' && url === '/admin/console/insights/run') {
@@ -281,9 +274,39 @@ export async function handleAdminConsole(req, res, { checkAdminSecret, CORS, sen
       return json(res, CORS, 200, { ok: true });
     }
 
+    // ─── Design loop (runs in-process; no dependence on a dev machine) ─────
+    if (req.method === 'POST' && url === '/admin/console/design-loop/run') {
+      // Fire-and-forget: a full run takes minutes (two Sonnet passes), far
+      // longer than an HTTP request should hang. Result lands in the logs
+      // and, when RESEND_API_KEY is set, in Mike's inbox.
+      runDesignLoop({ email: true, trigger: 'admin_console' })
+        .then(r => console.log(`[DesignLoop] On-demand run finished: ${r.changed ? 'prompt updated' : 'no changes applied'}`))
+        .catch(e => console.error('[DesignLoop] On-demand run failed:', e.message));
+      return json(res, CORS, 202, { ok: true, started: true, note: 'Running in the background — takes a few minutes. You will get an email if changes are applied.' });
+    }
+
+    // The design doc the loop reasons over. The repo copy isn't in the
+    // production image (build context is server/), so prod keeps a
+    // console-managed copy on the volume.
+    if (req.method === 'GET' && url === '/admin/console/agent-md') {
+      const { content, source } = readAgentMd();
+      return json(res, CORS, 200, { content, source });
+    }
+
+    if (req.method === 'POST' && url === '/admin/console/agent-md') {
+      const { content } = JSON.parse(await readBody(req));
+      if (typeof content !== 'string' || content.trim().length < 100) {
+        return json(res, CORS, 400, { error: 'agent.md content missing or suspiciously short.' });
+      }
+      mkdirSync(dirname(AGENT_MD_VOLUME_PATH), { recursive: true });
+      writeFileSync(AGENT_MD_VOLUME_PATH, content);
+      console.log(`[AdminConsole] agent.md updated on volume (${content.length} chars)`);
+      return json(res, CORS, 200, { ok: true, chars: content.length });
+    }
+
     return json(res, CORS, 404, { error: 'Not found' });
   } catch (err) {
     console.error('[AdminConsole] Error:', err.message);
-    return json(res, CORS, 500, { error: err.message });
+    return json(res, CORS, err.status || 500, { error: err.message });
   }
 }

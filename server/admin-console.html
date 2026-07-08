@@ -93,9 +93,14 @@
   .report .body { padding: 0 14px 14px; display: flex; flex-direction: column; gap: 12px; }
   .rep-sec h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); margin-bottom: 6px; }
   .rep-sec ul { list-style: none; display: flex; flex-direction: column; gap: 6px; }
-  .rep-sec li { font-size: 12.5px; line-height: 1.5; padding: 7px 10px; border-radius: 6px; background: var(--panel2); border-left: 3px solid var(--border); display: flex; gap: 10px; align-items: flex-start; }
-  .rep-sec li .ptext { flex: 1; }
+  .rep-sec li { font-size: 12.5px; line-height: 1.5; padding: 7px 10px; border-radius: 6px; background: var(--panel2); border-left: 3px solid var(--border); display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+  .rep-sec li .ptext { flex: 1; min-width: 200px; }
   .rep-sec li .apply { flex-shrink: 0; font-size: 11px; padding: 3px 8px; }
+  .inline-apply { flex-basis: 100%; display: flex; flex-direction: column; gap: 6px; margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--border); }
+  .inline-apply textarea { min-height: 64px; resize: vertical; font-size: 12.5px; }
+  .inline-apply .frow { display: flex; gap: 8px; align-items: center; }
+  .inline-apply .cnt { font-size: 11px; color: var(--dim); margin-left: auto; }
+  .inline-apply .cnt.over { color: var(--red); }
   #dir-count { font-size: 11px; color: var(--dim); text-align: right; }
   #dir-count.over { color: var(--red); }
   .rep-sec.proposals li { border-left-color: var(--accent); }
@@ -195,6 +200,7 @@
         <option value="30">Last 30 days</option>
       </select>
       <button class="btn primary" id="ins-run">Analyze sessions</button>
+      <button class="btn" id="ins-design-loop" title="Analyzes accumulated profile signals and auto-applies HIGH-confidence prompt updates. Runs in the background on the server.">Run design loop</button>
       <div class="meta" id="ins-note">Reads the transcripts and produces evidence-based recommendations — takes about a minute.</div>
     </div>
     <div id="ins-scroll"></div>
@@ -452,12 +458,14 @@ async function loadDirectives() {
   } catch (e) { status('Failed to load directives: ' + e.message, 'err'); }
 }
 // ─── Insights tab ────────────────────────────────────────────────────────────
-function repSection(title, items, cls = '') {
+function repSection(title, items, cls = '', reportId = '') {
   if (!items || !items.length) return '';
-  const applyBtn = cls === 'proposals' ? '<button class="btn apply" title="Copy into the directive form for review">→ Directive</button>' : '';
-  return `<div class="rep-sec ${cls}"><h4>${title}</h4><ul>${items.map(i =>
-    `<li><span class="ptext">${escapeHtml(typeof i === 'string' ? i : JSON.stringify(i))}</span>${applyBtn}</li>`
-  ).join('')}</ul></div>`;
+  const isProposals = cls === 'proposals';
+  return `<div class="rep-sec ${cls}"><h4>${title}</h4><ul>${items.map(i => {
+    const text = typeof i === 'string' ? i : JSON.stringify(i);
+    const applyBtn = isProposals ? `<button class="btn apply" data-report-id="${escapeHtml(String(reportId))}" data-proposal="${encodeURIComponent(text)}" title="Turn this into a directive">Apply as directive</button>` : '';
+    return `<li><span class="ptext">${escapeHtml(text)}</span>${applyBtn}</li>`;
+  }).join('')}</ul></div>`;
 }
 async function loadInsights() {
   try {
@@ -477,7 +485,7 @@ async function loadInsights() {
         </summary>
         <div class="body">
           ${rep.summary ? `<div class="rep-summary">${escapeHtml(rep.summary)}</div>` : ''}
-          ${repSection('Recommendations', rep.proposals, 'proposals')}
+          ${repSection('Recommendations', rep.proposals, 'proposals', r.id)}
           ${repSection('What failed', rep.agent_failures, 'fails')}
           ${repSection('What worked', rep.agent_wins, 'wins')}
           ${repSection('App issues', rep.app_issues)}
@@ -487,20 +495,85 @@ async function loadInsights() {
         </div>
       </details>`;
     }).join('');
-    // Human-in-the-loop by design: the button pre-fills the directive form
-    // for review instead of creating the directive directly.
-    el.querySelectorAll('.apply').forEach(btn => btn.onclick = () => {
-      const text = btn.closest('li').querySelector('.ptext').textContent
-        .replace(/^\s*(HIGH|MEDIUM|LOW)\s*CONFIDENCE\s*[—:–-]+\s*/i, '').trim();
-      document.querySelector('nav button[data-tab="directives"]').click();
-      const dt = $('dir-text');
-      dt.value = text;
-      dt.dispatchEvent(new Event('input'));
-      dt.focus();
-      status('Recommendation copied — trim if needed, then Add directive.', 'ok');
-    });
+    // Human-in-the-loop, but in place: the button opens an inline editor on
+    // the card; Apply creates the directive and removes the recommendation
+    // from this list (recorded server-side so it stays gone).
+    el.querySelectorAll('.apply').forEach(btn => btn.onclick = () => openInlineApply(btn));
   } catch (e) { status('Failed to load insights: ' + e.message, 'err'); }
 }
+function openInlineApply(btn) {
+  const li = btn.closest('li');
+  if (li.querySelector('.inline-apply')) return;
+  const original = decodeURIComponent(btn.dataset.proposal);
+  const suggested = original.replace(/^\s*(HIGH|MEDIUM|LOW)\s*CONFIDENCE\s*[—:–-]+\s*/i, '').trim();
+  btn.style.display = 'none';
+
+  const box = document.createElement('div');
+  box.className = 'inline-apply';
+  box.innerHTML = `
+    <textarea spellcheck="false"></textarea>
+    <div class="frow">
+      <input type="date" title="Optional expiry — active through the end of that day (Central)">
+      <button class="btn primary ia-apply">Apply</button>
+      <button class="btn ia-cancel">Cancel</button>
+      <span class="cnt"></span>
+    </div>`;
+  li.appendChild(box);
+
+  const ta2 = box.querySelector('textarea');
+  const cnt = box.querySelector('.cnt');
+  const refreshCnt = () => {
+    const n = ta2.value.trim().length;
+    cnt.textContent = `${n} / 500`;
+    cnt.classList.toggle('over', n > 500);
+  };
+  ta2.value = suggested;
+  ta2.addEventListener('input', refreshCnt);
+  refreshCnt();
+  ta2.focus();
+
+  box.querySelector('.ia-cancel').onclick = () => { box.remove(); btn.style.display = ''; };
+  box.querySelector('.ia-apply').onclick = async () => {
+    const applyBtn = box.querySelector('.ia-apply');
+    applyBtn.disabled = true;
+    try {
+      await api('/admin/console/insights/apply', {
+        method: 'POST',
+        body: JSON.stringify({
+          reportId: btn.dataset.reportId,
+          proposal: original,
+          text: ta2.value,
+          expires: box.querySelector('input[type=date]').value || null,
+        }),
+      });
+      const ul = li.closest('ul');
+      const sec = li.closest('.rep-sec');
+      li.remove();
+      if (ul && !ul.children.length) sec.remove();
+      status('Directive added — live on the next turn.', 'ok');
+      loadDirectives();
+    } catch (e) {
+      status(e.message, 'err');
+      applyBtn.disabled = false;
+    }
+  };
+}
+
+$('ins-design-loop').onclick = async () => {
+  if (!confirm('Run the design loop now? It analyzes accumulated session signals and auto-applies HIGH-confidence updates to the system prompt. Runs in the background (a few minutes); you get an email if changes are applied.')) return;
+  const btn = $('ins-design-loop');
+  btn.disabled = true;
+  try {
+    const { note } = await api('/admin/console/design-loop/run', { method: 'POST', body: '{}' });
+    status(note || 'Design loop started.', 'ok');
+  } catch (e) {
+    status(e.message, 'err');
+    btn.disabled = false;
+    return;
+  }
+  setTimeout(() => { btn.disabled = false; }, 60000);
+};
+
 $('ins-run').onclick = async () => {
   const btn = $('ins-run');
   btn.disabled = true;

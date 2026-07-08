@@ -1,18 +1,27 @@
 /**
  * Agent Design Loop — reads accumulated session data across users, proposes
  * targeted updates to agent.md, auto-applies HIGH confidence proposals to
- * system.battlebuddy.md, backs up the previous prompt, commits + pushes,
- * and emails a summary of what was actually applied.
+ * system.battlebuddy.md, backs up the previous prompt, and emails a summary
+ * of what was actually applied.
  *
- * Usage:
- *   node server/agentDesignLoop.js [--dry-run] [--remote] [--email] [--users=id1,id2]
+ * Runs in TWO modes:
+ *  - In-process on bb-server (production): scheduled daily from index.js and
+ *    on demand via POST /admin/console/design-loop/run. Prompt changes persist
+ *    via the volume prompt store (persistPromptLive); proposals land on the
+ *    volume; git is skipped (the image has no git/.git/credentials). No
+ *    dependence on a dev machine.
+ *  - CLI on a dev machine:
+ *      node server/agentDesignLoop.js [--dry-run] [--remote] [--email] [--users=id1,id2]
+ *    Same flow, plus the prompt change is committed + pushed so the repo
+ *    stays the source of truth.
  */
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execSync, execFileSync } from 'node:child_process';
 import Anthropic from '@anthropic-ai/sdk';
+import { persistPromptLive, ADMIN_DATA_ROOT } from './contextAgent.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -33,12 +42,28 @@ try {
 
 const client = new Anthropic();
 
+const ON_RAILWAY = !!process.env.RAILWAY_ENVIRONMENT;
+
 const STORE_DIR = process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store');
 const AGENT_MD = resolve(__dirname, '..', 'agent.md');
 const SYSTEM_PROMPT = resolve(__dirname, 'prompts', 'system.battlebuddy.md');
 const BACKUPS_DIR = resolve(__dirname, 'prompts', 'backups');
-const PROPOSALS_DIR = resolve(__dirname, '..', 'agent-proposals');
+// In prod the repo dirs aren't in the image / aren't durable — use the volume.
+const PROPOSALS_DIR = ON_RAILWAY ? resolve(ADMIN_DATA_ROOT, 'agent-proposals') : resolve(__dirname, '..', 'agent-proposals');
 const APPLIED_DIR = resolve(PROPOSALS_DIR, 'applied');
+
+// The design doc the loop reasons over. The repo copy (../agent.md) isn't in
+// the production image, so prod uses a console-managed copy on the volume
+// (POST /admin/console/agent-md); the volume copy wins everywhere when present.
+export const AGENT_MD_VOLUME_PATH = resolve(ADMIN_DATA_ROOT, 'agent.md');
+
+export function readAgentMd() {
+  try {
+    if (existsSync(AGENT_MD_VOLUME_PATH)) return { content: readFileSync(AGENT_MD_VOLUME_PATH, 'utf-8'), source: 'volume' };
+    if (existsSync(AGENT_MD)) return { content: readFileSync(AGENT_MD, 'utf-8'), source: 'repo' };
+  } catch {}
+  return { content: null, source: 'none' };
+}
 
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes('--dry-run');
@@ -61,8 +86,8 @@ async function fetchRemoteProfile(userId) {
   return data.profile || data;
 }
 
-async function loadAllProfiles() {
-  if (REMOTE) {
+async function loadAllProfiles(remote = false) {
+  if (remote) {
     const files = readdirSync(STORE_DIR).filter(f => f.endsWith('.json') && !f.startsWith('default'));
     const userIds = files.map(f => f.replace('.json', ''));
     const profiles = [];
@@ -428,36 +453,35 @@ async function sendAppliedEmail(appliedSummary, digest) {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-async function main() {
-  console.log('[DesignLoop] Starting agent design loop...');
+export async function runDesignLoop({ email = false, dryRun = false, remote = false, trigger = 'cli' } = {}) {
+  console.log(`[DesignLoop] Starting agent design loop (trigger: ${trigger})...`);
 
-  if (!existsSync(AGENT_MD)) {
-    console.error('[DesignLoop] agent.md not found at', AGENT_MD);
-    process.exit(1);
-  }
   if (!existsSync(SYSTEM_PROMPT)) {
-    console.error('[DesignLoop] system.battlebuddy.md not found at', SYSTEM_PROMPT);
-    process.exit(1);
+    throw new Error(`system.battlebuddy.md not found at ${SYSTEM_PROMPT}`);
   }
 
-  const agentMd = readFileSync(AGENT_MD, 'utf-8');
+  // Design doc: volume copy > repo copy > (last resort) the system prompt
+  // itself, which is the live behavioral document.
+  const agentMdInfo = readAgentMd();
   const systemPromptBefore = readFileSync(SYSTEM_PROMPT, 'utf-8');
-  console.log(`[DesignLoop] Loaded agent.md (${agentMd.length} chars), system prompt (${systemPromptBefore.length} chars)`);
+  const agentMd = agentMdInfo.content || systemPromptBefore;
+  if (agentMdInfo.source === 'none') {
+    console.warn('[DesignLoop] No agent.md found (volume or repo) — reasoning over the system prompt itself. Seed one via POST /admin/console/agent-md.');
+  }
+  console.log(`[DesignLoop] Loaded agent.md from ${agentMdInfo.source} (${agentMd.length} chars), system prompt (${systemPromptBefore.length} chars)`);
 
-  const profiles = await loadAllProfiles();
+  const profiles = await loadAllProfiles(remote);
   if (profiles.length === 0) {
-    console.error('[DesignLoop] No user profiles found in', STORE_DIR);
-    process.exit(1);
+    throw new Error(`No user profiles found in ${STORE_DIR}`);
   }
   console.log(`[DesignLoop] Loaded ${profiles.length} user profile(s)`);
 
   const digest = buildSignalDigest(profiles);
   console.log(`[DesignLoop] Signal digest: ${digest.totalSessions} sessions, ${digest.whatWorks.length} what-works, ${digest.whatDoesntWork.length} what-doesnt-work`);
 
-  if (DRY_RUN) {
+  if (dryRun) {
     console.log('[DesignLoop] DRY RUN — digest built, skipping LLM calls');
-    console.log(JSON.stringify(digest, null, 2));
-    return;
+    return { ok: true, dryRun: true, changed: false, users: digest.totalUsers, sessions: digest.totalSessions };
   }
 
   console.log('[DesignLoop] Calling Sonnet to analyze and propose updates...');
@@ -472,13 +496,18 @@ async function main() {
   const changed = systemPromptAfter.trim() !== systemPromptBefore.trim();
   if (!changed) {
     console.log('[DesignLoop] No changes to apply — system prompt unchanged');
-    return;
+    return { ok: true, changed: false, proposalPath, users: digest.totalUsers, sessions: digest.totalSessions };
   }
 
-  // Backup, write, archive
-  backupSystemPrompt();
   const systemPromptVersioned = bumpPromptVersion(systemPromptAfter);
-  writeFileSync(SYSTEM_PROMPT, systemPromptVersioned);
+  if (ON_RAILWAY) {
+    // Container write + volume mirror + backup: live on the next turn and
+    // survives redeploys until the repo ships a different prompt.
+    persistPromptLive(systemPromptVersioned);
+  } else {
+    backupSystemPrompt();
+    writeFileSync(SYSTEM_PROMPT, systemPromptVersioned);
+  }
   console.log('[DesignLoop] System prompt updated');
 
   archiveProposal(proposalPath);
@@ -489,14 +518,24 @@ async function main() {
   console.log(appliedSummary);
   console.log('\n────────────────────────────────────────────────────\n');
 
-  commitAndPush(appliedSummary);
+  if (ON_RAILWAY) {
+    console.log('[DesignLoop] Prod run — prompt persisted to the volume; fold into git from a dev session when convenient.');
+  } else {
+    commitAndPush(appliedSummary);
+  }
 
-  if (EMAIL) {
+  if (email) {
     await sendAppliedEmail(appliedSummary, digest);
   }
+
+  return { ok: true, changed: true, proposalPath, summary: appliedSummary, users: digest.totalUsers, sessions: digest.totalSessions };
 }
 
-main().catch(err => {
-  console.error('[DesignLoop] Fatal error:', err);
-  process.exit(1);
-});
+// CLI entry — only when executed directly (node server/agentDesignLoop.js),
+// never when imported by bb-server.
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  runDesignLoop({ email: EMAIL, dryRun: DRY_RUN, remote: REMOTE }).catch(err => {
+    console.error('[DesignLoop] Fatal error:', err);
+    process.exit(1);
+  });
+}
