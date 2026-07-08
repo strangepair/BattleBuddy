@@ -204,8 +204,9 @@
       <div class="list-scroll" id="res-list"></div>
       <div class="add-form">
         <h3>Add resource</h3>
-        <input type="text" id="res-name" placeholder="Name (becomes the section header, e.g. “Rat Park research”)">
+        <input type="text" id="res-name" placeholder="Name (becomes the section header, e.g. “Rat Park research”) — optional for links">
         <textarea id="res-content" placeholder="Paste the document text…"></textarea>
+        <input type="text" id="res-url" placeholder="…or drop a link — the page is fetched once and stored as text" autocomplete="off">
         <label class="filebtn">…or load from a file<input type="file" id="res-file" accept=".md,.txt,.text,text/*"></label>
         <button class="btn primary" id="res-add">Add resource</button>
       </div>
@@ -552,12 +553,23 @@ $('res-file').addEventListener('change', e => {
   });
 });
 $('res-add').onclick = async () => {
+  const btn = $('res-add');
+  const link = $('res-url').value.trim();
+  const body = link
+    ? { name: $('res-name').value, url: link }
+    : { name: $('res-name').value, content: $('res-content').value };
+  if (link && $('res-content').value.trim()) {
+    return status('Both a link and pasted text — clear one of them first.', 'err');
+  }
+  btn.disabled = true;
+  if (link) btn.textContent = 'Fetching…';
   try {
-    const data = await api('/admin/console/resources', { method: 'POST', body: JSON.stringify({ name: $('res-name').value, content: $('res-content').value }) });
-    status(`${data.updated ? 'Updated' : 'Added'} ${data.name} — injected from the next turn on.`, 'ok');
-    $('res-name').value = ''; $('res-content').value = ''; $('res-file').value = '';
+    const data = await api('/admin/console/resources', { method: 'POST', body: JSON.stringify(body) });
+    status(`${data.updated ? 'Updated' : 'Added'} ${data.name}${data.fromUrl ? ` (${(data.chars / 1000).toFixed(1)}k chars extracted)` : ''} — injected from the next turn on.`, 'ok');
+    $('res-name').value = ''; $('res-content').value = ''; $('res-file').value = ''; $('res-url').value = '';
     loadResources();
   } catch (e) { status(e.message, 'err'); }
+  finally { btn.disabled = false; btn.textContent = 'Add resource'; }
 };
 
 // ─── Directives tab ──────────────────────────────────────────────────────────

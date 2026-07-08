@@ -100,6 +100,78 @@ function addDirective(text, expires) {
 // co.) because the audit engine and design loop read it back as calibration
 // feedback for future recommendations.
 
+// ─── URL resources ────────────────────────────────────────────────────────────
+// A link dropped in the Resources tab is fetched ONCE at add time and stored
+// as extracted text (BB can't browse — a bare URL in the prompt is useless).
+
+const FETCH_TIMEOUT_MS = 15000;
+const FETCH_MAX_BYTES = 2 * 1024 * 1024;
+
+/** Admin-only endpoint, but don't let a typo'd link poke at internal services. */
+function assertSafeUrl(raw) {
+  let u;
+  try { u = new URL(raw); } catch { throw Object.assign(new Error('Not a valid URL.'), { status: 400 }); }
+  if (!/^https?:$/.test(u.protocol)) throw Object.assign(new Error('Only http(s) URLs are supported.'), { status: 400 });
+  const host = u.hostname.toLowerCase();
+  if (host === 'localhost' || host.endsWith('.internal') || host.endsWith('.local')
+    || /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1)/.test(host)) {
+    throw Object.assign(new Error('Refusing to fetch internal/private addresses.'), { status: 400 });
+  }
+  return u;
+}
+
+function htmlToText(html) {
+  const title = (html.match(/<title[^>]*>([^<]*)<\/title>/i) || [])[1]?.trim() || null;
+  const text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<(nav|header|footer|aside|form|iframe|svg)\b[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '\n- ')
+    .replace(/<\/(p|div|h[1-6]|tr|blockquote|section|article)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"').replace(/&#0?39;|&apos;/gi, "'").replace(/&#\d+;|&\w+;/g, ' ')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/ *\n */g, '\n')
+    .replace(/^-\s*$/gm, '') // empty list items left by stripped nav links
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  return { title, text };
+}
+
+async function fetchUrlResource(rawUrl) {
+  const u = assertSafeUrl(rawUrl);
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(u.href, {
+      signal: ac.signal,
+      redirect: 'follow',
+      headers: { 'User-Agent': 'BattleBuddy-Console/1.0 (+admin resource fetch)', 'Accept': 'text/html,text/plain,text/markdown;q=0.9,*/*;q=0.5' },
+    });
+  } catch (e) {
+    throw Object.assign(new Error(`Fetch failed: ${e.name === 'AbortError' ? 'timed out' : e.message}`), { status: 502 });
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!res.ok) throw Object.assign(new Error(`Fetch failed: HTTP ${res.status} from ${u.hostname}`), { status: 502 });
+
+  const ctype = (res.headers.get('content-type') || '').toLowerCase();
+  if (!/text\/|application\/(xhtml|xml|json|markdown)/.test(ctype)) {
+    throw Object.assign(new Error(`Unsupported content type "${ctype.split(';')[0]}" — for PDFs and other binary formats, paste the text instead.`), { status: 400 });
+  }
+  const raw = (await res.text()).slice(0, FETCH_MAX_BYTES);
+  const isHtml = /html|xml/.test(ctype) || /^\s*</.test(raw);
+  const { title, text } = isHtml ? htmlToText(raw) : { title: null, text: raw.trim() };
+  if (!text || text.length < 80) {
+    throw Object.assign(new Error('Fetched the page but extracted almost no text (likely a JS-rendered page) — paste the content instead.'), { status: 422 });
+  }
+  return { title, text, finalUrl: res.url || u.href };
+}
+
 // ─── Overview dashboard ───────────────────────────────────────────────────────
 
 const chicagoDay = at => new Intl.DateTimeFormat('en-CA', {
@@ -288,20 +360,30 @@ export async function handleAdminConsole(req, res, { checkAdminSecret, CORS, sen
     }
 
     if (req.method === 'POST' && url === '/admin/console/resources') {
-      const { name, content } = JSON.parse(await readBody(req));
-      const target = resourcePath(name);
+      const { name, content, url: sourceUrl } = JSON.parse(await readBody(req));
+
+      let finalContent = content;
+      let finalName = name;
+      if (sourceUrl) {
+        const { title, text, finalUrl } = await fetchUrlResource(sourceUrl);
+        finalContent = `> Source: ${finalUrl} (fetched ${new Date().toISOString().slice(0, 10)})\n\n${text}`;
+        if (!finalName || !String(finalName).trim()) finalName = title || new URL(finalUrl).hostname;
+      }
+
+      const target = resourcePath(finalName);
       if (!target) return json(res, CORS, 400, { error: 'Invalid resource name.' });
-      if (typeof content !== 'string' || !content.trim()) {
+      if (typeof finalContent !== 'string' || !finalContent.trim()) {
         return json(res, CORS, 400, { error: 'Resource content is empty.' });
       }
-      if (content.length > MAX_RESOURCE_CHARS) {
-        return json(res, CORS, 400, { error: `Resource too large (${content.length} chars, max ${MAX_RESOURCE_CHARS}).` });
+      if (finalContent.length > MAX_RESOURCE_CHARS) {
+        if (sourceUrl) finalContent = finalContent.slice(0, MAX_RESOURCE_CHARS) + '\n\n[truncated at size cap]';
+        else return json(res, CORS, 400, { error: `Resource too large (${finalContent.length} chars, max ${MAX_RESOURCE_CHARS}).` });
       }
       mkdirSync(RESOURCES_DIR, { recursive: true });
       const existed = existsSync(target.path);
-      writeFileSync(target.path, content);
-      console.log(`[AdminConsole] Resource ${existed ? 'updated' : 'added'}: ${target.name} (${content.length} chars)`);
-      return json(res, CORS, 200, { ok: true, name: target.name, updated: existed });
+      writeFileSync(target.path, finalContent);
+      console.log(`[AdminConsole] Resource ${existed ? 'updated' : 'added'}: ${target.name} (${finalContent.length} chars${sourceUrl ? `, from ${sourceUrl}` : ''})`);
+      return json(res, CORS, 200, { ok: true, name: target.name, updated: existed, chars: finalContent.length, fromUrl: !!sourceUrl });
     }
 
     const resourceMatch = url.match(/^\/admin\/console\/resources\/(.+)$/);
