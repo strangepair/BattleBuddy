@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BattleBuddy Console</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23E8624A'/%3E%3Ctext x='32' y='46' font-family='-apple-system,Helvetica,sans-serif' font-size='38' font-weight='800' fill='white' text-anchor='middle'%3EB%3C/text%3E%3C/svg%3E">
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   :root {
@@ -81,6 +82,37 @@
   label.filebtn { font-size: 12px; color: var(--dim); cursor: pointer; text-decoration: underline; align-self: flex-start; }
   label.filebtn:hover { color: var(--text); }
 
+  /* Overview dashboard */
+  #tab-overview { overflow-y: auto; }
+  #dash { max-width: 1040px; margin: 0 auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; width: 100%; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 10px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .stat .v { font-size: 22px; font-weight: 700; }
+  .stat .v small { font-size: 12px; font-weight: 400; color: var(--dim); }
+  .stat .l { font-size: 10.5px; color: var(--dim); text-transform: uppercase; letter-spacing: .6px; margin-top: 3px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  .panel h3 { font-size: 11px; color: var(--dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+  .chart { display: flex; gap: 5px; align-items: stretch; height: 130px; }
+  .chart .day { flex: 1; display: flex; flex-direction: column; }
+  .chart .bars { flex: 1; display: flex; gap: 2px; align-items: flex-end; }
+  .chart .bar { flex: 1; border-radius: 2px 2px 0 0; }
+  .chart .bar.res { background: var(--green); opacity: .85; }
+  .chart .bar.cig { background: var(--red); opacity: .85; }
+  .chart .lbl { font-size: 9px; color: var(--dim); text-align: center; margin-top: 5px; white-space: nowrap; }
+  .chart .lbl b { display: block; color: var(--text); font-weight: 500; }
+  .legend { display: flex; gap: 14px; font-size: 11px; color: var(--dim); margin-top: 10px; }
+  .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+  .spark { display: flex; gap: 4px; align-items: flex-end; height: 64px; }
+  .spark .sbar { flex: 1; border-radius: 2px; min-height: 3px; max-width: 26px; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 760px) { .two-col { grid-template-columns: 1fr; } }
+  .kv { display: flex; flex-direction: column; gap: 7px; }
+  .kv .row { display: flex; justify-content: space-between; gap: 12px; font-size: 12.5px; }
+  .kv .row .k { color: var(--dim); flex-shrink: 0; }
+  .kv .row .val { text-align: right; overflow-wrap: anywhere; }
+  .dash-summary { font-size: 12.5px; line-height: 1.55; color: var(--text); }
+  .dash-summary .when { color: var(--dim); font-size: 11px; display: block; margin-bottom: 6px; }
+
   /* Insights */
   #tab-insights { flex-direction: column; overflow: hidden; }
   #ins-scroll { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; max-width: 900px; width: 100%; margin: 0 auto; }
@@ -131,9 +163,10 @@
 </div>
 
 <header style="display:none" id="hdr">
-  <h1>Battle<span>Buddy</span> Console</h1>
+  <h1 id="logo" title="Overview" style="cursor:pointer">Battle<span>Buddy</span> Console</h1>
   <nav>
-    <button data-tab="prompt" class="on">Prompt</button>
+    <button data-tab="overview" class="on">Overview</button>
+    <button data-tab="prompt">Prompt</button>
     <button data-tab="resources">Resources</button>
     <button data-tab="directives">Directives</button>
     <button data-tab="insights">Insights</button>
@@ -143,8 +176,13 @@
 
 <main style="display:none" id="mn">
 
+  <!-- ─── Overview ─── -->
+  <section class="tab on" id="tab-overview">
+    <div id="dash"><div class="empty">Loading…</div></div>
+  </section>
+
   <!-- ─── Prompt ─── -->
-  <section class="tab on" id="tab-prompt">
+  <section class="tab" id="tab-prompt">
     <div class="toolbar">
       <button class="btn primary" id="p-save">Save</button>
       <button class="btn" id="p-reset" title="Reload the live version, discarding edits">Reset</button>
@@ -239,6 +277,7 @@ async function unlock(candidate) {
     $('mn').style.display = 'flex';
     initPrompt(content);
     setDiverged(divergedFromRepo);
+    loadDashboard();
     loadResources();
     loadDirectives();
     loadInsights();
@@ -252,10 +291,91 @@ $('gate-secret').addEventListener('keydown', e => { if (e.key === 'Enter') $('ga
 if (secret) unlock(secret); else $('gate-secret').focus();
 
 // ─── Tabs ────────────────────────────────────────────────────────────────────
-document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
-  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.id === 'tab-' + b.dataset.tab));
-});
+function showTab(name) {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x.dataset.tab === name));
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('on', t.id === 'tab-' + name));
+  if (name === 'overview') loadDashboard();
+}
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
+$('logo').onclick = () => showTab('overview');
+
+// ─── Overview dashboard ──────────────────────────────────────────────────────
+function relTime(ms) {
+  if (!ms) return 'never';
+  const mins = Math.floor((Date.now() - new Date(ms).getTime()) / 60000);
+  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1440) return `${Math.floor(mins / 60)}h ago`;
+  return `${Math.floor(mins / 1440)}d ago`;
+}
+async function loadDashboard() {
+  try {
+    const d = await api('/admin/console/dashboard');
+    const last7 = d.eventsByDay.slice(-7);
+    const sum = (arr, k) => arr.reduce((n, x) => n + x[k], 0);
+    const latestScore = d.memoryScores.length ? d.memoryScores[d.memoryScores.length - 1].score : null;
+
+    const stats = [
+      { v: sum(last7, 'sessions'), l: 'Sessions · 7d' },
+      { v: sum(last7, 'resisted'), l: 'Urges resisted · 7d' },
+      { v: sum(last7, 'cigarettes'), l: 'Cigarettes · 7d' },
+      { v: latestScore !== null ? `${latestScore}<small>/10</small>` : '—', l: 'Memory score' },
+      { v: d.directives.active, l: 'Active directives' },
+      { v: d.prompt.version || '—', l: 'Prompt version' },
+    ];
+
+    const maxBar = Math.max(1, ...d.eventsByDay.map(x => Math.max(x.resisted, x.cigarettes)));
+    const chart = d.eventsByDay.map(x => {
+      const wd = new Date(x.date + 'T12:00:00').toLocaleDateString([], { weekday: 'short' });
+      return `<div class="day" title="${x.date}: ${x.resisted} resisted, ${x.cigarettes} cigarettes, ${x.sessions} session(s)">
+        <div class="bars">
+          <div class="bar res" style="height:${(x.resisted / maxBar) * 100}%"></div>
+          <div class="bar cig" style="height:${(x.cigarettes / maxBar) * 100}%"></div>
+        </div>
+        <div class="lbl">${wd}<b>${x.sessions > 0 ? x.sessions + '×' : '·'}</b></div>
+      </div>`;
+    }).join('');
+
+    const spark = d.memoryScores.slice(-20).map(s =>
+      `<div class="sbar" title="${new Date(s.at).toLocaleDateString()} — ${s.score}/10" style="height:${s.score * 10}%; background:${s.score >= 7.5 ? 'var(--green)' : s.score >= 5 ? '#d9a13b' : 'var(--red)'}"></div>`
+    ).join('');
+
+    $('dash').innerHTML = `
+      <div class="stats">${stats.map(s => `<div class="stat"><div class="v">${s.v}</div><div class="l">${s.l}</div></div>`).join('')}</div>
+      <div class="panel">
+        <h3>Last 14 days — resisted vs smoked (sessions per day below)</h3>
+        <div class="chart">${chart}</div>
+        <div class="legend"><span><i style="background:var(--green)"></i>resisted</span><span><i style="background:var(--red)"></i>cigarettes</span><span>· = no sessions</span></div>
+      </div>
+      <div class="two-col">
+        <div class="panel">
+          <h3>Agent evolution</h3>
+          <div class="kv">
+            <div class="row"><span class="k">Prompt</span><span class="val">${d.prompt.version || '?'} · ${(d.prompt.chars / 1000).toFixed(1)}k chars${d.prompt.divergedFromRepo ? ' · <span style="color:var(--accent)">console-edited</span>' : ''}</span></div>
+            <div class="row"><span class="k">Prompt backups</span><span class="val">${d.prompt.backups} on volume</span></div>
+            <div class="row"><span class="k">Design loop</span><span class="val">last run ${relTime(d.designLoop.lastRunAt)} · ${d.designLoop.proposals} proposal(s)</span></div>
+            <div class="row"><span class="k">agent.md</span><span class="val">from ${d.designLoop.agentMdSource}</span></div>
+            <div class="row"><span class="k">Directives</span><span class="val">${d.directives.active} active / ${d.directives.total}</span></div>
+            <div class="row"><span class="k">Resources</span><span class="val">${d.resources.count} injected</span></div>
+          </div>
+          <h3 style="margin-top:16px">Memory accuracy trend</h3>
+          ${d.memoryScores.length ? `<div class="spark">${spark}</div>` : '<div class="empty" style="padding:8px">No scored audits yet.</div>'}
+        </div>
+        <div class="panel">
+          <h3>Latest audit read</h3>
+          ${d.latestAudit
+            ? `<div class="dash-summary"><span class="when">${new Date(d.latestAudit.at).toLocaleString()}</span>${escapeHtml(d.latestAudit.summary)}</div>`
+            : '<div class="empty" style="padding:8px">No audit reports yet.</div>'}
+          <h3 style="margin-top:16px">Users</h3>
+          <div class="kv">
+            ${d.users.map(u => `<div class="row"><span class="k">${escapeHtml(u.name || u.userId)}</span><span class="val">${u.sessions} sessions · last ${relTime(u.lastSessionAt)}</span></div>`).join('') || '<div class="empty">none</div>'}
+          </div>
+        </div>
+      </div>
+      ${d.eventsError ? `<div class="empty">Event store: ${escapeHtml(d.eventsError)}</div>` : ''}`;
+  } catch (e) {
+    $('dash').innerHTML = `<div class="empty">Dashboard failed to load: ${escapeHtml(e.message)}</div>`;
+  }
+}
 
 // ─── Prompt tab ──────────────────────────────────────────────────────────────
 let liveVersion = '';   // what's on the server (baseline for diff + dirty flag)

@@ -1899,7 +1899,7 @@ Return ONLY the JSON object, no markdown, no explanation.`;
   // Full route handling lives in admin-api.js; every data route inside is
   // guarded by checkAdminSecret (the HTML shell is open, same as /admin below).
   if (req.url === '/admin/console' || req.url.startsWith('/admin/console/')) {
-    return handleAdminConsole(req, res, { checkAdminSecret, CORS, send401, runTranscriptAudit, fetchAuditReports });
+    return handleAdminConsole(req, res, { checkAdminSecret, CORS, send401, runTranscriptAudit, fetchAuditReports, fetchDashboardEvents });
   }
 
   // The shell itself carries no data — a plain browser navigation can't attach
@@ -2094,6 +2094,21 @@ function loadRecentSessions(userId, { cutoffMs, limit = 12, minMessages = 4 } = 
     .filter(s => s && s.updatedAt && (!cutoffMs || new Date(s.updatedAt).getTime() > cutoffMs) && (s.messages || []).length >= minMessages)
     .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
     .slice(0, limit);
+}
+
+/** Raw events for the admin console's Overview dashboard — everything in the
+ * window, bucketed client-side by the user's calendar day. */
+async function fetchDashboardEvents(days = 14) {
+  if (!supabase) return { error: 'event store not configured', events: [] };
+  const cutoff = new Date(Date.now() - days * 24 * 3600 * 1000).toISOString();
+  const { data, error } = await supabase
+    .from('bb_events')
+    .select('event_type, occurred_at, user_id')
+    .gte('occurred_at', cutoff)
+    .order('occurred_at', { ascending: true })
+    .limit(5000);
+  if (error) return { error: error.message, events: [] };
+  return { events: data || [] };
 }
 
 /** Recent transcript-audit reports from bb_events, newest first — the admin

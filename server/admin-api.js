@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import {
   ADMIN_DATA_ROOT, RESOURCES_DIR, DIRECTIVES_PATH, loadDirectives, isDirectiveActive,
-  SYSTEM_PROMPT_PATH, persistPromptLive, promptDivergedFromRepo,
+  SYSTEM_PROMPT_PATH, persistPromptLive, promptDivergedFromRepo, USER_ALIASES,
 } from './contextAgent.js';
 import { runDesignLoop, AGENT_MD_VOLUME_PATH, readAgentMd } from './agentDesignLoop.js';
 
@@ -111,7 +111,99 @@ function saveInsightsState(state) {
   writeFileSync(INSIGHTS_STATE_PATH, JSON.stringify(state, null, 2));
 }
 
-export async function handleAdminConsole(req, res, { checkAdminSecret, CORS, send401, runTranscriptAudit, fetchAuditReports }) {
+// ─── Overview dashboard ───────────────────────────────────────────────────────
+
+const chicagoDay = at => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit',
+}).format(at instanceof Date ? at : new Date(at));
+
+function safeCount(dir, filter = f => !f.startsWith('.')) {
+  try { return readdirSync(dir).filter(filter).length; } catch { return 0; }
+}
+
+async function buildDashboard({ fetchDashboardEvents, fetchAuditReports }) {
+  const DAYS = 14;
+
+  // Usage: events bucketed by the user's calendar day (Railway runs UTC).
+  const { events, error: eventsError } = await fetchDashboardEvents(DAYS);
+  const byDay = {};
+  for (let i = DAYS - 1; i >= 0; i--) {
+    const d = chicagoDay(new Date(Date.now() - i * 24 * 3600 * 1000));
+    byDay[d] = { date: d, cigarettes: 0, resisted: 0, gaveIn: 0, urges: 0, sessions: 0 };
+  }
+  for (const e of events) {
+    const day = byDay[chicagoDay(e.occurred_at)];
+    if (!day) continue;
+    if (e.event_type === 'cigarette') day.cigarettes++;
+    else if (e.event_type === 'urge_resisted') day.resisted++;
+    else if (e.event_type === 'urge_gave_in') day.gaveIn++;
+    else if (e.event_type === 'urge') day.urges++;
+    else if (e.event_type === 'session') day.sessions++;
+  }
+  const eventsByDay = Object.values(byDay);
+
+  // Agent evolution: memory-accuracy trajectory + latest read from the audits.
+  const { reports } = await fetchAuditReports(30);
+  const memoryScores = (reports || [])
+    .map(r => {
+      const m = String(r.report?.memory_performance?.score ?? '').match(/\d+(\.\d+)?/);
+      return m ? { at: r.occurredAt, score: Math.min(10, parseFloat(m[0])) } : null;
+    })
+    .filter(Boolean)
+    .reverse(); // chronological
+  const latest = (reports || []).find(r => r.report?.summary);
+
+  // Profiles (users the agent knows).
+  const storeDir = process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store');
+  const users = [];
+  try {
+    // Alias profile files mirror the canonical one (USER_ALIASES) — skip them
+    // or every alias shows up as a duplicate user.
+    for (const f of readdirSync(storeDir).filter(f => f.endsWith('.json')
+      && !['audit-state.json', 'design-loop-state.json'].includes(f)
+      && !(f.replace('.json', '') in USER_ALIASES))) {
+      try {
+        const p = JSON.parse(readFileSync(resolve(storeDir, f), 'utf-8'));
+        users.push({ userId: f.replace('.json', ''), name: p.name || null, sessions: p.session_count || 0, lastSessionAt: p.last_session_at || null });
+      } catch {}
+    }
+  } catch {}
+  users.sort((a, b) => b.sessions - a.sessions);
+
+  // Prompt + design loop state.
+  const promptContent = readFileSync(SYSTEM_PROMPT_PATH, 'utf-8');
+  const versionMatch = promptContent.match(/PROMPT_VERSION: (v[\d.]+) — ([\d-]+)/);
+  let designLoopLastRun = null;
+  try { designLoopLastRun = JSON.parse(readFileSync(resolve(storeDir, 'design-loop-state.json'), 'utf-8')).last_run_at || null; } catch {}
+
+  return {
+    eventsError: eventsError || null,
+    eventsByDay,
+    memoryScores,
+    latestAudit: latest ? { at: latest.occurredAt, summary: latest.report.summary } : null,
+    users,
+    totals: { users: users.length, sessions: users.reduce((n, u) => n + u.sessions, 0) },
+    prompt: {
+      version: versionMatch ? versionMatch[1] : null,
+      versionDate: versionMatch ? versionMatch[2] : null,
+      chars: promptContent.length,
+      divergedFromRepo: promptDivergedFromRepo(promptContent),
+      backups: safeCount(resolve(ADMIN_DATA_ROOT, 'prompt-backups'), f => f.endsWith('.md')),
+    },
+    designLoop: {
+      lastRunAt: designLoopLastRun,
+      proposals: safeCount(resolve(ADMIN_DATA_ROOT, 'agent-proposals'), f => f.endsWith('.md')),
+      agentMdSource: readAgentMd().source,
+    },
+    directives: {
+      active: loadDirectives().filter(d => isDirectiveActive(d)).length,
+      total: loadDirectives().length,
+    },
+    resources: { count: safeCount(RESOURCES_DIR) },
+  };
+}
+
+export async function handleAdminConsole(req, res, { checkAdminSecret, CORS, send401, runTranscriptAudit, fetchAuditReports, fetchDashboardEvents }) {
   const url = req.url.split('?')[0];
 
   if (req.method === 'OPTIONS') {
@@ -217,6 +309,11 @@ export async function handleAdminConsole(req, res, { checkAdminSecret, CORS, sen
       const directive = addDirective(text, expires);
       console.log(`[AdminConsole] Directive added: "${directive.text.slice(0, 60)}"${expires ? ` (expires ${expires})` : ''}`);
       return json(res, CORS, 200, { ok: true, directive: { ...directive, active: isDirectiveActive(directive) } });
+    }
+
+    // ─── Overview dashboard ────────────────────────────────────────────────
+    if (req.method === 'GET' && url === '/admin/console/dashboard') {
+      return json(res, CORS, 200, await buildDashboard({ fetchDashboardEvents, fetchAuditReports }));
     }
 
     // ─── Insights (transcript-audit recommendations) ──────────────────────
