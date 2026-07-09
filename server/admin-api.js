@@ -29,8 +29,8 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import {
   ADMIN_DATA_ROOT, RESOURCES_DIR, DIRECTIVES_PATH, loadDirectives, isDirectiveActive,
-  SYSTEM_PROMPT_PATH, persistPromptLive, promptDivergedFromRepo, USER_ALIASES,
-  loadInsightsState, saveInsightsState, proposalKey,
+  SYSTEM_PROMPT_PATH, persistPromptLive, promptDivergedFromRepo,
+  loadInsightsState, saveInsightsState, proposalKey, listKnownProfiles,
 } from './contextAgent.js';
 import { runDesignLoop, AGENT_MD_VOLUME_PATH, readAgentMd } from './agentDesignLoop.js';
 
@@ -240,26 +240,18 @@ async function buildDashboard({ fetchDashboardEvents, fetchAuditReports }) {
   const latest = (reports || []).find(r => r.report?.summary);
   const insightsState = loadInsightsState();
 
-  // Profiles (users the agent knows).
-  const storeDir = process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store');
-  const users = [];
-  try {
-    // Alias profile files mirror the canonical one (USER_ALIASES) — skip them
-    // or every alias shows up as a duplicate user.
-    for (const f of readdirSync(storeDir).filter(f => f.endsWith('.json')
-      && !['audit-state.json', 'design-loop-state.json'].includes(f)
-      && !(f.replace('.json', '') in USER_ALIASES))) {
-      try {
-        const p = JSON.parse(readFileSync(resolve(storeDir, f), 'utf-8'));
-        users.push({ userId: f.replace('.json', ''), name: p.name || null, sessions: p.session_count || 0, lastSessionAt: p.last_session_at || null });
-      } catch {}
-    }
-  } catch {}
-  users.sort((a, b) => b.sessions - a.sessions);
+  // Profiles (users the agent knows) — read from the live in-memory cache
+  // (backed by Supabase's user_profiles), not the volume, which saveProfile
+  // no longer writes to. listKnownProfiles() already excludes alias entries.
+  const users = listKnownProfiles()
+    .map(p => ({ userId: p.userId, name: p.name || null, sessions: p.session_count || 0, lastSessionAt: p.last_session_at || null }))
+    .sort((a, b) => b.sessions - a.sessions);
 
-  // Prompt + design loop state.
+  // Prompt + design loop state (design-loop-state.json is unrelated bookkeeping,
+  // still on the volume — only the profile JSON files moved to Supabase).
   const promptContent = readFileSync(SYSTEM_PROMPT_PATH, 'utf-8');
   const versionMatch = promptContent.match(/PROMPT_VERSION: (v[\d.]+) — ([\d-]+)/);
+  const storeDir = process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store');
   let designLoopLastRun = null;
   try { designLoopLastRun = JSON.parse(readFileSync(resolve(storeDir, 'design-loop-state.json'), 'utf-8')).last_run_at || null; } catch {}
 

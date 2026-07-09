@@ -21,7 +21,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execSync, execFileSync } from 'node:child_process';
 import Anthropic from '@anthropic-ai/sdk';
-import { persistPromptLive, ADMIN_DATA_ROOT, buildInsightsFeedback } from './contextAgent.js';
+import { persistPromptLive, ADMIN_DATA_ROOT, buildInsightsFeedback, listKnownProfiles } from './contextAgent.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -88,6 +88,12 @@ async function fetchRemoteProfile(userId) {
 
 async function loadAllProfiles(remote = false) {
   if (remote) {
+    // Dev-CLI-only path (`node server/agentDesignLoop.js --remote`): profiles
+    // themselves come from the live server over HTTP, but candidate userIds
+    // still come from whatever's on this machine's local volume checkout —
+    // a user created after profiles moved to Supabase won't show up here
+    // unless their file also happens to exist locally. Not used in production
+    // (see the in-process branch below).
     const files = readdirSync(STORE_DIR).filter(f => f.endsWith('.json') && !f.startsWith('default'));
     const userIds = files.map(f => f.replace('.json', ''));
     const profiles = [];
@@ -104,19 +110,9 @@ async function loadAllProfiles(remote = false) {
     return profiles;
   }
 
-  const files = readdirSync(STORE_DIR).filter(f => f.endsWith('.json') && !f.startsWith('default'));
-  const profiles = [];
-  for (const file of files) {
-    const userId = file.replace('.json', '');
-    if (userFilter && !userFilter.includes(userId)) continue;
-    try {
-      const raw = JSON.parse(readFileSync(resolve(STORE_DIR, file), 'utf-8'));
-      profiles.push({ userId, ...raw });
-    } catch {
-      console.warn(`[DesignLoop] Could not parse ${file}, skipping`);
-    }
-  }
-  return profiles;
+  // In-process (production): read straight from the live cache, backed by
+  // Supabase's user_profiles — the volume is no longer where saveProfile writes.
+  return listKnownProfiles().filter(p => !userFilter || userFilter.includes(p.userId));
 }
 
 // ── Build signal digest from profiles ────────────────────────────────────────

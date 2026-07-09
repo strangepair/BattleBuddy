@@ -7,7 +7,7 @@
  *         ↓ (messages stream in)
  *   Context Agent (Sonnet) — analyzes, extracts facts, updates profile
  *         ↓
- *   Context Store (in-memory + disk) — the real-time agent reads this
+ *   Context Store (in-memory, backed by Supabase) — the real-time agent reads this
  *
  * The context agent never touches the conversation. It only observes and writes.
  *
@@ -21,6 +21,8 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import Anthropic from '@anthropic-ai/sdk';
 import { jsonrepair } from 'jsonrepair';
+import { createClient } from '@supabase/supabase-js';
+import WebSocket from 'ws';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -269,10 +271,11 @@ const LIFE_ARCH_ARRAYS = [
 
 const SCHEDULE_MODEL_ARRAYS = ['routine_blocks', 'vulnerability_windows', 'life_change_watch'];
 
-// Map of user ID aliases — redirects old IDs to the canonical one.
-// Once real Supabase Auth ships, add the new auth UID here (e.g. after signing
-// up with the same email as the old local account) so the existing profile
-// keeps resolving instead of starting fresh under an unrelated UUID.
+// Map of user ID aliases — redirects old IDs to the canonical one. This is
+// the bootstrap seed / offline fallback; user_aliases in Supabase is the
+// live source of truth once warmProfileStoreFromSupabase() below has run
+// (it seeds the table from this map on first boot, then merges any rows —
+// including ones added later via the admin console — back into this object).
 export const USER_ALIASES = {
   'default': 'user-1782351957094',
   'user-1782249813276': 'user-1782351957094',
@@ -288,6 +291,75 @@ export function resolveUserId(userId) {
 function getAliasesFor(canonicalId) {
   return Object.keys(USER_ALIASES).filter(alias => USER_ALIASES[alias] === canonicalId && alias !== canonicalId);
 }
+
+// ─── Supabase-backed profile store ──────────────────────────────────────────
+// user_profiles is the source of truth; the volume (context-store/*.json,
+// read via getStorePath below) is the fallback for migration only — session
+// transcripts are unaffected and stay on the volume.
+const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY)
+  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY, {
+    realtime: { transport: WebSocket },
+  })
+  : null;
+
+async function upsertProfileRow(userId, profile) {
+  if (!supabase) {
+    console.warn(`[ContextAgent] Supabase not configured — profile for ${userId} not persisted`);
+    return;
+  }
+  const { error } = await supabase.from('user_profiles').upsert(
+    { user_id: userId, profile, updated_at: new Date().toISOString() },
+    { onConflict: 'user_id' }
+  );
+  if (error) console.error(`[ContextAgent] Supabase profile save failed for ${userId}:`, error.message);
+}
+
+/**
+ * Boot-time warm-up: pulls every known profile + alias into memory so the
+ * rest of this module can keep reading/writing them synchronously. loadProfile
+ * and saveProfile are called from ~20 call sites across this file and
+ * index.js, several inside per-turn prompt-building paths — converting all of
+ * them to async would risk an unawaited promise leaking "[object Promise]"
+ * into a live system prompt. ESM top-level await blocks index.js's import of
+ * this module until this resolves, so the in-memory cache already reflects
+ * Supabase before the HTTP server starts listening.
+ */
+async function warmProfileStoreFromSupabase() {
+  if (!supabase) {
+    console.warn('[ContextAgent] Supabase not configured — profiles will only use the volume fallback');
+    return;
+  }
+
+  try {
+    const { data: rows, error } = await supabase.from('user_profiles').select('user_id, profile');
+    if (error) throw error;
+    for (const row of rows || []) {
+      profiles[row.user_id] = migrateProfile(row.profile || {});
+    }
+    console.log(`[ContextAgent] Warmed ${rows?.length || 0} profile(s) from Supabase`);
+  } catch (e) {
+    console.error('[ContextAgent] Failed to warm profiles from Supabase, falling back to volume on demand:', e.message);
+  }
+
+  try {
+    // Seed the table with the hardcoded map on first boot so future admin
+    // edits have somewhere to live; ignored once rows already exist.
+    await supabase.from('user_aliases').upsert(
+      Object.entries(USER_ALIASES).map(([alias_id, canonical_id]) => ({ alias_id, canonical_id })),
+      { onConflict: 'alias_id', ignoreDuplicates: true }
+    );
+    const { data: aliasRows, error: aliasError } = await supabase.from('user_aliases').select('alias_id, canonical_id');
+    if (aliasError) throw aliasError;
+    for (const row of aliasRows || []) {
+      USER_ALIASES[row.alias_id] = row.canonical_id;
+    }
+    console.log(`[ContextAgent] Loaded ${aliasRows?.length || 0} alias(es) from Supabase`);
+  } catch (e) {
+    console.error('[ContextAgent] Failed to sync aliases with Supabase, using hardcoded map only:', e.message);
+  }
+}
+
+await warmProfileStoreFromSupabase();
 
 function getStorePath(userId) {
   return resolve(STORE_DIR, `${userId}.json`);
@@ -588,6 +660,11 @@ function pruneProfile(profile) {
   return profile;
 }
 
+// Read order: (1) in-memory cache, warmed from Supabase's user_profiles at
+// boot by warmProfileStoreFromSupabase() — a cache hit here IS the "Supabase
+// first" read. (2) the volume file, for a user who existed before this
+// process's boot but isn't in Supabase yet (migration fallback). (3) a
+// default empty profile for a genuinely new user.
 export function loadProfile(rawUserId) {
   const userId = resolveUserId(rawUserId);
   if (profiles[userId]) return profiles[userId];
@@ -618,7 +695,7 @@ export function loadProfile(rawUserId) {
 
   if (loaded) {
     profiles[userId] = loaded;
-    // Converge future reads onto the canonical file so this fallback is a one-time cost.
+    // Converge future reads onto Supabase so this volume fallback is a one-time cost.
     saveProfile(userId);
     return profiles[userId];
   }
@@ -685,26 +762,41 @@ function saveProfile(userId) {
   // Prune before writing
   pruneProfile(profile);
 
-  try { mkdirSync(STORE_DIR, { recursive: true }); } catch {}
-
-  writeFileSync(getStorePath(userId), JSON.stringify(profile, null, 2));
+  // Fire-and-forget — saveProfile is called synchronously from ~20 places
+  // that never awaited the old writeFileSync either. Errors are logged, not
+  // thrown, so a transient Supabase hiccup doesn't take down a request.
+  upsertProfileRow(userId, profile).catch(err =>
+    console.error(`[ContextAgent] Supabase profile save failed for ${userId}:`, err.message)
+  );
 }
 
-/** Persist the (already-mutated) cached profile to disk with pruning applied. */
+/** Persist the (already-mutated) cached profile to Supabase with pruning applied. */
 export function persistProfile(rawUserId) {
   saveProfile(resolveUserId(rawUserId));
 }
 
 /**
- * Full profile replacement: swaps both the file and the in-memory cache.
- * Unlike Object.assign onto the cached object, fields absent from the new
- * profile actually disappear.
+ * Full profile replacement: swaps both the Supabase row and the in-memory
+ * cache. Unlike Object.assign onto the cached object, fields absent from the
+ * new profile actually disappear.
  */
 export function replaceProfile(rawUserId, newProfile) {
   const userId = resolveUserId(rawUserId);
   profiles[userId] = migrateProfile(newProfile);
   saveProfile(userId);
   return profiles[userId];
+}
+
+/**
+ * Snapshot of every profile this process currently holds in memory — the
+ * same object saveProfile writes through to Supabase, so it's always
+ * current. Used by the admin console and the in-process design loop instead
+ * of scanning the volume, which saveProfile no longer writes to.
+ */
+export function listKnownProfiles() {
+  return Object.keys(profiles)
+    .filter(userId => !(userId in USER_ALIASES))
+    .map(userId => ({ userId, ...profiles[userId] }));
 }
 
 /**
