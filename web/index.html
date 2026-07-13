@@ -1,0 +1,1675 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BattleBuddy — One Conversation Head</title>
+</head>
+<body>
+<style>
+  /* BattleBuddy design tokens (mobile/src/theme/tokens.ts) — committed dark world */
+  :root {
+    --bg: #1c1c1e; --stage: #111113; --surface: #2c2c2e; --surface-2: #232326;
+    --border: #3a3a3c; --surface-light: #48484a;
+    --coral: #e8624a; --blue: #5b9fff; --green: #34c759; --amber: #ff9f0a;
+    --purple: #8b5cf6; --purple-soft: #c4b5fd;
+    --ink: #ffffff; --ink-2: #8e8e93; --ink-3: #636366;
+    --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  html, body { background: var(--stage); }
+  body { font-family: var(--font); color: var(--ink); margin: 0; -webkit-font-smoothing: antialiased; }
+  * { box-sizing: border-box; }
+  button { font-family: var(--font); cursor: pointer; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+  .stage { max-width: 1180px; margin: 0 auto; padding: 28px 20px 64px; }
+  .stage-head { max-width: 720px; margin-bottom: 22px; }
+  .eyebrow { font-size: 11px; letter-spacing: 2.2px; text-transform: uppercase; color: var(--coral); font-weight: 700; margin: 0 0 10px; }
+  .stage-head h1 { font-size: clamp(26px, 4vw, 38px); font-weight: 800; letter-spacing: -0.5px; margin: 0 0 10px; text-wrap: balance; }
+  .stage-head p { color: var(--ink-2); font-size: 15px; line-height: 1.55; margin: 0; max-width: 62ch; }
+  .stage-head p strong { color: var(--ink); font-weight: 600; }
+
+  .scenarios { display: flex; flex-wrap: wrap; gap: 8px; margin: 20px 0 26px; }
+  .scenario-btn { background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 999px; padding: 9px 16px; font-size: 13px; font-weight: 600; transition: border-color .15s, background .15s; }
+  .scenario-btn:hover { border-color: var(--ink-3); }
+  .scenario-btn .num { color: var(--coral); font-weight: 800; margin-right: 6px; }
+  .scenario-btn.reset { color: var(--ink-2); }
+
+  .connect-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: -10px 0 22px; }
+  .mode-pill { font-size: 10px; font-weight: 800; letter-spacing: 1.5px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--ink-2); }
+  .mode-pill.live { color: var(--green); border-color: rgba(52,199,89,.55); background: rgba(52,199,89,.1); }
+  .connect-bar input { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; color: var(--ink); font-size: 12.5px; padding: 8px 12px; min-width: 0; }
+  .connect-bar input#cfgServer { flex: 1 1 260px; }
+  .connect-bar input#cfgUser { flex: 0 1 150px; }
+  .connect-bar button { background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 10px; padding: 8px 14px; font-size: 12.5px; font-weight: 700; }
+  .connect-bar button:hover { border-color: var(--ink-3); }
+  .connect-bar .status { font-size: 11.5px; color: var(--ink-3); flex-basis: 100%; }
+  .feed-card.live-video video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+
+  .layout { display: flex; gap: 28px; align-items: flex-start; justify-content: center; }
+
+  /* ---------- Phone ---------- */
+  .phone { --tscale: 1; width: 392px; flex: 0 0 392px; height: 760px; background: var(--bg); border: 1px solid #3f3f42; border-radius: 44px; overflow: hidden; display: flex; flex-direction: column; position: relative; box-shadow: 0 24px 80px rgba(0,0,0,.55); }
+  .phase-resistance-glow { position:absolute; inset:0; pointer-events:none; border-radius:44px; box-shadow: inset 0 0 60px rgba(232,98,74,0); transition: box-shadow .8s; z-index:5; }
+  .phone.resistance .phase-resistance-glow { box-shadow: inset 0 0 70px rgba(232,98,74,.22); }
+
+  .app-head { display: flex; align-items: center; gap: 12px; padding: 18px 16px 12px; border-bottom: 1px solid var(--border); position: relative; z-index: 6; }
+  .orb-wrap { position: relative; width: 44px; height: 44px; flex: 0 0 44px; border-radius: 50%; }
+  .orb { position:absolute; inset:0; border-radius: 50%; background: var(--blue); transition: background .5s; animation: breathe 2.4s ease-in-out infinite; }
+  .orb-ring { position:absolute; inset:-5px; border-radius:50%; border: 2px solid var(--blue); opacity:.35; transition: border-color .5s; animation: ringpulse 2.4s ease-in-out infinite; }
+  @keyframes breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.08); } }
+  @keyframes ringpulse { 0%,100% { transform: scale(1); opacity:.35 } 50% { transform: scale(1.12); opacity:.12 } }
+  .head-meta { flex: 1; min-width: 0; }
+  .head-name { font-size: 15px; font-weight: 700; }
+  .head-state { font-size: 11.5px; color: var(--ink-2); margin-top: 1px; }
+  .clock { font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; text-align: right; }
+  .clock .day { display:block; font-size: 10px; color: var(--ink-3); }
+  /* Text-size slider — lives on the chat screen's tab bar; scales copy via --tscale */
+  .aa-ctl { display: none; align-items: center; gap: 5px; flex: 0 0 auto; }
+  .phone:not(.viewJourney):not(.viewContent) .aa-ctl { display: flex; }
+  .aa-ctl .aa-s { font-size: 10px; font-weight: 800; color: var(--ink-3); }
+  .aa-ctl .aa-l { font-size: 15px; font-weight: 800; color: var(--ink-2); }
+  .aa-ctl input[type=range] { width: 62px; min-width: 0; accent-color: var(--coral); }
+
+  .phase-chip { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 4px 11px 4px 8px; font-size: 10.5px; font-weight: 800; letter-spacing: 1.4px; text-transform: uppercase; border: 1px solid; transition: all .5s; }
+  .phase-chip .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .phase-chip.observation { color: var(--blue); border-color: rgba(91,159,255,.45); background: rgba(91,159,255,.10); }
+  .phase-chip.observation .dot { background: var(--blue); }
+  .phase-chip.resistance { color: var(--coral); border-color: rgba(232,98,74,.55); background: rgba(232,98,74,.13); }
+  .phase-chip.resistance .dot { background: var(--coral); animation: breathe 1.2s ease-in-out infinite; }
+
+  /* ---------- Handedness (thumb-side primary interactions) ----------
+     Right-handed (default): BB's presence orb + mic/send sit on the right,
+     under the thumb. Left-handed flips the header, seg bar, and dock. */
+  .phone.righty .app-head { flex-direction: row-reverse; }
+  .phone.righty .head-meta { text-align: right; }
+  .phone.righty .clock { text-align: left; }
+  .phone.righty .clock .day { text-align: left; }
+  .phone.righty .seg-bar { flex-direction: row-reverse; }
+  .phone.lefty .dock { flex-direction: row-reverse; }
+
+  .hand-toggle { display: flex; background: var(--surface-2); border-radius: 10px; padding: 3px; gap: 2px; }
+  .hand-toggle button { flex: 1; border: none; background: none; color: var(--ink-2); font-size: 12px; font-weight: 700; padding: 7px 0; border-radius: 8px; }
+  .hand-toggle button.on { background: var(--surface-light); color: var(--ink); }
+  .settings-note { font-size: 11px; color: var(--ink-3); margin: 8px 0 0; line-height: 1.5; }
+
+  /* ---------- Segmented bar (view tabs + Aa) ---------- */
+  .seg-bar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--border); position: relative; z-index: 6; }
+  .seg { display: flex; background: var(--surface-2); border-radius: 10px; padding: 3px; gap: 2px; }
+  .seg button { border: none; background: none; color: var(--ink-2); font-size: 11.5px; font-weight: 700; padding: 5px 9px; border-radius: 8px; white-space: nowrap; }
+  .seg button.on { background: var(--surface-light); color: var(--ink); }
+  .seg-spacer { flex: 1; }
+
+  /* ---------- Journey dashboard ---------- */
+  .journey { display: none; flex: 1; overflow-y: auto; padding: 14px; flex-direction: column; gap: 12px; }
+  .phone.viewJourney .journey { display: flex; }
+  .phone.viewJourney .stream, .phone.viewJourney .dock, .phone.viewJourney .voice-band, .phone.viewJourney .jump-latest { display: none; }
+
+  .j-card { background: var(--surface); border: 1px solid var(--border); border-radius: 18px; padding: 14px; }
+  .j-card h4 { margin: 0 0 2px; font-size: calc(13.5px * var(--tscale)); font-weight: 700; }
+  .j-card .sub { font-size: calc(11.5px * var(--tscale)); color: var(--ink-2); margin: 0 0 10px; }
+  .j-cta { margin-top: 12px; display: flex; gap: 8px; }
+  .j-cta button { flex: 1; border: 1px solid var(--border); background: var(--surface-2); color: var(--ink); border-radius: 10px; padding: 8px 0; font-size: 12px; font-weight: 700; }
+  .j-cta button.primary { background: var(--coral); border-color: var(--coral); color: #fff; }
+  .j-cta button:hover { border-color: var(--ink-3); }
+
+  .snap { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .snap .tile { background: var(--surface-2); border-radius: 12px; padding: 10px 11px; }
+  .snap .tile .k { font-size: 9.5px; letter-spacing: 1px; text-transform: uppercase; color: var(--ink-3); font-weight: 700; }
+  .snap .tile .n { font-size: 19px; font-weight: 800; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .snap .tile .d { font-size: 10px; color: var(--ink-2); margin-top: 2px; }
+  .snap .tile .n.good { color: var(--green); }
+  .snap .tile .n.warm { color: var(--coral); }
+  .snap-note { font-size: calc(11.5px * var(--tscale)); color: var(--ink-2); margin: 10px 0 0; line-height: 1.5; }
+  .snap-note strong { color: var(--blue); font-weight: 700; }
+
+  .arc-wrap { position: relative; }
+  .arc-wrap svg { display: block; width: 100%; height: auto; }
+  .legend { display: flex; gap: 14px; margin-top: 8px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--ink-2); }
+  .legend i { width: 14px; height: 0; border-top: 2px solid var(--coral); border-radius: 2px; }
+  .legend i.base { border-top-style: dashed; border-top-color: var(--ink-3); }
+
+  .trig { display: flex; flex-direction: column; gap: 8px; }
+  .trig .row { display: flex; align-items: center; gap: 10px; background: var(--surface-2); border-radius: 10px; padding: 8px 11px; }
+  .trig .name { flex: 1; font-size: calc(12.5px * var(--tscale)); }
+  .trig .name small { display: block; color: var(--ink-3); font-size: 10px; margin-top: 1px; }
+  .trig .conf { font-size: 9.5px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; }
+  .trig .conf.high { color: var(--coral); background: rgba(232,98,74,.13); }
+  .trig .conf.med { color: var(--amber); background: rgba(255,159,10,.12); }
+
+  .tech { display: flex; flex-direction: column; gap: 8px; }
+  .tech .row { background: var(--surface-2); border-radius: 10px; padding: 8px 11px; }
+  .tech .top { display: flex; justify-content: space-between; align-items: baseline; }
+  .tech .name { font-size: calc(12.5px * var(--tscale)); }
+  .tech .rate { font-size: 12px; font-weight: 800; color: var(--green); font-variant-numeric: tabular-nums; }
+  .tech .bar { height: 4px; border-radius: 2px; background: var(--surface-light); margin-top: 7px; overflow: hidden; }
+  .tech .bar i { display: block; height: 100%; border-radius: 2px; background: var(--green); }
+
+  .mile { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .mile .chip { font-size: 10.5px; font-weight: 700; color: var(--ink-2); border: 1px solid var(--border); border-radius: 999px; padding: 5px 11px; }
+  .mile .chip.won { color: var(--green); border-color: rgba(52,199,89,.5); }
+  .mile .chip.progress { color: var(--amber); border-color: rgba(255,159,10,.45); }
+
+  .insight { border-left: 3px solid var(--blue); background: var(--surface-2); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; }
+  .insight p { margin: 0; font-size: calc(12.5px * var(--tscale)); line-height: 1.5; }
+  .insight .from { font-size: 10px; color: var(--ink-3); margin-top: 5px; }
+
+  .ind { display: flex; align-items: flex-end; gap: 14px; height: 74px; padding: 4px 4px 0; }
+  .ind .wk { flex: 1; display: flex; align-items: flex-end; justify-content: center; gap: 4px; height: 100%; position: relative; }
+  .ind .wk b { position: absolute; bottom: -16px; font-size: 9.5px; color: var(--ink-3); font-weight: 600; }
+  .ind .bar { width: 9px; border-radius: 3px 3px 0 0; }
+  .ind .bar.self { background: var(--blue); }
+  .ind .bar.prompt { background: var(--surface-light); }
+  .ind-legend { display: flex; gap: 14px; margin-top: 22px; }
+  .ind-legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--ink-2); }
+  .ind-legend i { width: 9px; height: 9px; border-radius: 3px; }
+  .ind-legend i.self { background: var(--blue); }
+  .ind-legend i.prompt { background: var(--surface-light); }
+
+  /* ---------- Content feed (TikTok-style vertical snap) ---------- */
+  .content-feed { display: none; flex: 1; overflow-y: auto; scroll-snap-type: y mandatory; overscroll-behavior: contain; }
+  .phone.viewContent .content-feed { display: block; }
+  .phone.viewContent .stream, .phone.viewContent .dock, .phone.viewContent .voice-band, .phone.viewContent .jump-latest, .phone.viewContent .journey { display: none; }
+  .feed-card { height: 100%; scroll-snap-align: start; scroll-snap-stop: always; position: relative; display: flex; align-items: flex-end; overflow: hidden; }
+  .feed-card .scene { position: absolute; inset: 0; }
+  .feed-card.v1 .scene { background: radial-gradient(ellipse at 70% 25%, rgba(91,159,255,.4), transparent 55%), linear-gradient(160deg, #22304d, #101a26 70%); }
+  .feed-card.v2 .scene { background: radial-gradient(ellipse at 30% 70%, rgba(52,199,89,.3), transparent 55%), linear-gradient(200deg, #1d3328, #0e1a13 70%); }
+  .feed-card.v3 .scene { background: radial-gradient(ellipse at 60% 80%, rgba(232,98,74,.35), transparent 55%), linear-gradient(150deg, #3a2420, #1a100e 70%); }
+  .feed-card.v4 .scene { background: radial-gradient(ellipse at 40% 20%, rgba(139,92,246,.32), transparent 55%), linear-gradient(190deg, #2a2140, #14101f 70%); }
+  .feed-card .f-meta { position: relative; padding: 18px; padding-bottom: 26px; width: 78%; }
+  .feed-card .f-theme { font-size: calc(10px * var(--tscale)); font-weight: 800; letter-spacing: 1.6px; text-transform: uppercase; color: var(--blue); margin-bottom: 6px; }
+  .feed-card .f-title { font-size: calc(19px * var(--tscale)); font-weight: 800; line-height: 1.25; text-wrap: balance; }
+  .feed-card .f-cap { font-size: calc(12.5px * var(--tscale)); color: rgba(255,255,255,.75); margin-top: 8px; line-height: 1.5; }
+  .feed-card .f-quote { font-size: calc(21px * var(--tscale)); font-weight: 700; font-style: italic; line-height: 1.4; }
+  .feed-card .f-cite { font-size: calc(11.5px * var(--tscale)); color: rgba(255,255,255,.6); margin-top: 10px; font-style: normal; }
+  .feed-play { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 54px; height: 54px; border-radius: 50%; border: none; background: rgba(255,255,255,.92); color: #111; font-size: 18px; display: flex; align-items: center; justify-content: center; }
+  .feed-rail { position: absolute; right: 12px; bottom: 24px; display: flex; flex-direction: column; gap: 12px; align-items: center; }
+  .phone.lefty .feed-rail { right: auto; left: 12px; }
+  .phone.lefty .feed-card .f-meta { margin-left: 64px; }
+  .feed-rail button { width: 46px; height: 46px; border-radius: 50%; border: 1px solid rgba(255,255,255,.25); background: rgba(0,0,0,.4); color: var(--ink); font-size: 18px; }
+  .feed-rail button.on { border-color: var(--green); color: var(--green); }
+  .feed-rail .r-lab { font-size: 9px; font-weight: 700; letter-spacing: .5px; color: rgba(255,255,255,.65); margin-top: -6px; text-transform: uppercase; }
+
+  /* ---------- Stream ---------- */
+  .stream { flex: 1; overflow-y: auto; padding: 14px 14px 8px; display: flex; flex-direction: column; gap: 8px; }
+  .jump-latest { position: absolute; left: 50%; transform: translateX(-50%) translateY(6px); bottom: 74px; z-index: 7; border: 1px solid var(--border); border-radius: 999px; background: rgba(28,28,30,.94); color: var(--ink); font-size: 12px; font-weight: 700; padding: 7px 14px; opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; box-shadow: 0 4px 18px rgba(0,0,0,.45); }
+  .jump-latest.show { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
+  .phone.voice .jump-latest { bottom: 122px; }
+  .bubble { max-width: 82%; border-radius: 18px; padding: 9px 14px; font-size: calc(14.5px * var(--tscale)); line-height: 1.45; animation: rise .28s ease both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .bubble.user { align-self: flex-end; background: var(--coral); border-bottom-right-radius: 5px; }
+  .bubble.bb { align-self: flex-start; background: var(--surface); border-bottom-left-radius: 5px; }
+  .bubble .wave-glyph { display: inline-block; margin-right: 6px; color: rgba(255,255,255,.75); font-size: 11px; letter-spacing: 1px; vertical-align: 1px; }
+  .bubble.bb .wave-glyph { color: var(--blue); }
+
+  .reply-quote { border-left: 3px solid rgba(255,255,255,.55); background: rgba(0,0,0,.22); border-radius: 8px; padding: 6px 10px; margin-bottom: 7px; }
+  .reply-quote .rq-title { font-size: calc(10px * var(--tscale)); font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: rgba(255,255,255,.8); margin-bottom: 2px; }
+  .reply-quote .rq-text { font-size: calc(11.5px * var(--tscale)); line-height: 1.4; color: rgba(255,255,255,.85); }
+
+  .receipt { align-self: center; display: inline-flex; align-items: center; gap: 7px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 5px 13px; font-size: calc(11.5px * var(--tscale)); color: var(--ink-2); animation: rise .28s ease both; font-variant-numeric: tabular-nums; }
+  .receipt .rdot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); }
+  .receipt.decision .rdot { background: var(--purple); }
+  .receipt.resisted .rdot { background: var(--green); }
+  .receipt.urge .rdot { background: var(--coral); }
+
+  .phase-banner { align-self: stretch; text-align: center; font-size: 10.5px; font-weight: 800; letter-spacing: 2px; text-transform: uppercase; padding: 8px 0; border-radius: 10px; animation: rise .4s ease both; }
+  .phase-banner.to-resistance { color: var(--coral); background: rgba(232,98,74,.10); border: 1px dashed rgba(232,98,74,.4); }
+  .phase-banner.to-observation { color: var(--blue); background: rgba(91,159,255,.08); border: 1px dashed rgba(91,159,255,.35); }
+
+  /* ---------- Cards ---------- */
+  .card { align-self: flex-start; width: 88%; background: var(--surface); border: 1px solid var(--border); border-radius: 18px; border-bottom-left-radius: 5px; padding: 14px; animation: rise .32s ease both; }
+  .card h4 { margin: 0 0 2px; font-size: calc(13.5px * var(--tscale)); font-weight: 700; }
+  .card .sub { font-size: calc(11.5px * var(--tscale)); color: var(--ink-2); margin: 0 0 10px; }
+
+  .breath-stage { display: flex; flex-direction: column; align-items: center; padding: 8px 0 4px; }
+  .breath-circle { width: 76px; height: 76px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, rgba(255,255,255,.18), rgba(255,255,255,0) 55%), var(--coral); transition: transform 3s cubic-bezier(.4,0,.6,1); transform: scale(.55); }
+  .breath-circle.in { transform: scale(1); }
+  .breath-label { margin-top: 12px; font-size: 13px; color: var(--ink-2); min-height: 18px; font-variant-numeric: tabular-nums; }
+  .intensity-row { display: flex; align-items: center; gap: 10px; margin-top: 12px; width: 100%; }
+  .intensity-row label { font-size: 11.5px; color: var(--ink-2); white-space: nowrap; }
+  .intensity-row input[type=range] { flex: 1; accent-color: var(--coral); }
+  .intensity-row .val { font-size: 15px; font-weight: 800; color: var(--coral); width: 22px; text-align: center; font-variant-numeric: tabular-nums; }
+  .card .cta { margin-top: 12px; width: 100%; border: none; border-radius: 12px; padding: 10px 0; font-size: 13.5px; font-weight: 700; background: var(--coral); color: #fff; }
+  .card .cta.quiet { background: var(--surface-light); }
+  .card .cta:disabled { opacity: .45; cursor: default; }
+
+  .quote-card { border-left: 3px solid var(--coral); }
+  .quote-card blockquote { margin: 4px 0 6px; font-size: calc(15px * var(--tscale)); line-height: 1.5; font-style: italic; color: var(--ink); }
+  .quote-card cite { font-size: 11.5px; color: var(--ink-2); font-style: normal; }
+
+  .video-thumb { position: relative; border-radius: 12px; overflow: hidden; height: 118px; background: linear-gradient(135deg, #2a3550, #14202e 55%, #0e1620); display: flex; align-items: center; justify-content: center; margin-bottom: 10px; }
+  .video-thumb .scene { position:absolute; inset:0; background: radial-gradient(ellipse at 70% 25%, rgba(91,159,255,.35), transparent 55%), radial-gradient(ellipse at 25% 80%, rgba(52,199,89,.22), transparent 50%); }
+  .play-btn { position: relative; width: 44px; height: 44px; border-radius: 50%; border: none; background: rgba(255,255,255,.92); color: #111; font-size: 15px; display: flex; align-items: center; justify-content: center; }
+  .video-thumb .duration { position: absolute; right: 8px; bottom: 8px; background: rgba(0,0,0,.6); border-radius: 6px; font-size: 10.5px; padding: 2px 7px; font-variant-numeric: tabular-nums; }
+  .helped-row { display: flex; gap: 8px; margin-top: 10px; }
+  .helped-row button { flex: 1; background: var(--surface-2); border: 1px solid var(--border); color: var(--ink-2); border-radius: 10px; padding: 7px 0; font-size: 12px; font-weight: 600; }
+  .helped-row button.on { border-color: var(--green); color: var(--green); }
+
+  /* heatmap — single-hue coral sequential ramp on the card surface */
+  .hm { display: grid; grid-template-columns: 34px repeat(6, 1fr); gap: 2px; margin-top: 4px; }
+  .hm .lab { font-size: 9.5px; color: var(--ink-3); display: flex; align-items: center; }
+  .hm .col-lab { font-size: 9.5px; color: var(--ink-3); text-align: center; padding-bottom: 2px; }
+  .hm .cell { aspect-ratio: 1.7; border-radius: 4px; position: relative; }
+  .hm .cell:hover::after { content: attr(data-tip); position: absolute; bottom: calc(100% + 4px); left: 50%; transform: translateX(-50%); background: #0c0c0d; border: 1px solid var(--border); color: var(--ink); font-size: 10px; padding: 3px 8px; border-radius: 6px; white-space: nowrap; z-index: 4; }
+  .hm-caption { font-size: 11.5px; color: var(--ink-2); margin-top: 10px; line-height: 1.45; }
+  .hm-caption strong { color: var(--coral); font-weight: 700; }
+
+  .records { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+  .record { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; background: var(--surface-2); border-radius: 10px; padding: 8px 12px; }
+  .record .rname { font-size: calc(12px * var(--tscale)); color: var(--ink-2); }
+  .record .rval { font-size: 15px; font-weight: 800; color: var(--green); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .record .rdate { font-size: 10px; color: var(--ink-3); }
+  .records-note { font-size: 11px; color: var(--ink-3); margin-top: 8px; }
+
+  /* ---------- Voice band + dock ---------- */
+  .voice-band { display: none; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--border); background: rgba(91,159,255,.06); }
+  .phone.voice .voice-band { display: flex; }
+  .vis { display: flex; align-items: center; gap: 3px; height: 26px; }
+  .vis span { width: 4px; border-radius: 2px; background: var(--blue); height: 6px; }
+  .phone.voice .vis span { animation: vbar 1s ease-in-out infinite; }
+  .vis span:nth-child(2) { animation-delay: .12s } .vis span:nth-child(3) { animation-delay: .24s }
+  .vis span:nth-child(4) { animation-delay: .36s } .vis span:nth-child(5) { animation-delay: .48s }
+  @keyframes vbar { 0%,100% { height: 5px } 50% { height: 22px } }
+  .caption-line { flex: 1; font-size: calc(12.5px * var(--tscale)); color: var(--ink-2); font-style: italic; min-height: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .voice-tag { font-size: 10px; font-weight: 800; letter-spacing: 1.5px; color: var(--blue); }
+
+  .dock { display: flex; align-items: center; gap: 8px; padding: 10px 12px calc(10px + 8px); border-top: 1px solid var(--border); background: var(--bg); position: relative; z-index: 6; }
+  .dock input { flex: 1; background: var(--surface); border: 1px solid transparent; border-radius: 20px; padding: 10px 16px; font-size: calc(14.5px * var(--tscale)); color: var(--ink); min-width: 0; }
+  .dock input::placeholder { color: var(--ink-3); }
+  .dock-btn { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 50%; border: none; display: flex; align-items: center; justify-content: center; font-size: 16px; background: var(--surface-light); color: var(--ink); transition: background .2s, box-shadow .2s; }
+  .dock-btn.send { background: var(--coral); }
+  .dock-btn.audio, .dock-btn.mute { color: var(--ink); }
+  .dock-btn.audio .ico-waves { display: none; }
+  .phone.voice .dock-btn.audio { background: var(--blue); }
+  .phone.voice .dock-btn.audio .ico-slash { display: none; }
+  .phone.voice .dock-btn.audio .ico-waves { display: block; }
+  .dock-btn.mute { display: none; }
+  .phone.voice .dock-btn.mute { display: flex; }
+  .dock-btn.mute .ico-slash { display: none; }
+  .dock-btn.mute.muted { background: var(--error, #ff453a); }
+  .dock-btn.mute.muted .ico-slash { display: block; }
+
+  /* quick-log row (lives on the Home dashboard — never overlays the chat) */
+  .ql-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .ql-row button { border: 1px solid var(--border); background: var(--surface-2); color: var(--ink); border-radius: 12px; padding: 10px 0; font-size: 12.5px; font-weight: 700; }
+  .ql-row button:hover { border-color: var(--ink-3); }
+  .ql-row button.resisted { border-color: rgba(52,199,89,.5); }
+  .ql-row button.decision { border-color: rgba(139,92,246,.5); }
+  .ql-row button.urge { background: var(--coral); border-color: var(--coral); color: #fff; }
+
+  /* ---------- Context bus panel ---------- */
+  .bus { flex: 0 1 400px; max-width: 400px; min-width: 300px; background: #161618; border: 1px solid var(--border); border-radius: 20px; padding: 18px; position: sticky; top: 20px; }
+  .bus h3 { margin: 0; font-size: 13px; font-weight: 800; letter-spacing: 1.6px; text-transform: uppercase; color: var(--ink); }
+  .bus .bus-sub { font-size: 12px; color: var(--ink-2); margin: 6px 0 14px; line-height: 1.5; }
+  .bus-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .bus-item { background: var(--surface-2); border-radius: 10px; padding: 8px 11px; }
+  .bus-item.wide { grid-column: 1 / -1; }
+  .bus-item .k { font-size: 9.5px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--ink-3); font-weight: 700; }
+  .bus-item .v { font-size: 12.5px; margin-top: 3px; font-family: var(--mono); color: var(--ink); word-break: break-word; }
+  .bus-item .v.hl { color: var(--amber); }
+  .bus-item .v.ok { color: var(--green); }
+  .bus-item .v.coral { color: var(--coral); }
+  .bus-item .v.blue { color: var(--blue); }
+  .bus-log { margin-top: 12px; }
+  .bus-log .k { font-size: 9.5px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--ink-3); font-weight: 700; margin-bottom: 6px; }
+  .bus-events { display: flex; flex-direction: column-reverse; gap: 4px; max-height: 190px; overflow-y: auto; }
+  .bus-ev { font-family: var(--mono); font-size: 10.5px; color: var(--ink-2); background: var(--surface-2); border-left: 2px solid var(--blue); border-radius: 6px; padding: 5px 9px; animation: rise .25s ease both; }
+  .bus-ev .t { color: var(--ink-3); margin-right: 6px; font-variant-numeric: tabular-nums; }
+  .bus-ev.agent { border-left-color: var(--coral); }
+  .bus-note { font-size: 11px; color: var(--ink-3); margin-top: 12px; line-height: 1.5; }
+
+  .footnote { max-width: 720px; margin: 34px auto 0; color: var(--ink-3); font-size: 12.5px; line-height: 1.6; text-align: center; }
+
+  @media (max-width: 900px) {
+    .layout { flex-direction: column; align-items: center; }
+    .bus { position: static; width: 100%; max-width: 392px; flex: none; }
+    .phone { height: 700px; }
+  }
+  @media (max-width: 430px) {
+    .phone { width: 100%; flex: 1 1 auto; border-radius: 28px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .orb, .orb-ring, .phase-chip.resistance .dot, .vis span { animation: none !important; }
+    .bubble, .card, .receipt, .phase-banner, .ql-chip, .bus-ev { animation: none !important; }
+    .breath-circle { transition: transform .4s; }
+  }
+</style>
+
+<div class="stage">
+  <header class="stage-head">
+    <p class="eyebrow">BattleBuddy · Experience redesign · Proof of concept</p>
+    <h1>One Conversation</h1>
+    <p>Voice and text are <strong>input modes of the same stream</strong> — not separate rooms. The buddy presents media, exercises, and journey insights <strong>inline</strong>, sees the app's live state through a <strong>context bus</strong> (right panel), and honors an explicit phase contract: <strong>Observation</strong> gathers routine with zero pressure; <strong>Resistance</strong> leads with the Rule of Three and everything it has learned.</p>
+  </header>
+
+  <div class="scenarios" role="group" aria-label="Demo scenarios">
+    <button class="scenario-btn" data-scenario="1"><span class="num">1</span>Observation — morning log</button>
+    <button class="scenario-btn" data-scenario="2"><span class="num">2</span>Resistance — an urge hits</button>
+    <button class="scenario-btn" data-scenario="3"><span class="num">3</span>Journey — evening reflection</button>
+    <button class="scenario-btn reset" data-scenario="reset">Reset</button>
+  </div>
+
+  <div class="connect-bar">
+    <span class="mode-pill" id="livePill">DEMO</span>
+    <input id="cfgServer" placeholder="bb-server URL (e.g. https://bb-server.up.railway.app)" autocomplete="off">
+    <input id="cfgUser" placeholder="user id" autocomplete="off">
+    <input id="cfgToken" placeholder="client token (optional)" autocomplete="off" type="password" style="flex:0 1 170px">
+    <button id="btnConnect">Connect</button>
+    <button id="btnDemo" hidden>Back to demo</button>
+    <span class="status" id="liveStatus">Demo brain active. Point this head at a running bb-server to go live — the same surface, driven by the real BattleBuddy agent, memory, events, and content library.</span>
+  </div>
+
+  <div class="layout">
+    <!-- ============ PHONE ============ -->
+    <div class="phone" id="phone">
+      <div class="phase-resistance-glow"></div>
+
+      <div class="app-head">
+        <div class="orb-wrap" aria-hidden="true">
+          <span class="orb-ring" id="orbRing"></span>
+          <span class="orb" id="orbBody"></span>
+        </div>
+        <div class="head-meta">
+          <div class="head-name">Buddy</div>
+          <div class="head-state" id="headState">listening</div>
+        </div>
+        <span class="phase-chip observation" id="phaseChip"><span class="dot"></span><span id="phaseLabel">Observation</span></span>
+        <div class="clock"><span id="clockTime">–:––</span><span class="day" id="clockDay"></span></div>
+      </div>
+
+      <div class="seg-bar">
+        <div class="seg" role="tablist" aria-label="View">
+          <button id="tabHome" role="tab" aria-selected="false">Home</button>
+          <button id="tabChat" class="on" role="tab" aria-selected="true">Conversation</button>
+          <button id="tabContent" role="tab" aria-selected="false">Content</button>
+        </div>
+        <span class="seg-spacer"></span>
+        <div class="aa-ctl" title="Text size">
+          <span class="aa-s">A</span>
+          <input type="range" id="aaRange" min="100" max="160" step="5" value="130" aria-label="Text size">
+          <span class="aa-l">A</span>
+        </div>
+      </div>
+
+      <div class="stream" id="stream" aria-live="polite"></div>
+      <button class="jump-latest" id="jumpLatest">↓ Latest</button>
+
+      <div class="journey" id="journey" role="tabpanel" aria-label="Home dashboard">
+        <div class="j-card">
+          <h4>Quick log</h4>
+          <p class="sub">One tap. It lands in the conversation as a receipt — no forms.</p>
+          <div class="ql-row">
+            <button class="resisted" data-ql="resisted">💪 Resisted</button>
+            <button data-ql="cigarette">😐 Gave in</button>
+            <button class="decision" data-ql="decision">🙂 Decision</button>
+            <button class="urge" data-ql="urge">🌊 Urge — help</button>
+          </div>
+        </div>
+
+        <div class="j-card">
+          <h4>Where you stand</h4>
+          <p class="sub">Right now, against your own baseline — nobody else's</p>
+          <div class="snap">
+            <div class="tile"><div class="k">Today</div><div class="n">3</div><div class="d">vs 5/day avg</div></div>
+            <div class="tile"><div class="k">Waking gap</div><div class="n good" id="snapGap">2h 41m</div><div class="d">awake &amp; counting</div></div>
+            <div class="tile"><div class="k">This week</div><div class="n good" id="snapReps">7</div><div class="d">urges ridden out</div></div>
+          </div>
+          <p class="snap-note">Phase: <strong>Observation</strong> — the map is filling in. Routine is holding; evenings are the working front.</p>
+        </div>
+
+        <div class="j-card">
+          <h4>The arc</h4>
+          <p class="sub">Daily count vs your 15/day baseline — 30 days</p>
+          <div class="arc-wrap" id="arcChart"></div>
+          <div class="legend"><span><i></i>Daily count</span><span><i class="base"></i>Baseline</span></div>
+          <div class="j-cta"><button data-talk="arc" class="primary">Talk about this</button><button data-talk="metrics">Metrics over time</button></div>
+        </div>
+
+        <div class="j-card">
+          <h4>Your hours</h4>
+          <p class="sub">Urges by time of day — what Buddy watches for you</p>
+          <div id="journeyHm"></div>
+          <div class="j-cta"><button data-talk="hours" class="primary">Talk about this</button></div>
+        </div>
+
+        <div class="j-card">
+          <h4>Triggers — your map</h4>
+          <p class="sub">Named from observation, never from a questionnaire</p>
+          <div class="trig">
+            <div class="row"><span class="name">The drives<small>car as trigger container — gym, park, home</small></span><span class="conf high">confirmed</span></div>
+            <div class="row"><span class="name">Patch-off evenings<small>buffer gone ~4:50 pm, end-of-day automation</small></span><span class="conf high">confirmed</span></div>
+            <div class="row"><span class="name">Post-meeting transitions<small>the blank space after structured work</small></span><span class="conf med">watching</span></div>
+          </div>
+          <div class="j-cta"><button data-talk="triggers" class="primary">Talk about this</button></div>
+        </div>
+
+        <div class="j-card">
+          <h4>What works for you</h4>
+          <p class="sub">Techniques ranked by your own outcomes, not theory</p>
+          <div class="tech">
+            <div class="row"><div class="top"><span class="name">Garage project (replacement ritual)</span><span class="rate">5/6</span></div><div class="bar"><i style="width:83%"></i></div></div>
+            <div class="row"><div class="top"><span class="name">The walk loop</span><span class="rate">8/10</span></div><div class="bar"><i style="width:80%"></i></div></div>
+            <div class="row"><div class="top"><span class="name">Rule of Three breathing</span><span class="rate">6/9</span></div><div class="bar"><i style="width:67%"></i></div></div>
+          </div>
+          <div class="j-cta"><button data-talk="practice" class="primary">Practice one now</button><button data-talk="techniques">Why these work</button></div>
+        </div>
+
+        <div class="j-card">
+          <h4>Records &amp; milestones</h4>
+          <p class="sub">These only grow. Waking hours only — sleep isn’t a struggle, so it never pads a record.</p>
+          <div class="records">
+            <div class="record"><span class="rname">Longest waking gap</span><span><span class="rval">5h 48m</span> <span class="rdate">Sun</span></span></div>
+            <div class="record"><span class="rname">Evening urges ridden out, one week</span><span><span class="rval">5</span> <span class="rdate">this week</span></span></div>
+            <div class="record"><span class="rname">Fastest wave crest</span><span><span class="rval">7 → 2 in 4 min</span> <span class="rdate">Jul 3</span></span></div>
+          </div>
+          <div class="mile">
+            <span class="chip won">✓ Top trigger mapped</span>
+            <span class="chip won">✓ 3 coping moves proven</span>
+            <span class="chip progress">Honest logging — 22 of 30 days</span>
+            <span class="chip">First no-session urge</span>
+          </div>
+          <div class="j-cta"><button data-talk="records" class="primary">Talk about this</button></div>
+        </div>
+
+        <div class="j-card">
+          <h4>Insights &amp; recommendations</h4>
+          <p class="sub">Written by Buddy from your data — tap to go deeper</p>
+          <div class="insight"><p>Your evening urges have thinned out — three this week against six two weeks ago. The garage project is doing real work in that window.</p><div class="from">from 14 evening sessions</div></div>
+          <div class="insight"><p>I might be seeing a thing: the mornings after short sleep run about double the urges. Worth watching together?</p><div class="from">low confidence — asking, not asserting</div></div>
+          <div class="j-cta"><button data-talk="insight" class="primary">Talk about this</button><button data-talk="recommend">What should I try next?</button></div>
+        </div>
+
+        <div class="j-card">
+          <h4>Settings</h4>
+          <p class="sub">Which hand do you use? Buddy and the primary controls move to your thumb side.</p>
+          <div class="hand-toggle" role="group" aria-label="Hand preference">
+            <button id="handLeft">Left hand</button>
+            <button id="handRight" class="on">Right hand</button>
+          </div>
+          <p class="settings-note">Applies everywhere: Buddy’s presence, mic and send, and the view tabs.</p>
+        </div>
+
+        <div class="j-card">
+          <h4>Independence trend</h4>
+          <p class="sub">You catching it yourself vs Buddy reaching out — the goal is needing this less</p>
+          <div class="ind" id="indChart"></div>
+          <div class="ind-legend"><span><i class="self"></i>Self-initiated</span><span><i class="prompt"></i>Prompted</span></div>
+          <div class="j-cta"><button data-talk="independence" class="primary">Talk about this</button></div>
+        </div>
+      </div>
+
+      <div class="content-feed" id="contentFeed" aria-label="Content feed">
+        <div class="feed-card v1" data-cid="wave-breaks" data-title="Why the wave always breaks">
+          <div class="scene"></div>
+          <button class="feed-play" aria-label="Play">▶</button>
+          <div class="f-meta">
+            <div class="f-theme">Urge surfing · 2:41</div>
+            <div class="f-title">Why the wave always breaks</div>
+            <div class="f-cap">Cravings crest and fall inside 15–30 minutes. You don’t beat the wave — you outlast it.</div>
+          </div>
+          <div class="feed-rail">
+            <button data-h="yes" aria-label="Helped">👍</button><span class="r-lab">Helped</span>
+            <button data-h="no" aria-label="Not this time">👎</button><span class="r-lab">Not it</span>
+            <button data-f-talk="wave-breaks" aria-label="Talk about this">💬</button><span class="r-lab">Talk</span>
+          </div>
+        </div>
+        <div class="feed-card v2" data-cid="garage-story" data-title="The garage that got a second job">
+          <div class="scene"></div>
+          <button class="feed-play" aria-label="Play">▶</button>
+          <div class="f-meta">
+            <div class="f-theme">Peer story · 3:05</div>
+            <div class="f-title">The garage that got a second job</div>
+            <div class="f-cap">Once the space had a purpose beyond the cigarette, the urge lost its anchor.</div>
+          </div>
+          <div class="feed-rail">
+            <button data-h="yes" aria-label="Helped">👍</button><span class="r-lab">Helped</span>
+            <button data-h="no" aria-label="Not this time">👎</button><span class="r-lab">Not it</span>
+            <button data-f-talk="garage-story" aria-label="Talk about this">💬</button><span class="r-lab">Talk</span>
+          </div>
+        </div>
+        <div class="feed-card v3" data-cid="quote-commander" data-title="Commander quote">
+          <div class="scene"></div>
+          <div class="f-meta">
+            <div class="f-theme">Something to hold</div>
+            <div class="f-quote">“You’re not the slime mold following the gradient. You’re the commander choosing the response.”</div>
+            <div class="f-cite">The circuit-breaker idea — picked for your evening window</div>
+          </div>
+          <div class="feed-rail">
+            <button data-h="yes" aria-label="Helped">👍</button><span class="r-lab">Helped</span>
+            <button data-h="no" aria-label="Not this time">👎</button><span class="r-lab">Not it</span>
+            <button data-f-talk="quote-commander" aria-label="Talk about this">💬</button><span class="r-lab">Talk</span>
+          </div>
+        </div>
+        <div class="feed-card v4" data-cid="what-you-get" data-title="What 8 a day gets you back">
+          <div class="scene"></div>
+          <button class="feed-play" aria-label="Play">▶</button>
+          <div class="f-meta">
+            <div class="f-theme">Your numbers · 1:58</div>
+            <div class="f-title">What 8 a day gets you back</div>
+            <div class="f-cap">Down from 15: two hours of your day, and the evenings are already quieter.</div>
+          </div>
+          <div class="feed-rail">
+            <button data-h="yes" aria-label="Helped">👍</button><span class="r-lab">Helped</span>
+            <button data-h="no" aria-label="Not this time">👎</button><span class="r-lab">Not it</span>
+            <button data-f-talk="what-you-get" aria-label="Talk about this">💬</button><span class="r-lab">Talk</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="voice-band">
+        <span class="voice-tag">VOICE</span>
+        <div class="vis" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+        <div class="caption-line" id="captionLine">listening…</div>
+      </div>
+
+      <div class="dock">
+        <input id="input" type="text" placeholder="Talk to Buddy…" autocomplete="off" aria-label="Message Buddy" />
+        <button class="dock-btn send" id="sendBtn" aria-label="Send">↑</button>
+        <button class="dock-btn audio" id="audioBtn" aria-pressed="false" aria-label="Turn audio on">
+          <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true">
+            <path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5H4z" fill="currentColor"/>
+            <path d="M14.5 9.2a4 4 0 0 1 0 5.6M16.8 7a7 7 0 0 1 0 10" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" class="ico-waves"/>
+            <g class="ico-slash"><line x1="4" y1="4" x2="20" y2="20" stroke="#1c1c1e" stroke-width="5" stroke-linecap="round"/><line x1="4" y1="4" x2="20" y2="20" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></g>
+          </svg>
+        </button>
+        <button class="dock-btn mute" id="muteBtn" aria-pressed="false" aria-label="Mute microphone">
+          <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true">
+            <path d="M12 14.5a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5.5a3 3 0 0 0 3 3z" fill="currentColor"/>
+            <path d="M6.5 11.5a5.5 5.5 0 0 0 11 0M12 17v3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            <g class="ico-slash"><line x1="4" y1="4" x2="20" y2="20" stroke="#1c1c1e" stroke-width="5" stroke-linecap="round"/><line x1="4" y1="4" x2="20" y2="20" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></g>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- ============ CONTEXT BUS ============ -->
+    <aside class="bus" aria-label="Agent context bus">
+      <h3>Context bus — what the agent sees</h3>
+      <p class="bus-sub">Live, per-turn. In production this panel is invisible — it exists so the agent is <em>in context when you call it</em>. Every tap below updates it.</p>
+      <div class="bus-grid">
+        <div class="bus-item"><div class="k">journey phase</div><div class="v blue" id="busPhase">observation</div></div>
+        <div class="bus-item"><div class="k">conversation mode</div><div class="v" id="busMode">text</div></div>
+        <div class="bus-item"><div class="k">local clock (injected)</div><div class="v" id="busClock">–</div></div>
+        <div class="bus-item"><div class="k">risk window</div><div class="v" id="busRisk">–</div></div>
+        <div class="bus-item wide"><div class="k">screen / in view</div><div class="v" id="busScreen">session · stream</div></div>
+        <div class="bus-item wide"><div class="k">event log tail</div><div class="v" id="busEvents">—</div></div>
+        <div class="bus-item"><div class="k">live urge intensity</div><div class="v hl" id="busIntensity">—</div></div>
+        <div class="bus-item"><div class="k">reps this week</div><div class="v ok" id="busReps">6 resisted</div></div>
+      </div>
+      <div class="bus-log">
+        <div class="k">bus traffic</div>
+        <div class="bus-events" id="busLog"></div>
+      </div>
+      <p class="bus-note">Blue events flow <strong>app → agent</strong> (state, taps, logs). Coral events flow <strong>agent → app</strong> (cards presented, phase changes, silent logs).</p>
+    </aside>
+  </div>
+
+  <p class="footnote">Proof of concept — the agent here is scripted so the prototype runs anywhere. In production the same surface is driven by the live BattleBuddy brain over one realtime channel (see ARCHITECTURE.md). Buddy's replies are spoken aloud in voice mode where the browser supports speech synthesis; the mic simulates captions where microphone access isn't available.</p>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ---------------- state ---------------- */
+  const S = {
+    phase: 'observation',          // 'observation' | 'resistance'
+    mode: 'text',                  // 'text' | 'voice'
+    events: [],                    // event log tail
+    liveIntensity: null,
+    reps: 6,
+    busy: false,                   // agent typing
+    scenarioTimer: [],
+  };
+
+  const el = (id) => document.getElementById(id);
+  const phone = el('phone'), stream = el('stream'), input = el('input');
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ---------------- clock ---------------- */
+  function fmtTime(d) { return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
+  function tickClock() {
+    const now = new Date();
+    el('clockTime').textContent = fmtTime(now);
+    el('clockDay').textContent = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
+    el('busClock').textContent = fmtTime(now);
+    const h = now.getHours();
+    const inRisk = (h >= 16 && h < 20);
+    el('busRisk').textContent = inRisk ? 'OPEN · patch-off window (4–8 pm)' : 'closed · next: patch-off 4 pm';
+    el('busRisk').className = 'v ' + (inRisk ? 'coral' : '');
+  }
+  tickClock(); setInterval(tickClock, 15000);
+
+  /* ---------------- context bus ---------------- */
+  function bus(kind, text) {
+    const log = el('busLog');
+    const row = document.createElement('div');
+    row.className = 'bus-ev' + (kind === 'agent' ? ' agent' : '');
+    row.innerHTML = '<span class="t">' + fmtTime(new Date()) + '</span>' + text;
+    log.appendChild(row);
+    while (log.children.length > 24) log.removeChild(log.firstChild);
+    log.scrollTop = 0;
+  }
+  function busRender() {
+    el('busPhase').textContent = S.phase;
+    el('busPhase').className = 'v ' + (S.phase === 'resistance' ? 'coral' : 'blue');
+    el('busMode').textContent = S.mode;
+    el('busEvents').textContent = S.events.length
+      ? S.events.slice(-3).map(e => e.t + ' ' + e.type).join('  ·  ') : '—';
+    el('busIntensity').textContent = S.liveIntensity == null ? '—' : S.liveIntensity + ' / 10';
+    el('busReps').textContent = S.reps + ' resisted';
+  }
+  function setScreen(v) { el('busScreen').textContent = v; }
+
+  /* ---------------- speech ---------------- */
+  let voiceReady = null;
+  function pickVoice() {
+    if (!('speechSynthesis' in window)) return null;
+    const vs = speechSynthesis.getVoices();
+    return vs.find(v => /en[-_]US/i.test(v.lang) && /male|Aaron|Alex|Daniel|Guy/i.test(v.name)) ||
+           vs.find(v => /^en/i.test(v.lang)) || vs[0] || null;
+  }
+  if ('speechSynthesis' in window) {
+    voiceReady = pickVoice();
+    speechSynthesis.onvoiceschanged = () => { voiceReady = pickVoice(); };
+  }
+  function speak(text, done) {
+    if (S.mode !== 'voice' || !('speechSynthesis' in window)) { done && done(); return; }
+    // Watchdog: sandboxed/headless browsers accept utterances but never fire
+    // onend — never let the conversation hang on TTS.
+    let finished = false;
+    const finish = () => {
+      if (finished) return; finished = true;
+      setOrb('listening'); done && done();
+    };
+    const watchdog = setTimeout(finish, Math.min(1200 + text.split(' ').length * 340, 12000));
+    try {
+      const u = new SpeechSynthesisUtterance(text.replace(/[*_#]/g, ''));
+      if (voiceReady) u.voice = voiceReady;
+      u.rate = 1.02; u.pitch = 0.95;
+      u.onend = () => { clearTimeout(watchdog); finish(); };
+      u.onerror = () => { clearTimeout(watchdog); finish(); };
+      setOrb('speaking');
+      speechSynthesis.speak(u);
+    } catch (e) { clearTimeout(watchdog); finish(); }
+  }
+
+  /* ---------------- orb / presence ---------------- */
+  function setOrb(state) {
+    // blue = neutral · orange = hearing you (audio in) · coral (submit-button color) = responding
+    const map = { listening: 'var(--blue)', user: 'var(--amber)', speaking: 'var(--coral)', thinking: 'var(--coral)' };
+    el('orbBody').style.background = map[state] || 'var(--blue)';
+    el('orbRing').style.borderColor = map[state] || 'var(--blue)';
+    el('headState').textContent = state === 'user' ? 'hearing you' : state === 'speaking' || state === 'thinking' ? 'responding' : S.mode === 'voice' ? 'listening' : 'here';
+  }
+
+  /* ---------------- stream primitives ---------------- */
+  // Auto-scroll only while the user is pinned near the bottom, so the stream
+  // stays scrollable (and readable) while a reply is printing out.
+  let pinned = true;
+  const jumpLatest = el('jumpLatest');
+  function nearBottom() { return stream.scrollHeight - stream.scrollTop - stream.clientHeight < 48; }
+  stream.addEventListener('scroll', () => {
+    pinned = nearBottom();
+    jumpLatest.classList.toggle('show', !pinned);
+  });
+  jumpLatest.addEventListener('click', () => {
+    pinned = true;
+    stream.scrollTop = stream.scrollHeight;
+    jumpLatest.classList.remove('show');
+  });
+  function scrollDown(force) {
+    if (force) pinned = true;
+    if (!pinned) { jumpLatest.classList.add('show'); return; }
+    stream.scrollTop = stream.scrollHeight;
+  }
+  function addBubble(role, text, spoken) {
+    const b = document.createElement('div');
+    b.className = 'bubble ' + (role === 'user' ? 'user' : 'bb');
+    b.innerHTML = (spoken ? '<span class="wave-glyph">◦●◦</span>' : '') + text;
+    stream.appendChild(b); scrollDown();
+    return b;
+  }
+  function bbSay(text, opts) {
+    opts = opts || {};
+    S.busy = true; setOrb('thinking');
+    const delay = opts.delay != null ? opts.delay : 550;
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        const spoken = S.mode === 'voice';
+        const b = addBubble('bb', '', spoken);
+        const span = document.createElement('span'); b.appendChild(span);
+        const words = text.split(' ');
+        let i = 0;
+        setOrb('speaking');
+        const iv = setInterval(() => {
+          span.textContent = words.slice(0, ++i).join(' ');
+          scrollDown();
+          if (i >= words.length) {
+            clearInterval(iv);
+            S.busy = false;
+            if (spoken) speak(text, resolve); else { setOrb('listening'); resolve(); }
+          }
+        }, reduceMotion ? 8 : 34);
+        bus('agent', 'agent.say · ' + (spoken ? 'voice+text' : 'text'));
+      }, delay);
+    });
+  }
+  function addQuotedUserTurn(quoteTitle, quoteText, userText) {
+    scrollDown(true);
+    const b = document.createElement('div');
+    b.className = 'bubble user';
+    const q = document.createElement('div');
+    q.className = 'reply-quote';
+    const t = document.createElement('div'); t.className = 'rq-title'; t.textContent = quoteTitle;
+    const x = document.createElement('div'); x.className = 'rq-text'; x.textContent = quoteText;
+    q.appendChild(t); q.appendChild(x);
+    b.appendChild(q);
+    b.appendChild(document.createTextNode(userText));
+    stream.appendChild(b); scrollDown();
+    bus('app', 'chat.user_turn · quoting "' + quoteTitle + '"');
+  }
+
+  function addReceipt(type, label) {
+    const now = new Date();
+    const r = document.createElement('div');
+    r.className = 'receipt ' + type;
+    r.innerHTML = '<span class="rdot"></span>Logged — ' + fmtTime(now) + ' · ' + label;
+    stream.appendChild(r); scrollDown();
+    S.events.push({ t: fmtTime(now), type: label });
+    busRender();
+  }
+  function phaseBanner(to) {
+    const p = document.createElement('div');
+    p.className = 'phase-banner to-' + to;
+    p.textContent = to === 'resistance' ? 'Resistance — I’m right here' : 'Back to observation — no grades, just the map';
+    stream.appendChild(p); scrollDown();
+  }
+  function setPhase(to) {
+    if (S.phase === to) return;
+    S.phase = to;
+    phone.classList.toggle('resistance', to === 'resistance');
+    const chip = el('phaseChip');
+    chip.className = 'phase-chip ' + to;
+    el('phaseLabel').textContent = to === 'resistance' ? 'Resistance' : 'Observation';
+    phaseBanner(to);
+    bus('agent', 'phase.change → ' + to);
+    busRender();
+  }
+
+  /* ---------------- cards ---------------- */
+  function cardShell(title, sub) {
+    const c = document.createElement('div');
+    c.className = 'card';
+    c.innerHTML = '<h4>' + title + '</h4>' + (sub ? '<p class="sub">' + sub + '</p>' : '');
+    stream.appendChild(c);
+    bus('agent', 'present_card · "' + title + '"');
+    setScreen('session · card: ' + title.toLowerCase());
+    scrollDown();
+    return c;
+  }
+
+  function breathingCard(onDone) {
+    const c = cardShell('Rule of Three', 'Three breaths, three seconds each. Ride the wave with me.');
+    const stage = document.createElement('div');
+    stage.className = 'breath-stage';
+    stage.innerHTML = '<div class="breath-circle" id="bc"></div><div class="breath-label" id="bl">How loud is it right now?</div>' +
+      '<div class="intensity-row"><label>Intensity</label><input type="range" min="0" max="10" value="7" id="intens"><span class="val" id="intensVal">7</span></div>';
+    c.appendChild(stage);
+    const start = document.createElement('button');
+    start.className = 'cta'; start.textContent = 'Start the three';
+    c.appendChild(start);
+    const slider = stage.querySelector('#intens'), val = stage.querySelector('#intensVal');
+    slider.addEventListener('input', () => {
+      val.textContent = slider.value;
+      S.liveIntensity = +slider.value; busRender();
+      bus('app', 'exercise.intensity · ' + slider.value + '/10');
+    });
+    S.liveIntensity = 7; busRender();
+
+    start.addEventListener('click', () => {
+      if (start.dataset.stage === 'done') {
+        start.dataset.stage = 'closed';
+        start.disabled = true; start.classList.add('quiet'); start.textContent = 'Rode it out';
+        onDone && onDone(7, +slider.value);
+        return;
+      }
+      if (start.dataset.stage) return;
+      start.dataset.stage = 'breathing';
+      start.disabled = true; start.textContent = 'Breathing…';
+      bus('app', 'exercise.start · rule_of_three');
+      const circle = stage.querySelector('#bc'), lab = stage.querySelector('#bl');
+      let breath = 0;
+      function cycle() {
+        breath++;
+        lab.textContent = 'Breath ' + breath + ' of 3 — in…';
+        circle.classList.add('in');
+        setTimeout(() => {
+          lab.textContent = 'Breath ' + breath + ' of 3 — out…';
+          circle.classList.remove('in');
+          setTimeout(() => {
+            if (breath < 3) cycle();
+            else {
+              lab.textContent = 'Where is it now?';
+              start.textContent = 'Done — it moved';
+              start.disabled = false;
+              start.dataset.stage = 'done';
+              slider.value = 3; val.textContent = '3';
+              S.liveIntensity = 3; busRender();
+              bus('app', 'exercise.complete · intensity 7→3');
+            }
+          }, reduceMotion ? 500 : 3000);
+        }, reduceMotion ? 500 : 3000);
+      }
+      cycle();
+    });
+  }
+
+  function quoteCard(quote, cite) {
+    const c = cardShell('Something to hold', 'Matched to this moment');
+    c.classList.add('quote-card');
+    c.innerHTML += '<blockquote>“' + quote + '”</blockquote><cite>' + cite + '</cite>';
+    scrollDown();
+  }
+
+  function videoCard(title, dur) {
+    const c = cardShell(title, 'From your library — the kind that’s worked for you');
+    const t = document.createElement('div');
+    t.className = 'video-thumb';
+    t.innerHTML = '<div class="scene"></div><button class="play-btn" aria-label="Play">▶</button><span class="duration">' + dur + '</span>';
+    c.appendChild(t);
+    const row = document.createElement('div');
+    row.className = 'helped-row';
+    row.innerHTML = '<button data-h="yes">Helped</button><button data-h="no">Not this time</button>';
+    c.appendChild(row);
+    t.querySelector('.play-btn').addEventListener('click', function () {
+      this.textContent = '❚❚';
+      bus('app', 'media.play · "' + title + '"');
+      setScreen('session · watching: ' + title.toLowerCase());
+    });
+    row.addEventListener('click', (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      row.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      bus('app', 'media.feedback · helped=' + b.dataset.h);
+    });
+    scrollDown();
+  }
+
+  function buildHeatmapGrid(dataIn) {
+    // 7 days × 6 four-hour blocks; single-hue coral ramp, dark→saturated
+    const ramp = ['#232326', '#4a3330', '#6b3e36', '#93493c', '#be5543', '#e8624a'];
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const cols = ['12a', '4a', '8a', '12p', '4p', '8p'];
+    const sample = [ // 0..5
+      [0, 1, 2, 1, 3, 4],
+      [0, 3, 5, 1, 3, 4],
+      [0, 1, 2, 1, 4, 5],
+      [0, 1, 2, 2, 3, 4],
+      [0, 1, 2, 1, 4, 5],
+      [0, 0, 1, 2, 3, 3],
+      [0, 0, 1, 1, 2, 3],
+    ];
+    // Live data arrives as raw counts; scale to the 0..5 ramp.
+    let data = sample;
+    if (dataIn && dataIn.length === 7) {
+      const max = Math.max(1, ...dataIn.flat());
+      data = dataIn.map(row => row.map(v => v === 0 ? 0 : Math.max(1, Math.round(v / max * 5))));
+      var rawCounts = dataIn;
+    }
+    const g = document.createElement('div');
+    g.className = 'hm';
+    g.innerHTML = '<span></span>' + cols.map(x => '<span class="col-lab">' + x + '</span>').join('');
+    days.forEach((d, r) => {
+      g.innerHTML += '<span class="lab">' + d + '</span>' + data[r].map((v, ci) =>
+        '<span class="cell" style="background:' + ramp[v] + '" data-tip="' + d + ' ' + cols[ci] + ' — ' + ((typeof rawCounts !== 'undefined' ? rawCounts[r][ci] : v)) + (((typeof rawCounts !== 'undefined' ? rawCounts[r][ci] : v)) === 1 ? ' urge' : ' urges') + '"></span>'
+      ).join('');
+    });
+    return g;
+  }
+  function heatmapCard() {
+    const c = cardShell('Your hours', 'Where the urges actually live — this is what I watch for you');
+    c.appendChild(buildHeatmapGrid());
+    const cap = document.createElement('p');
+    cap.className = 'hm-caption';
+    cap.innerHTML = 'Evenings after the patch comes off run hottest — <strong>4–8 pm</strong> — and Tuesday mornings spike with the drives. Mornings at home stay quiet.';
+    c.appendChild(cap);
+    scrollDown();
+  }
+
+  function recordsCard() {
+    const c = cardShell('Records', 'These only grow — waking hours only. Sleep isn’t a struggle.');
+    const wrap = document.createElement('div');
+    wrap.className = 'records';
+    [['Longest waking gap', '5h 48m', 'Sun'],
+     ['Evening urges ridden out, one week', '5', 'this week'],
+     ['Fastest wave crest', '7 → 2 in 4 min', 'Jul 3']].forEach(([n, v, d]) => {
+      const r = document.createElement('div');
+      r.className = 'record';
+      r.innerHTML = '<span class="rname">' + n + '</span><span><span class="rval">' + v + '</span> <span class="rdate">' + d + '</span></span>';
+      wrap.appendChild(r);
+    });
+    c.appendChild(wrap);
+    const note = document.createElement('p');
+    note.className = 'records-note';
+    note.textContent = 'A slip changes nothing on this wall.';
+    c.appendChild(note);
+    scrollDown();
+  }
+
+  /* ---------------- voice mode ---------------- */
+  let recog = null, recogOk = false;
+  function initRecognition() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+    try {
+      recog = new SR();
+      recog.continuous = true; recog.interimResults = true; recog.lang = 'en-US';
+      recog.onresult = (ev) => {
+        let interim = '', final = '';
+        for (let i = ev.resultIndex; i < ev.results.length; i++) {
+          const r = ev.results[i];
+          if (r.isFinal) final += r[0].transcript; else interim += r[0].transcript;
+        }
+        if (interim) el('captionLine').textContent = interim;
+        if (final.trim()) { el('captionLine').textContent = 'listening…'; userTurn(final.trim(), true); }
+      };
+      recog.onerror = () => { recogOk = false; el('captionLine').textContent = 'mic unavailable here — replies are spoken; type and Buddy answers aloud'; };
+      recogOk = true;
+    } catch (e) { recogOk = false; }
+  }
+  initRecognition();
+
+  function setMode(mode, announce) {
+    if (S.mode === mode) return;
+    S.mode = mode;
+    phone.classList.toggle('voice', mode === 'voice');
+    const ab = el('audioBtn');
+    ab.setAttribute('aria-pressed', mode === 'voice');
+    ab.setAttribute('aria-label', mode === 'voice' ? 'Turn audio off' : 'Turn audio on');
+    if (mode !== 'voice') setMuted(false);
+    busRender();
+    bus('app', 'mode.switch → ' + mode + ' (same session, same stream)');
+    // No announcement on switch — the continuity speaks for itself.
+    if (mode === 'voice') {
+      el('captionLine').textContent = recogOk ? 'listening…' : 'replies spoken aloud — type or run a scenario; mic captions are simulated here';
+      if (recogOk) { try { recog.start(); } catch (e) {} }
+    } else {
+      if (recogOk) { try { recog.stop(); } catch (e) {} }
+      if ('speechSynthesis' in window) speechSynthesis.cancel();
+    }
+  }
+  el('audioBtn').addEventListener('click', () => setMode(S.mode === 'voice' ? 'text' : 'voice'));
+
+  // Mic mute — Buddy keeps talking, but stops hearing you until unmuted.
+  function setMuted(m) {
+    S.muted = m;
+    const mb = el('muteBtn');
+    mb.classList.toggle('muted', m);
+    mb.setAttribute('aria-pressed', m);
+    mb.setAttribute('aria-label', m ? 'Unmute microphone' : 'Mute microphone');
+    if (S.mode === 'voice') {
+      el('captionLine').textContent = m ? 'muted — Buddy can’t hear you' : (recogOk ? 'listening…' : 'replies spoken aloud — type or run a scenario; mic captions are simulated here');
+      if (recogOk) { try { m ? recog.stop() : recog.start(); } catch (e) {} }
+      if (m) setOrb('listening');
+      bus('app', m ? 'mic.mute' : 'mic.unmute');
+    }
+  }
+  el('muteBtn').addEventListener('click', () => setMuted(!S.muted));
+
+  /* simulated spoken user turn (scenario use, and caption typing effect) */
+  function simulateSpokenUser(text) {
+    if (S.muted) setMuted(false); // scenarios unmute before speaking
+    return new Promise((resolve) => {
+      setOrb('user');
+      const words = text.split(' ');
+      let i = 0;
+      const iv = setInterval(() => {
+        el('captionLine').textContent = words.slice(0, ++i).join(' ');
+        if (i >= words.length) {
+          clearInterval(iv);
+          setTimeout(() => {
+            el('captionLine').textContent = 'listening…';
+            addBubble('user', text, true);
+            setOrb('listening');
+            bus('app', 'stt.final · "' + text.slice(0, 34) + (text.length > 34 ? '…' : '') + '"');
+            resolve();
+          }, 350);
+        }
+      }, reduceMotion ? 10 : 90);
+    });
+  }
+
+  /* ---------------- the scripted brain ---------------- */
+  const nowHour = () => new Date().getHours();
+  function greetLine() {
+    const h = nowHour();
+    if (h >= 16 && h < 20) return 'It’s the patch-off window. I’m already watching it with you — what’s the evening look like?';
+    if (h < 11) return 'Morning. Drives are usually where your mornings get loud — how’s today’s shaping up?';
+    return 'Mid-day’s usually your quiet stretch. Good time to just talk, if you want.';
+  }
+
+  async function agentReply(text) {
+    const t = text.toLowerCase();
+
+    // Resistance triggers
+    if (/(urge|craving|about to (smoke|light)|need help|it'?s loud|want one)/.test(t)) {
+      if (!/not (trying|resisting)/.test(t)) {
+        setPhase('resistance');
+        await bbSay('Three breaths. Three seconds each. In… out. I’m right here.');
+        breathingCard(async (from, to) => {
+          addReceipt('resisted', 'urge ridden out · ' + from + '→' + to);
+          S.reps++; S.liveIntensity = null; busRender();
+          await bbSay('From a ' + from + ' to a ' + to + ' in under two minutes — you generated that, not me. That’s ' + S.reps + ' this week.');
+          videoCard('Why the wave always breaks', '2:41');
+          await bbSay('That one’s here if you want it. No homework — the hard part’s done.', { delay: 900 });
+          setPhase('observation');
+        });
+        return;
+      }
+      // explicitly not resisting — listen, don't run the protocol
+      await bbSay('Okay — not fighting this one. I’m not going to run you through breathing you didn’t ask for. What’s the moment like?');
+      return;
+    }
+
+    if (/(had one|smoked|cigarette|gave in|log)/.test(t)) {
+      addReceipt('cigarette', 'cigarette · from conversation');
+      if (S.phase === 'observation') {
+        await bbSay('Logged. That’s data, not a verdict — it goes on the map, nothing else changes.');
+        await bbSay(greetLine(), { delay: 800 });
+      } else {
+        await bbSay('Logged. Still here, still in it with you.');
+      }
+      return;
+    }
+
+    if (/(decision|choosing to|going to have one)/.test(t)) {
+      addReceipt('decision', 'decision · conscious choice');
+      await bbSay('Okay. That’s a decision, not a slip — there’s a difference, and it’s yours to make. What’s the moment feel like?');
+      return;
+    }
+
+    if (/(how am i doing|journey|progress|show me|evening|reflect)/.test(t)) {
+      await bbSay('Look at this with me for a second.');
+      heatmapCard();
+      await bbSay('Evenings are your loud hours — you knew that, but now it’s on the map. And here’s the part that only grows:', { delay: 1100 });
+      recordsCard();
+      await bbSay('Five hours forty-eight, all of it awake and in the world — that’s yours now. Sleep doesn’t count here; you weren’t fighting anything. Nobody can take a record off that wall.', { delay: 1000 });
+      return;
+    }
+
+    if (/(routine|schedule|gym|drive)/.test(t)) {
+      await bbSay('Tuesday shape: gym drive, park, home — the car’s the container, not the gym. You’re inside the routine we mapped, and that consistency is the work right now.');
+      return;
+    }
+
+    if (/(quote|inspir|something to hold)/.test(t)) {
+      quoteCard('You don’t have to defeat the urge. You have to outlast it — and it’s already dying.', 'Urge-surfing, Marlatt lineage — picked for your 4 pm window');
+      await bbSay('For the window ahead.', { delay: 700 });
+      return;
+    }
+
+    // default — observation-phase companionship, one question max
+    const defaults = [
+      'I’m here. ' + greetLine(),
+      'Noted — that goes on the map. What’s around you right now?',
+      'With you. No agenda from my side — what’s on yours?',
+    ];
+    await bbSay(defaults[Math.floor(Math.random() * defaults.length)]);
+  }
+
+  async function userTurn(text, spoken) {
+    if (S.busy) return;
+    scrollDown(true); // sending re-pins the stream to the bottom
+    if (!spoken) addBubble('user', text, false);
+    bus('app', (spoken ? 'stt' : 'chat') + '.user_turn');
+    if (window.BBLive && window.BBLive.active) {
+      if (/(urge|craving|about to (smoke|light)|need help|it'?s loud)/i.test(text) && !/not (trying|resisting)/i.test(text)) {
+        setPhase('resistance');
+      }
+      await window.BBLive.turn(text);
+      return;
+    }
+    await agentReply(text);
+  }
+
+  /* ---------------- input ---------------- */
+  el('sendBtn').addEventListener('click', send);
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+  function send() {
+    const t = input.value.trim();
+    if (!t || S.busy) return;
+    input.value = '';
+    userTurn(t, false);
+  }
+
+  /* ---------------- views: Home dashboard <-> Conversation ---------------- */
+  const tabHome = el('tabHome'), tabChat = el('tabChat'), tabContent = el('tabContent');
+  const VIEW_LABEL = { home: 'home dashboard', chat: 'conversation', content: 'content feed' };
+  function setView(v) {
+    phone.classList.toggle('viewJourney', v === 'home');
+    phone.classList.toggle('viewContent', v === 'content');
+    [[tabHome, 'home'], [tabChat, 'chat'], [tabContent, 'content']].forEach(([t, name]) => {
+      t.classList.toggle('on', v === name);
+      t.setAttribute('aria-selected', v === name);
+    });
+    setScreen(v === 'home' ? 'home · dashboard' : v === 'content' ? 'content · feed' : 'session · stream');
+    bus('app', 'screen.focus → ' + VIEW_LABEL[v]);
+    if (v === 'home') el('snapReps').textContent = S.reps;
+  }
+  tabHome.addEventListener('click', () => setView('home'));
+  tabChat.addEventListener('click', () => setView('chat'));
+  tabContent.addEventListener('click', () => setView('content'));
+
+  /* ---------------- content feed ---------------- */
+  const FEED_TALK = {
+    'wave-breaks': 'That one’s the mechanics of what you already do — the wave crests inside fifteen minutes and the Rule of Three is just a way to stand there while it does.',
+    'garage-story': 'That story’s basically yours. Your garage got its second job weeks ago — all four of last Thursday’s cigarettes stayed out there, and the bench is winning evenings now.',
+    'quote-commander': 'That’s the whole thesis in one line. Every time you log before you light up, you’re the commander for a second — that’s the rep.',
+    'what-you-get': 'Your version of that math: 15 down to about 8 a day. Roughly two hours back, and your evening urges halved in two weeks. Want the full picture on your Home tab?',
+  };
+  const feedEl = el('contentFeed');
+  feedEl.addEventListener('click', async (e) => {
+    const card = e.target.closest('.feed-card');
+    const play = e.target.closest('.feed-play');
+    if (play && card) {
+      play.textContent = play.textContent === '▶' ? '❚❚' : '▶';
+      bus('app', 'media.' + (play.textContent === '❚❚' ? 'play' : 'pause') + ' · "' + card.dataset.title + '"');
+      return;
+    }
+    const h = e.target.closest('[data-h]');
+    if (h && card) {
+      card.querySelectorAll('[data-h]').forEach(b => b.classList.remove('on'));
+      h.classList.add('on');
+      bus('app', 'media.feedback · "' + card.dataset.title + '" helped=' + h.dataset.h);
+      return;
+    }
+    const talk = e.target.closest('[data-f-talk]');
+    if (talk) {
+      bus('app', 'card.cta · talk_about content: ' + talk.dataset.fTalk);
+      const fc = talk.closest('.feed-card');
+      const theme = fc ? (fc.querySelector('.f-theme') || {}).textContent || 'Content' : 'Content';
+      const line = fc ? ((fc.querySelector('.f-cap') || fc.querySelector('.f-quote') || {}).textContent || '') : '';
+      setView('chat');
+      addQuotedUserTurn(theme + ' — ' + (fc ? fc.dataset.title : ''), line, 'Let’s talk about this one.');
+      if (window.BBLive && window.BBLive.active) {
+        await window.BBLive.turn('[I’m looking at this in my content feed: "' + (fc ? fc.dataset.title : '') + '" — ' + line + '] Let’s talk about this one.', { hidden: true });
+        return;
+      }
+      if (FEED_TALK[talk.dataset.fTalk]) await bbSay(FEED_TALK[talk.dataset.fTalk]);
+    }
+  });
+  // Report which card is in view — the agent knows what the user is watching
+  if ('IntersectionObserver' in window) {
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach(en => {
+        if (en.isIntersecting && phone.classList.contains('viewContent')) {
+          setScreen('content · viewing: ' + en.target.dataset.title.toLowerCase());
+          bus('app', 'media.view · "' + en.target.dataset.title + '"');
+        }
+      });
+    }, { root: feedEl, threshold: 0.6 });
+    feedEl.querySelectorAll('.feed-card').forEach(c => io.observe(c));
+  }
+
+  /* ---------------- handedness ---------------- */
+  function setHand(hand) {
+    phone.classList.toggle('righty', hand === 'right');
+    phone.classList.toggle('lefty', hand === 'left');
+    el('handRight').classList.toggle('on', hand === 'right');
+    el('handLeft').classList.toggle('on', hand === 'left');
+    bus('app', 'settings.handedness → ' + hand);
+    try { localStorage.setItem('bb_hand', hand); } catch (e) {}
+  }
+  el('handRight').addEventListener('click', () => setHand('right'));
+  el('handLeft').addEventListener('click', () => setHand('left'));
+  let savedHand = 'right';
+  try { savedHand = localStorage.getItem('bb_hand') || 'right'; } catch (e) {}
+  phone.classList.add(savedHand === 'left' ? 'lefty' : 'righty');
+  el('handRight').classList.toggle('on', savedHand !== 'left');
+  el('handLeft').classList.toggle('on', savedHand === 'left');
+
+  /* ---------------- text size (Aa slider) ---------------- */
+  const aaRange = el('aaRange');
+  function setTextScale(pct) {
+    phone.style.setProperty('--tscale', pct / 100);
+    try { localStorage.setItem('bb_tscale', String(pct)); } catch (e) {}
+  }
+  aaRange.addEventListener('input', () => setTextScale(+aaRange.value));
+  let savedScale = 130; // default: midpoint of the range
+  try { savedScale = parseInt(localStorage.getItem('bb_tscale') || '130', 10) || 130; } catch (e) {}
+  savedScale = Math.min(160, Math.max(100, savedScale));
+  aaRange.value = savedScale;
+  setTextScale(savedScale);
+
+  /* ---------------- quick log (from Home) ---------------- */
+  const QL_EVENT = { resisted: 'urge_resisted', cigarette: 'cigarette', decision: 'decision', urge: 'urge' };
+  async function quickLog(kind) {
+    setView('chat');
+    if (window.BBLive && window.BBLive.active && kind !== 'urge') {
+      const labels = { resisted: 'urge resisted', cigarette: 'cigarette', decision: 'decision · conscious choice' };
+      addReceipt(kind === 'cigarette' ? 'cigarette' : kind, labels[kind] + ' · quick log');
+      window.BBLive.logEvent(QL_EVENT[kind], kind);
+      await window.BBLive.turn('[app event] I just quick-logged: ' + labels[kind] + '. Acknowledge briefly, per my phase.', { hidden: true });
+      return;
+    }
+    if (kind === 'urge') { userTurn('I’m having an urge', false); return; }
+    if (kind === 'resisted') {
+      addReceipt('resisted', 'urge resisted'); S.reps++; busRender();
+      await bbSay(S.phase === 'observation'
+        ? 'That’s a rep. ' + S.reps + ' this week — quietly stacking.'
+        : 'Rep counted. ' + S.reps + ' this week.');
+      return;
+    }
+    if (kind === 'decision') {
+      addReceipt('decision', 'decision · conscious choice');
+      await bbSay('Your call, cleanly made. It’s on the map — nothing to defend.');
+      return;
+    }
+    addReceipt('cigarette', 'cigarette');
+    await bbSay('Logged. That’s data. The map gets sharper every time you’re honest with it.');
+  }
+
+  /* ---------------- dashboard CTAs → back into the conversation ---------------- */
+  const TALK = {
+    arc: 'The line’s been under your baseline for three straight weeks — 15 down to about 8 a day. That’s not a streak, it’s a slope, and slips barely dent a slope.',
+    metrics: 'Over 30 days: count down 45%, average gap up from 90 minutes to 2 hours 40, evening urges halved in the last two weeks. Ask me about any of those.',
+    hours: 'Evenings after the patch comes off are the hot zone — 4 to 8. Tuesday mornings spike with the drives. Mornings at home stay quiet: the safe space is holding.',
+    triggers: 'Three on the map: the drives — the car’s the container, not the gym. Patch-off evenings — buffer gone, automation fires. And I’m watching the post-meeting transitions. None of that came from a questionnaire; you showed me.',
+    techniques: 'They all do the same job — keep the cue, keep the reward, swap the routine. The garage project fills the evening void the cigarette was filling. The walk moves the wave through faster. The breathing buys time for it to crest.',
+    records: 'Five forty-eight is yours forever — waking hours only; I don’t count sleep, because that’s not a fight you’re fighting. Nothing on that wall ever resets, and the honesty milestone counts disclosed slips too. That one matters most.',
+    insight: 'The evening thinning is real: three this week, six two weeks ago. The garage project is doing the heavy lifting there — the urge lost its anchor once the evening had a purpose.',
+    recommend: 'One thing worth trying: an if-then for the patch-off hour. If it’s 4:50 and the buffer’s gone, then straight to the garage bench before the couch. Want me to hold you to it — gently?',
+    independence: 'Four weeks ago I reached out more than you reached in. That’s flipped — nine self-caught this week against two nudges. That trend is the whole point: needing me less.',
+  };
+  const TALK_QUOTE = {
+    arc: ['The arc', '15/day baseline → 8.2 today, 30 days'],
+    metrics: ['The arc', 'Daily count vs baseline — 30 days'],
+    hours: ['Your hours', 'Evenings 4–8 pm run hottest; Tuesday mornings spike'],
+    triggers: ['Triggers — your map', 'The drives · patch-off evenings · post-meeting transitions'],
+    practice: ['What works for you', 'Rule of Three breathing — 6/9'],
+    techniques: ['What works for you', 'Garage project 5/6 · walk loop 8/10 · breathing 6/9'],
+    records: ['Records & milestones', 'Longest waking gap 5h 48m · fastest crest 7→2 in 4 min'],
+    insight: ['Insight', 'Evening urges thinning — 3 this week vs 6 two weeks ago'],
+    recommend: ['Insights & recommendations', 'What should I try next?'],
+    independence: ['Independence trend', 'Self-caught 9 vs prompted 2 this week'],
+  };
+  document.getElementById('journey').addEventListener('click', async (e) => {
+    const ql = e.target.closest('[data-ql]');
+    if (ql) { quickLog(ql.dataset.ql); return; }
+    const b = e.target.closest('[data-talk]'); if (!b) return;
+    const topic = b.dataset.talk;
+    bus('app', 'card.cta · talk_about: ' + topic);
+    setView('chat');
+    const q = TALK_QUOTE[topic];
+    const uText = topic === 'practice' ? 'Let’s run one now.' : topic === 'recommend' ? 'What should I try next?' : 'Let’s talk about this.';
+    if (q) addQuotedUserTurn(q[0], q[1], uText);
+    if (window.BBLive && window.BBLive.active && topic !== 'practice') {
+      await window.BBLive.turn('[I’m looking at the "' + q[0] + '" card on my dashboard: ' + q[1] + '] ' + uText, { hidden: true });
+      return;
+    }
+    if (topic === 'practice') {
+      await bbSay('Let’s run one as a drill — no urge required. Reps in calm water make the rough water easier.');
+      breathingCard(async (from, to) => {
+        addReceipt('resisted', 'practice rep · rule of three');
+        await bbSay('Practice counts. The move is the same when it’s real.');
+      });
+      return;
+    }
+    if (TALK[topic]) await bbSay(TALK[topic]);
+  });
+
+  /* ---------------- dashboard charts ---------------- */
+  function buildArcChart(ysIn, baselineIn) {
+    const ys = (ysIn && ysIn.length > 1) ? ysIn : [15,14.6,15.1,14.2,13.6,14.1,13.2,12.6,13.1,12.2,12.5,11.6,11.1,11.6,10.6,10.1,10.5,9.6,10.1,9.2,9.6,8.7,9.1,8.6,8.1,8.6,8.1,7.7,8.1,8.2];
+    const baseline = baselineIn || 15;
+    const W = 320, H = 110, L = 8, R = 30, T = 8, B = 18;
+    const maxV = Math.max(baseline, ...ys) + 1;
+    const x = (i) => L + i * (W - L - R) / (ys.length - 1);
+    const y = (v) => T + (maxV - v) * (H - T - B) / maxV;
+    const pts = ys.map((v, i) => x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ');
+    const area = 'M' + x(0) + ',' + y(ys[0]) + ' L' + pts.split(' ').join(' L') + ' L' + x(ys.length - 1) + ',' + (H - B) + ' L' + x(0) + ',' + (H - B) + ' Z';
+    el('arcChart').innerHTML =
+      '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Daily cigarette count over 30 days, declining from 15 to about 8 against a baseline of 15">' +
+      [Math.round(maxV / 3), Math.round(maxV * 2 / 3)].map(g => '<line x1="' + L + '" y1="' + y(g) + '" x2="' + (W - R) + '" y2="' + y(g) + '" stroke="#3a3a3c" stroke-width="1" opacity=".5"/>').join('') +
+      '<line x1="' + L + '" y1="' + y(baseline) + '" x2="' + (W - R) + '" y2="' + y(baseline) + '" stroke="#636366" stroke-width="1.5" stroke-dasharray="4 4"/>' +
+      '<path d="' + area + '" fill="rgba(232,98,74,.12)"/>' +
+      '<polyline points="' + pts + '" fill="none" stroke="#e8624a" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>' +
+      '<circle cx="' + x(ys.length - 1) + '" cy="' + y(ys[ys.length - 1]) + '" r="3.5" fill="#e8624a" stroke="#2c2c2e" stroke-width="2"/>' +
+      '<text x="' + (W - R + 4) + '" y="' + (y(ys[ys.length - 1]) + 3) + '" fill="#ffffff" font-size="10" font-weight="700">' + ys[ys.length - 1] + '</text>' +
+      '<text x="' + L + '" y="' + (H - 4) + '" fill="#636366" font-size="9">30 days ago</text>' +
+      '<text x="' + (W - R) + '" y="' + (H - 4) + '" fill="#636366" font-size="9" text-anchor="end">today</text>' +
+      '</svg>';
+  }
+  function buildIndChart() {
+    const self = [2, 4, 6, 9], prompted = [5, 4, 3, 2], max = 9;
+    el('indChart').innerHTML = self.map((s, i) =>
+      '<div class="wk"><span class="bar self" style="height:' + (s / max * 100) + '%" title="Week ' + (i + 1) + ': ' + s + ' self-initiated"></span>' +
+      '<span class="bar prompt" style="height:' + (prompted[i] / max * 100) + '%" title="Week ' + (i + 1) + ': ' + prompted[i] + ' prompted"></span>' +
+      '<b>W' + (i + 1) + '</b></div>'
+    ).join('');
+  }
+  buildArcChart();
+  buildIndChart();
+  el('journeyHm').appendChild(buildHeatmapGrid());
+
+  /* ---------------- scenarios ---------------- */
+  function clearTimers() { S.scenarioTimer.forEach(clearTimeout); S.scenarioTimer = []; }
+  function wait(ms) { return new Promise(r => S.scenarioTimer.push(setTimeout(r, reduceMotion ? Math.min(ms, 300) : ms))); }
+
+  function resetAll() {
+    clearTimers();
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
+    stream.innerHTML = '';
+    pinned = true; jumpLatest.classList.remove('show');
+    el('busLog').innerHTML = '';
+    S.events = []; S.liveIntensity = null; S.reps = 6; S.busy = false;
+    setView('chat');
+    setMode('text'); phone.classList.remove('voice');
+    S.phase = 'observation';
+    phone.classList.remove('resistance');
+    el('phaseChip').className = 'phase-chip observation';
+    el('phaseLabel').textContent = 'Observation';
+    setScreen('session · stream');
+    busRender();
+    bbSay(greetLine(), { delay: 300 });
+  }
+
+  async function scenario1() {
+    resetAll(); await wait(1800);
+    addBubble('user', 'Logging one — heading out for the gym drive.', false);
+    bus('app', 'chat.user_turn');
+    await wait(500);
+    addReceipt('cigarette', 'cigarette · gym drive');
+    await bbSay('Logged — the drive, right on your Tuesday shape. That’s data, nothing else.');
+    await bbSay('Gym next, then the park loop? I’ll be here when you’re out.', { delay: 900 });
+    await wait(1400);
+    addBubble('user', 'Yep, the usual. This is my normal routine, it seems, for now.', false);
+    await bbSay('“For now” — noted, exactly as you said it. The routine holding steady IS the work in this phase. No grades from me.');
+  }
+
+  async function scenario2() {
+    resetAll(); await wait(1600);
+    addBubble('user', 'It’s getting loud. I’m about to light one.', false);
+    bus('app', 'chat.user_turn');
+    setPhase('resistance');
+    await bbSay('Three breaths. Three seconds each. In… out. I’m right here.');
+    breathingCard(async (from, to) => {
+      addReceipt('resisted', 'urge ridden out · ' + from + '→' + to);
+      S.reps++; S.liveIntensity = null; busRender();
+      await bbSay('From a ' + from + ' to a ' + to + ' — you generated that. That’s ' + S.reps + ' this week, and this was a patch-off-window one. Those count double in spirit.');
+      videoCard('Why the wave always breaks', '2:41');
+      await bbSay('On your screen if you want it — I’ll narrate the short version if you go hands-free.', { delay: 900 });
+      setPhase('observation');
+    });
+    await wait(2500);
+    // Mode never changes on its own — the audio button is the only door.
+    addBubble('user', 'Okay. Starting the breaths now.', false);
+    await bbSay('Good. I’ll count them with you — tap Start on the card whenever you’re ready. And if your hands are busy, the speaker button by the send arrow puts me on audio.');
+  }
+
+  async function scenario3() {
+    resetAll(); await wait(1600);
+    addBubble('user', 'How am I actually doing? Give me the honest picture.', false);
+    await bbSay('Honest picture, coming up.');
+    heatmapCard();
+    await bbSay('Evenings after the patch comes off are your loud hours — four to eight. Tuesday mornings spike with the drives. Mornings at home stay quiet: your safe space is holding.', { delay: 1200 });
+    recordsCard();
+    await bbSay('And the wall only grows. Five hours forty-eight awake — sleep never pads it — and a slip never touches it.', { delay: 1100 });
+    await wait(900);
+    await bbSay('Tap any cell on the map and ask me about it.', { delay: 500 });
+  }
+
+  document.querySelector('.scenarios').addEventListener('click', (e) => {
+    const b = e.target.closest('.scenario-btn'); if (!b) return;
+    const s = b.dataset.scenario;
+    if (s === 'reset') return resetAll();
+    if (s === '1') scenario1();
+    if (s === '2') scenario2();
+    if (s === '3') scenario3();
+  });
+
+  /* ---------------- live-head exports ---------------- */
+  function bbStreamBubble() {
+    const spoken = S.mode === 'voice';
+    const b = addBubble('bb', '', spoken);
+    const span = document.createElement('span');
+    b.appendChild(span);
+    setOrb('thinking');
+    let full = '';
+    return {
+      append(t) { full += t; span.textContent = full; setOrb('speaking'); scrollDown(); },
+      done() { if (spoken && full) speak(full, () => {}); else setOrb('listening'); return full; },
+    };
+  }
+  window.BB = {
+    S, el, bus, busRender, setOrb, setScreen, addBubble, bbSay, addReceipt,
+    addQuotedUserTurn, setMode, setView, setPhase, scrollDown, bbStreamBubble,
+    breathingCard, quoteCard, videoCard, heatmapCard, recordsCard, greetLine,
+    buildArcChart, buildHeatmapGrid,
+  };
+
+  /* ---------------- boot ---------------- */
+  busRender();
+  bbSay(greetLine(), { delay: 700 });
+  bus('app', 'session.open · context pre-loaded (profile, clock, risk windows, event tail)');
+})();
+</script>
+
+<script>
+/* ============ BBLive — the headless adapter ============
+   Speaks the existing bb-server API. Nothing here requires server changes:
+   /session/turn (SSE), /events, /content/feed, /health are already CORS-open.
+   Voice in the head uses local speech synthesis; full-duplex LiveKit voice is
+   the next integration step (see HEADLESS.md). */
+window.BBLive = (function () {
+  'use strict';
+  const BB = window.BB;
+  const $ = (id) => document.getElementById(id);
+  const state = { active: false, server: '', userId: '', token: '', tz: Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/Chicago', msgs: [] };
+  const authHeaders = () => state.token ? { authorization: 'Bearer ' + state.token } : {};
+
+  function setStatus(t) { $('liveStatus').textContent = t; }
+  function setPill(live) {
+    $('livePill').textContent = live ? 'LIVE' : 'DEMO';
+    $('livePill').classList.toggle('live', live);
+    $('btnDemo').hidden = !live;
+    $('btnConnect').hidden = live;
+  }
+
+  async function turn(text, opts) {
+    opts = opts || {};
+    state.msgs.push({ role: 'user', content: text });
+    BB.S.busy = true;
+    const sb = BB.bbStreamBubble();
+    try {
+      const resp = await fetch(state.server + '/session/turn', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ messages: state.msgs, userId: state.userId, timezone: state.tz }),
+      });
+      if (!resp.ok || !resp.body) throw new Error('HTTP ' + resp.status);
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n\n')) >= 0) {
+          const frame = buf.slice(0, i); buf = buf.slice(i + 2);
+          const line = frame.split('\n').find(l => l.startsWith('data: '));
+          if (!line) continue;
+          const payload = line.slice(6);
+          if (payload === '[DONE]') continue;
+          try {
+            const j = JSON.parse(payload);
+            if (j.text) sb.append(j.text);
+            else if (j.error) sb.append(' ⚠ ' + j.error);
+          } catch (e) { /* keep-alive or partial frame */ }
+        }
+      }
+      const full = sb.done();
+      if (full) state.msgs.push({ role: 'assistant', content: full });
+      BB.bus('agent', 'live.turn · ' + full.length + ' chars from bb-server');
+    } catch (e) {
+      sb.append('(connection problem: ' + e.message + ' — check the server URL and that bb-server is up)');
+      sb.done();
+      BB.bus('agent', 'live.turn failed · ' + e.message);
+    } finally {
+      BB.S.busy = false;
+    }
+  }
+
+  function logEvent(eventType, kind) {
+    fetch(state.server + '/events', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ userId: state.userId, eventType, metadata: { source: 'one-conversation-head', quick_log: true } }),
+    }).then(r => r.json()).then(j => {
+      BB.bus('app', 'live.log_event · ' + eventType + (j.id ? ' ✓' : ' ✗ ' + (j.error || '')));
+      if (eventType === 'decision') logEventRaw('cigarette'); // decision implies a cigarette, matching the app
+      refreshStats();
+    }).catch(e => BB.bus('app', 'live.log_event failed · ' + e.message));
+  }
+  function logEventRaw(eventType) {
+    fetch(state.server + '/events', {
+      method: 'POST', headers: { 'content-type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ userId: state.userId, eventType, metadata: { source: 'one-conversation-head' } }),
+    }).catch(() => {});
+  }
+
+  async function refreshStats() {
+    try {
+      const r = await fetch(state.server + '/events?userId=' + encodeURIComponent(state.userId) + '&limit=300&timezone=' + encodeURIComponent(state.tz), { headers: authHeaders() });
+      const j = await r.json();
+      const evs = j.events || [];
+      const now = new Date();
+      const dayKey = now.toDateString();
+      const weekAgo = now.getTime() - 7 * 86400e3;
+      let today = 0, reps = 0;
+      evs.forEach(e => {
+        const t = new Date(e.occurred_at);
+        if (e.event_type === 'cigarette' && t.toDateString() === dayKey) today++;
+        if (e.event_type === 'urge_resisted' && t.getTime() >= weekAgo) reps++;
+      });
+      const tiles = document.querySelectorAll('.snap .tile .n');
+      if (tiles[0]) tiles[0].textContent = String(today);
+      BB.S.reps = reps; BB.busRender();
+      const sr = $('snapReps'); if (sr) sr.textContent = String(reps);
+      BB.bus('app', 'live.stats · today ' + today + ' cigarettes · ' + reps + ' resists this week');
+    } catch (e) { BB.bus('app', 'live.stats failed · ' + e.message); }
+    refreshJourneyCharts();
+  }
+
+  function fmtMs(ms) {
+    const m = Math.round(ms / 60000);
+    return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm';
+  }
+  // Real charts when the /stats endpoints exist (patches/stats-endpoints.md).
+  // Silently keeps the sample data when they don't.
+  async function refreshJourneyCharts() {
+    try {
+      const r = await fetch(state.server + '/stats/all?userId=' + encodeURIComponent(state.userId) + '&timezone=' + encodeURIComponent(state.tz), { headers: authHeaders() });
+      if (!r.ok) return;
+      const j = await r.json();
+      if (j.journey && j.journey.days) {
+        BB.buildArcChart(j.journey.days.map(d => d.count), j.journey.baseline);
+      }
+      if (j.heatmap && j.heatmap.data) {
+        const hm = $('journeyHm');
+        hm.innerHTML = '';
+        hm.appendChild(BB.buildHeatmapGrid(j.heatmap.data));
+      }
+      if (j.records) {
+        const rows = document.querySelectorAll('#journey .record');
+        if (rows[0] && j.records.longest_waking_gap_ms) rows[0].querySelector('.rval').textContent = fmtMs(j.records.longest_waking_gap_ms);
+        if (rows[1] && j.records.best_week_resists != null) rows[1].querySelector('.rval').textContent = String(j.records.best_week_resists);
+        const gapTile = $('snapGap');
+        if (gapTile && j.records.current_waking_gap_ms != null) gapTile.textContent = fmtMs(j.records.current_waking_gap_ms);
+      }
+      BB.bus('app', 'live.stats · journey charts on real data');
+    } catch (e) { /* endpoints not deployed yet — sample data stays */ }
+  }
+
+  async function loadFeed() {
+    try {
+      const r = await fetch(state.server + '/content/feed?limit=10', { headers: authHeaders() });
+      const j = await r.json();
+      const vids = j.videos || [];
+      if (!vids.length) return;
+      const feed = $('contentFeed');
+      vids.slice().reverse().forEach(v => {
+        const title = (v.tags && v.tags[0]) || v.theme || 'From your library';
+        const card = document.createElement('div');
+        card.className = 'feed-card live-video';
+        card.dataset.cid = v.id; card.dataset.title = title;
+        card.innerHTML =
+          '<video playsinline controls preload="metadata"' + (v.r2_thumbnail_url ? ' poster="' + v.r2_thumbnail_url + '"' : '') + ' src="' + v.r2_url + '"></video>' +
+          '<div class="f-meta"><div class="f-theme">' + (v.theme || 'content') + (v.duration_seconds ? ' · ' + Math.floor(v.duration_seconds / 60) + ':' + String(v.duration_seconds % 60).padStart(2, '0') : '') + '</div>' +
+          '<div class="f-title">' + title + '</div></div>' +
+          '<div class="feed-rail"><button data-h="yes" aria-label="Helped">👍</button><span class="r-lab">Helped</span>' +
+          '<button data-h="no" aria-label="Not this time">👎</button><span class="r-lab">Not it</span>' +
+          '<button data-f-talk="' + v.id + '" aria-label="Talk about this">💬</button><span class="r-lab">Talk</span></div>';
+        const cap = document.createElement('div');
+        cap.className = 'f-cap';
+        card.querySelector('.f-meta').appendChild(cap);
+        cap.textContent = 'From the live library';
+        feed.insertBefore(card, feed.firstChild);
+      });
+      BB.bus('app', 'live.feed · ' + vids.length + ' videos from the library');
+    } catch (e) { BB.bus('app', 'live.feed failed · ' + e.message); }
+  }
+
+  async function connect(server, userId, token) {
+    server = (server || '').trim().replace(/\/+$/, '');
+    userId = (userId || '').trim();
+    if (!server || !userId) { setStatus('Enter both the bb-server URL and a user id.'); return; }
+    setStatus('Checking ' + server + ' …');
+    try {
+      const r = await fetch(server + '/health');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+    } catch (e) {
+      setStatus('Could not reach ' + server + ' (' + e.message + '). If the page is served over https, the server must be too.');
+      return;
+    }
+    state.server = server; state.userId = userId; state.token = (token || '').trim(); state.active = true; state.msgs = [];
+    try { localStorage.setItem('bb_head_cfg', JSON.stringify({ server, userId, token: state.token })); } catch (e) {}
+    setPill(true);
+    setStatus('Live against ' + server + ' as ' + userId + '. Text turns, memory, event logging, dashboard counts, and the content library are real. Voice replies use local speech synthesis in this head (LiveKit duplex is the next step — HEADLESS.md).');
+    BB.bus('app', 'live.connect · ' + server + ' as ' + userId);
+    refreshStats(); loadFeed();
+    turn('[session:start]', { hidden: true });
+  }
+
+  function disconnect() {
+    state.active = false; state.msgs = [];
+    setPill(false);
+    setStatus('Demo brain active. Point this head at a running bb-server to go live.');
+    try { localStorage.removeItem('bb_head_cfg'); } catch (e) {}
+    BB.bus('app', 'live.disconnect · back to demo brain');
+  }
+
+  $('btnConnect').addEventListener('click', () => connect($('cfgServer').value, $('cfgUser').value, $('cfgToken').value));
+  $('btnDemo').addEventListener('click', disconnect);
+  // Served from bb-server itself (/app)? Default the server URL to our origin.
+  if (location.protocol.startsWith('http') && !$('cfgServer').value) {
+    $('cfgServer').value = location.origin;
+  }
+  try {
+    const saved = JSON.parse(localStorage.getItem('bb_head_cfg') || 'null');
+    if (saved && saved.server) {
+      $('cfgServer').value = saved.server; $('cfgUser').value = saved.userId || ''; $('cfgToken').value = saved.token || '';
+      connect(saved.server, saved.userId, saved.token);
+    }
+  } catch (e) {}
+
+  return { get active() { return state.active; }, turn, logEvent, connect, disconnect, refreshStats };
+})();
+</script>
+
+</body>
+</html>
