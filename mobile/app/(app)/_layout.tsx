@@ -192,6 +192,9 @@ export default function AppLayout() {
         <Stack.Screen name="content-feed" options={{ animation: 'none' }} />
         <Stack.Screen name="profile" options={{ animation: 'none' }} />
         <Stack.Screen name="session-chat" options={{ animation: 'none' }} />
+        {/* The One Conversation surface — replaces session-chat/-voice and
+            the standalone dashboards as the phases land. */}
+        <Stack.Screen name="session" options={{ animation: 'none' }} />
       </Stack>
     </AppDrawer>
   );

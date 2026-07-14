@@ -20,6 +20,9 @@ interface FeedPagerProps {
   onCardVisible: (index: number) => void;
   cardEngagements: Record<string, { helped: boolean }>;
   onHelpedTap: (cardId: string) => void;
+  /** Page height when the pager lives inside a smaller pane (the One
+      Conversation content tab). Defaults to the full screen. */
+  pageHeight?: number;
 }
 
 export default function FeedPager({
@@ -28,6 +31,7 @@ export default function FeedPager({
   onCardVisible,
   cardEngagements,
   onHelpedTap,
+  pageHeight = SCREEN_HEIGHT,
 }: FeedPagerProps) {
   const [activeIndex, setActiveIndex] = useState(0);
 
@@ -51,7 +55,7 @@ export default function FeedPager({
       const isActive = index === activeIndex;
 
       return (
-        <View style={styles.page}>
+        <View style={[styles.page, { height: pageHeight }]}>
           {item.type === 'video' && item.mediaUri && (
             <VideoCard
               videoUri={item.mediaUri}
@@ -82,7 +86,7 @@ export default function FeedPager({
         </View>
       );
     },
-    [activeIndex, cardEngagements, onHelpedTap, onOpenChat],
+    [activeIndex, cardEngagements, onHelpedTap, onOpenChat, pageHeight],
   );
 
   return (
@@ -92,13 +96,13 @@ export default function FeedPager({
       keyExtractor={(item) => item.id}
       pagingEnabled
       showsVerticalScrollIndicator={false}
-      snapToInterval={SCREEN_HEIGHT}
+      snapToInterval={pageHeight}
       decelerationRate="fast"
       onViewableItemsChanged={onViewableItemsChanged}
       viewabilityConfig={viewabilityConfig}
       getItemLayout={(_, index) => ({
-        length: SCREEN_HEIGHT,
-        offset: SCREEN_HEIGHT * index,
+        length: pageHeight,
+        offset: pageHeight * index,
         index,
       })}
     />
@@ -107,7 +111,6 @@ export default function FeedPager({
 
 const styles = StyleSheet.create({
   page: {
-    height: SCREEN_HEIGHT,
     width: SCREEN_WIDTH,
   },
 });

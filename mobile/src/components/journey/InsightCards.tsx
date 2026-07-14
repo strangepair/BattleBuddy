@@ -6,15 +6,22 @@ import type { Insight } from '../../services/statsService';
 
 interface InsightCardsProps {
   insights: Insight[];
+  /** One-surface mode: handle "talk about this" in place instead of pushing
+      the legacy chat screen. */
+  onTalk?: (insight: Insight) => void;
 }
 
 // BB-voiced observations, shared between the Journey screen's Section 5 and
 // the standalone insights.tsx — one source of truth so both surfaces agree
 // (doc 08 §5: "BB talks about what the dashboard shows and vice versa").
-export default function InsightCards({ insights }: InsightCardsProps) {
+export default function InsightCards({ insights, onTalk }: InsightCardsProps) {
   const setTriggerContext = useSessionStore((s) => s.setTriggerContext);
 
   const handleTalk = (insight: Insight) => {
+    if (onTalk) {
+      onTalk(insight);
+      return;
+    }
     setTriggerContext({
       trigger: insight.triggerContext,
       intensity: 0,

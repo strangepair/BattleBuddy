@@ -5,14 +5,16 @@ export type Direction = 'up' | 'down' | 'left' | 'right';
 
 export const NAV_ROUTES: Record<Direction, string> = {
   down: '/session-voice',
-  up: '/session-chat',
+  // The One Conversation surface (session.tsx) — chat, dashboard, and content
+  // in one place. session-chat retires once the remaining phases land.
+  up: '/session',
   left: '/content-feed',
   right: '/profile',
 };
 
 export const NAV_LABELS: Record<Direction, string> = {
   down: 'Voice',
-  up: 'Chat',
+  up: 'Buddy',
   left: 'Content',
   right: 'Profile',
 };
