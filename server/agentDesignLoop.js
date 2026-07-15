@@ -243,70 +243,79 @@ function findMissingMarkers(content) {
   return REQUIRED_MARKERS.filter(marker => !content.includes(marker));
 }
 
+// Patch-based apply: ask Sonnet for <<<FIND>>>/<<<REPLACE>>>/<<<END>>> blocks
+// instead of a full file rewrite. Output is ~1-2k tokens instead of ~17k, so
+// this finishes in ~30s rather than timing out at 10 minutes.
+function parsePatchBlocks(text) {
+  const patches = [];
+  const re = /<<<FIND>>>\n([\s\S]*?)\n<<<REPLACE>>>\n([\s\S]*?)\n<<<END>>>/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    patches.push({ find: m[1], replace: m[2] });
+  }
+  return patches;
+}
+
 async function applyProposalsToSystemPrompt(proposalText, currentSystemPrompt) {
-  // Generous headroom over the current prompt size: a full rewrite has to
-  // reproduce the entire existing file PLUS whatever new content the
-  // proposals add, so max_tokens must comfortably exceed the input size,
-  // not just the size of the expected diff.
-  const estimatedInputTokens = Math.ceil(currentSystemPrompt.length / 4);
-  // Ceiling raised to 32768: a full rewrite must reproduce the entire prompt
-  // (~17k tokens at current size) plus new content, so 16384 was already too
-  // small when the prompt exceeded ~50k chars.
-  const maxTokens = Math.min(32768, Math.max(8192, estimatedInputTokens + 4096));
-
-  // Streamed rather than a plain create(): a non-streaming call generating
-  // up to 16384 tokens sits idle waiting for the full response, and hit
-  // APIConnectionTimeoutError three times in a row on 2026-07-07 even with
-  // the client timeout raised to 20 minutes — the connection was being
-  // dropped somewhere in the network path well before that, not by the SDK
-  // itself. Streaming keeps bytes flowing so nothing treats it as idle.
-  const stream = client.messages.stream({
+  const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: maxTokens,
-    system: `You are applying approved changes to a live AI system prompt. You will receive:
-1. A set of proposals labeled HIGH / MEDIUM / LOW confidence
-2. The current system prompt
+    max_tokens: 4096,
+    system: `You are applying HIGH confidence proposals as surgical patches to a live AI system prompt.
 
-Your job:
-- Apply ALL HIGH confidence proposals to the system prompt
-- Skip MEDIUM and LOW confidence proposals entirely
-- Make the minimum edit necessary to apply each proposal — don't rewrite surrounding content
-- Preserve ALL existing content not targeted by a proposal
-- Never remove safety content or the crisis off-ramp (988 Suicide & Crisis Lifeline)
-- Never remove the {{placeholder}} template variables — they are filled at runtime
-- Return ONLY the complete updated system prompt with no preamble, no explanation, no markdown wrapper`,
+For each HIGH confidence proposal, output one patch block:
+<<<FIND>>>
+[exact verbatim text from the current system prompt to replace — copy it character-for-character]
+<<<REPLACE>>>
+[updated text]
+<<<END>>>
+
+Rules:
+- Only emit patches for HIGH confidence proposals. Skip MEDIUM and LOW.
+- The FIND text MUST appear verbatim in the current system prompt (copy-paste it, do not paraphrase).
+- For new content being ADDED to an existing section, set FIND to the last line of that section and REPLACE to that same line plus the new content below it.
+- Output ONLY patch blocks — no preamble, no explanation, no markdown fences.
+- Never output a patch that removes safety content, the 988 crisis off-ramp, or {{placeholder}} variables.
+- If there are no HIGH confidence proposals, output nothing.`,
     messages: [{
       role: 'user',
-      content: `## HIGH confidence proposals to apply:
+      content: `## Proposals (apply HIGH confidence only):
 
 ${proposalText}
 
 ## Current system prompt:
 
-${currentSystemPrompt}
-
-Return the complete updated system prompt with all HIGH confidence proposals applied.`,
+${currentSystemPrompt}`,
     }],
   });
-  const response = await stream.finalMessage();
 
-  const text = response.content[0].text;
+  const patchText = response.content[0].text;
+  const patches = parsePatchBlocks(patchText);
 
-  if (response.stop_reason === 'max_tokens') {
-    throw new Error(
-      `Rewrite hit max_tokens (${maxTokens}) and was truncated mid-generation — refusing to apply. ` +
-      `Raise maxTokens or shrink the prompt before re-running.`
-    );
+  if (patches.length === 0) {
+    console.log('[DesignLoop] Patch response contained no valid patch blocks — no HIGH confidence proposals or none matched.');
+    return currentSystemPrompt;
   }
 
-  const missing = findMissingMarkers(text);
+  let result = currentSystemPrompt;
+  let applied = 0;
+  for (const { find, replace } of patches) {
+    if (result.includes(find)) {
+      result = result.replace(find, replace);
+      applied++;
+    } else {
+      console.warn(`[DesignLoop] Patch FIND text not found in system prompt (first 80 chars): "${find.slice(0, 80).replace(/\n/g, '↵')}"`);
+    }
+  }
+  console.log(`[DesignLoop] Applied ${applied}/${patches.length} patch(es)`);
+
+  const missing = findMissingMarkers(result);
   if (missing.length > 0) {
     throw new Error(
-      `Rewrite is missing required markers, refusing to apply: ${missing.join(', ')}`
+      `Patches would remove required markers, refusing to apply: ${missing.join(', ')}`
     );
   }
 
-  return text;
+  return result;
 }
 
 // ── Summarize what was actually applied ───────────────────────────────────────
