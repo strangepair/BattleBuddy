@@ -342,8 +342,6 @@ async function loadDashboard() {
       { v: sum(last7, 'cigarettes'), l: 'Cigarettes · 7d' },
       { v: latestPerf !== null ? `${latestPerf}<small>/10</small>` : '—', l: 'Agent score' },
       { v: latestScore !== null ? `${latestScore}<small>/10</small>` : '—', l: 'Memory score' },
-      { v: d.directives.active, l: 'Active directives' },
-      { v: d.prompt.version || '—', l: 'Prompt version' },
     ];
 
     const maxBar = Math.max(1, ...d.eventsByDay.map(x => Math.max(x.resisted, x.cigarettes)));
@@ -620,7 +618,7 @@ async function loadDirectives() {
 function repSection(title, items, cls = '', reportId = '') {
   if (!items || !items.length) return '';
   const isProposals = cls === 'proposals';
-  return `<details class="rep-sec ${cls}" open><summary><h4>${title}</h4></summary><ul>${items.map(i => {
+  return `<details class="rep-sec ${cls}" ${isProposals ? 'open' : ''}><summary><h4>${title}</h4></summary><ul>${items.map(i => {
     const text = typeof i === 'string' ? i : JSON.stringify(i);
     const btns = isProposals
       ? `<button class="btn apply" data-report-id="${escapeHtml(String(reportId))}" data-proposal="${encodeURIComponent(text)}" title="Turn this into a directive">Apply as directive</button>
@@ -652,7 +650,7 @@ async function loadInsights() {
           ${repSection('What worked', rep.agent_wins, 'wins')}
           ${repSection('App issues', rep.app_issues)}
           ${repSection(`Memory performance${mem.score !== undefined ? ` — score ${escapeHtml(String(mem.score))}/10` : ''}`, [...(mem.probes || []), ...(mem.chronology_errors || [])])}
-          ${rep.user_state ? `<details class="rep-sec" open><summary><h4>User state</h4></summary><p style="margin-top:6px;font-size:12.5px;line-height:1.55">${escapeHtml(rep.user_state)}</p></details>` : ''}
+          ${rep.user_state ? `<details class="rep-sec"><summary><h4>User state</h4></summary><p style="margin-top:6px;font-size:12.5px;line-height:1.55">${escapeHtml(rep.user_state)}</p></details>` : ''}
           ${rep.raw ? `<details class="rep-sec"><summary><h4>Raw output</h4></summary><p style="margin-top:6px;font-size:12.5px;line-height:1.55">${escapeHtml(rep.raw)}</p></details>` : ''}
         </div>
       </details>`;
@@ -746,7 +744,8 @@ function showDlResult(r) {
   wrap.style.display = 'block';
   if (r.status === 'running') {
     box.className = 'dl-box running';
-    box.innerHTML = `<div class="dl-title"><span style="animation:spin 1s linear infinite;display:inline-block">⟳</span> Design loop running — analyzing session signals and proposing prompt updates…</div>`;
+    box.innerHTML = `<div class="dl-title"><span style="animation:spin 1s linear infinite;display:inline-block">⟳</span> Design loop running</div><div class="dl-elapsed" style="font-size:11.5px;color:var(--dim);margin-top:4px">Loading profiles · 0s</div>`;
+    startElapsedCounter(r.startedAt);
   } else if (r.status === 'error') {
     box.className = 'dl-box err';
     box.innerHTML = `<div class="dl-title">✕ Design loop failed</div><div class="dl-summary">${escapeHtml(r.error || 'Unknown error')}</div>`;
@@ -761,8 +760,25 @@ function showDlResult(r) {
   }
 }
 
-let dlPollTimer = null;
+let dlPollTimer = null, dlElapsedTimer = null;
 function stopDlPoll() { if (dlPollTimer) { clearInterval(dlPollTimer); dlPollTimer = null; } }
+function stopDlElapsed() { if (dlElapsedTimer) { clearInterval(dlElapsedTimer); dlElapsedTimer = null; } }
+
+function startElapsedCounter(startedAt) {
+  stopDlElapsed();
+  const box = $('dl-box');
+  const start = startedAt ? new Date(startedAt).getTime() : Date.now();
+  const stages = ['Loading profiles', 'Analyzing signals', 'Proposing updates', 'Applying changes'];
+  dlElapsedTimer = setInterval(() => {
+    const elapsed = Math.floor((Date.now() - start) / 1000);
+    const mins = Math.floor(elapsed / 60), secs = elapsed % 60;
+    const timeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+    // Advance stage roughly every 45s across a ~3 min run
+    const stageIdx = Math.min(Math.floor(elapsed / 45), stages.length - 1);
+    const el = box.querySelector('.dl-elapsed');
+    if (el) el.textContent = `${stages[stageIdx]} · ${timeStr}`;
+  }, 1000);
+}
 
 async function pollDlStatus(startedAt) {
   stopDlPoll();
@@ -773,6 +789,7 @@ async function pollDlStatus(startedAt) {
       showDlResult(r);
       if (r.status !== 'running' && r.startedAt === startedAt) {
         stopDlPoll();
+        stopDlElapsed();
         $('ins-design-loop').disabled = false;
         if (r.changed) loadDashboard();
       }
