@@ -2363,25 +2363,25 @@ async function runTranscriptAudit(sinceMs = Date.now() - 26 * 3600 * 1000, sourc
 
       const response = await client.messages.create({
         model: 'claude-sonnet-4-6',
-        max_tokens: 2000,
+        max_tokens: 4000,
         messages: [{
           role: 'user',
           content: `You are auditing raw conversation transcripts between a user and BattleBuddy (BB), a smoking-cessation companion agent. Produce a concise, evidence-based audit for the developer.
 
 Return JSON only:
 {
-  "agent_wins": ["specific BB behavior that landed well — include a short verbatim quote as evidence"],
-  "agent_failures": ["specific BB behavior that failed or eroded trust — verbatim quote + why it failed"],
-  "app_issues": ["bugs, UX problems, or missing capabilities the USER mentioned or that are evident (e.g. data loss, latency complaints, feature requests) — verbatim quote"],
+  "summary": "2-3 sentences: the single most important thing the developer should act on",
+  "performance_score": "0-10 overall rating of BB's performance across these sessions — weigh trustworthiness (no fabricated facts), memory accuracy, tone fit, and whether interventions actually helped; judged only on evidence above. Be consistent run to run: 5 = mixed, 8+ = reliably good, below 4 = actively eroding trust",
   "proposals": ["concrete, targeted change proposals for the agent prompt or app, each traceable to evidence above; rate each HIGH/MEDIUM/LOW confidence"],
+  "agent_failures": ["specific BB behavior that failed or eroded trust — verbatim quote + why it failed"],
+  "agent_wins": ["specific BB behavior that landed well — include a short verbatim quote as evidence"],
+  "app_issues": ["bugs, UX problems, or missing capabilities the USER mentioned or that are evident (e.g. data loss, latency complaints, feature requests) — verbatim quote"],
   "memory_performance": {
     "probes": ["every moment the user tested or relied on BB's memory — quote it, and mark PASSED or FAILED based on whether BB's answer was accurate"],
     "chronology_errors": ["any time BB asserted a wrong date/time/sequence for a past event — quote it"],
     "score": "0-10 rating of BB's memory accuracy and chronological confidence across these sessions, judged only on evidence above"
   },
-  "user_state": "one-paragraph read of where this user is in their quit journey based on these sessions",
-  "performance_score": "0-10 overall rating of BB's performance across these sessions — weigh trustworthiness (no fabricated facts), memory accuracy, tone fit, and whether interventions actually helped; judged only on evidence above. Be consistent run to run: 5 = mixed, 8+ = reliably good, below 4 = actively eroding trust",
-  "summary": "2-3 sentences: the single most important thing the developer should act on"
+  "user_state": "one-paragraph read of where this user is in their quit journey based on these sessions"
 }
 ${adminFeedback ? `\nThe developer reviews every proposal in an admin console. His verdicts on past proposals — calibrate to them:\n${adminFeedback}\n` : ''}
 Transcripts:${corpus}`,

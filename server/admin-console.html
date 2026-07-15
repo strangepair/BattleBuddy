@@ -131,8 +131,13 @@
   .report summary .gist { font-size: 12.5px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .report[open] summary .gist { white-space: normal; }
   .report .body { padding: 0 14px 14px; display: flex; flex-direction: column; gap: 12px; }
-  .rep-sec h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); margin-bottom: 6px; }
-  .rep-sec ul { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+  .rep-sec { border-radius: 6px; overflow: hidden; }
+  .rep-sec > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 5px 0; user-select: none; }
+  .rep-sec > summary::-webkit-details-marker { display: none; }
+  .rep-sec > summary::before { content: '▶'; font-size: 8px; color: var(--dim); transition: transform .15s; flex-shrink: 0; }
+  .rep-sec[open] > summary::before { transform: rotate(90deg); }
+  .rep-sec > summary h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--dim); margin: 0; }
+  .rep-sec ul { list-style: none; display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
   .rep-sec li { font-size: 12.5px; line-height: 1.5; padding: 7px 10px; border-radius: 6px; background: var(--panel2); border-left: 3px solid var(--border); display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
   .rep-sec li .ptext { flex: 1; min-width: 200px; }
   .rep-sec li .apply { flex-shrink: 0; font-size: 11px; padding: 3px 8px; }
@@ -615,14 +620,14 @@ async function loadDirectives() {
 function repSection(title, items, cls = '', reportId = '') {
   if (!items || !items.length) return '';
   const isProposals = cls === 'proposals';
-  return `<div class="rep-sec ${cls}"><h4>${title}</h4><ul>${items.map(i => {
+  return `<details class="rep-sec ${cls}" open><summary><h4>${title}</h4></summary><ul>${items.map(i => {
     const text = typeof i === 'string' ? i : JSON.stringify(i);
     const btns = isProposals
       ? `<button class="btn apply" data-report-id="${escapeHtml(String(reportId))}" data-proposal="${encodeURIComponent(text)}" title="Turn this into a directive">Apply as directive</button>
          <button class="btn dismiss" data-report-id="${escapeHtml(String(reportId))}" data-proposal="${encodeURIComponent(text)}" title="Not useful — hide it, and teach future analyses not to propose things like it">✕</button>`
       : '';
     return `<li><span class="ptext">${escapeHtml(text)}</span>${btns}</li>`;
-  }).join('')}</ul></div>`;
+  }).join('')}</ul></details>`;
 }
 async function loadInsights() {
   try {
@@ -647,8 +652,8 @@ async function loadInsights() {
           ${repSection('What worked', rep.agent_wins, 'wins')}
           ${repSection('App issues', rep.app_issues)}
           ${repSection(`Memory performance${mem.score !== undefined ? ` — score ${escapeHtml(String(mem.score))}/10` : ''}`, [...(mem.probes || []), ...(mem.chronology_errors || [])])}
-          ${rep.user_state ? `<div class="rep-sec"><h4>User state</h4><p>${escapeHtml(rep.user_state)}</p></div>` : ''}
-          ${rep.raw ? `<div class="rep-sec"><h4>Raw output</h4><p>${escapeHtml(rep.raw)}</p></div>` : ''}
+          ${rep.user_state ? `<details class="rep-sec" open><summary><h4>User state</h4></summary><p style="margin-top:6px;font-size:12.5px;line-height:1.55">${escapeHtml(rep.user_state)}</p></details>` : ''}
+          ${rep.raw ? `<details class="rep-sec"><summary><h4>Raw output</h4></summary><p style="margin-top:6px;font-size:12.5px;line-height:1.55">${escapeHtml(rep.raw)}</p></details>` : ''}
         </div>
       </details>`;
     }).join('');
