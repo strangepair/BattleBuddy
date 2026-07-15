@@ -679,59 +679,48 @@ async function loadInsights() {
 }
 function openInlineApply(btn) {
   const li = btn.closest('li');
-  if (li.querySelector('.inline-apply')) return;
-  const ptext = li.querySelector('.ptext');
+  if (li.querySelector('.ia-cancel')) return;
   const dismissBtn = li.querySelector('.dismiss');
+
   const original = decodeURIComponent(btn.dataset.proposal);
   const suggested = original
     .replace(/^\s*(HIGH|MEDIUM|LOW)\s*CONFIDENCE\s*[—:–-]+\s*/i, '')
     .replace(/[\.\s]*\(?\s*[Tt]raceable to:[^)]*\)?\.?\s*$/, '')
     .trim();
-  btn.style.display = 'none';
-  if (ptext) ptext.style.display = 'none';
+
   if (dismissBtn) dismissBtn.style.display = 'none';
 
-  const box = document.createElement('div');
-  box.className = 'inline-apply';
-  box.innerHTML = `
-    <textarea spellcheck="false"></textarea>
-    <div class="frow" style="justify-content:flex-end">
-      <input type="date" title="Optional expiry — active through the end of that day (Central)">
-      <button class="btn primary ia-apply">Apply</button>
-      <button class="btn ia-cancel">Cancel</button>
-      <span class="cnt"></span>
-    </div>`;
-  li.appendChild(box);
+  // Wrap the Apply button + new Cancel in a column, in-place
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'display:flex;flex-direction:column;gap:4px;flex-shrink:0;';
+  btn.parentNode.insertBefore(wrapper, btn);
+  btn.textContent = 'Apply';
+  wrapper.appendChild(btn);
 
-  const ta2 = box.querySelector('textarea');
-  const cnt = box.querySelector('.cnt');
-  const refreshCnt = () => {
-    const n = ta2.value.trim().length;
-    cnt.textContent = `${n} / 1000`;
-    cnt.classList.toggle('over', n > 1000);
-  };
-  ta2.value = suggested;
-  ta2.addEventListener('input', refreshCnt);
-  refreshCnt();
-  ta2.focus();
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn ia-cancel';
+  cancelBtn.textContent = 'Cancel';
+  wrapper.appendChild(cancelBtn);
 
-  box.querySelector('.ia-cancel').onclick = () => {
-    box.remove();
-    btn.style.display = '';
-    if (ptext) ptext.style.display = '';
+  cancelBtn.onclick = () => {
+    wrapper.parentNode.insertBefore(btn, wrapper);
+    wrapper.remove();
+    btn.textContent = 'Apply as directive';
+    btn.onclick = () => openInlineApply(btn);
     if (dismissBtn) dismissBtn.style.display = '';
   };
-  box.querySelector('.ia-apply').onclick = async () => {
-    const applyBtn = box.querySelector('.ia-apply');
-    applyBtn.disabled = true;
+
+  btn.onclick = async () => {
+    btn.disabled = true;
+    cancelBtn.disabled = true;
     try {
       await api('/admin/console/insights/apply', {
         method: 'POST',
         body: JSON.stringify({
           reportId: btn.dataset.reportId,
           proposal: original,
-          text: ta2.value,
-          expires: box.querySelector('input[type=date]').value || null,
+          text: suggested,
+          expires: null,
         }),
       });
       const ul = li.closest('ul');
@@ -742,7 +731,8 @@ function openInlineApply(btn) {
       loadDirectives();
     } catch (e) {
       status(e.message, 'err');
-      applyBtn.disabled = false;
+      btn.disabled = false;
+      cancelBtn.disabled = false;
     }
   };
 }
