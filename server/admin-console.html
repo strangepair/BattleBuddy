@@ -680,6 +680,7 @@ async function loadInsights() {
 function openInlineApply(btn) {
   const li = btn.closest('li');
   if (li.querySelector('.ia-cancel')) return;
+  const ptext = li.querySelector('.ptext');
   const dismissBtn = li.querySelector('.dismiss');
 
   const original = decodeURIComponent(btn.dataset.proposal);
@@ -688,30 +689,53 @@ function openInlineApply(btn) {
     .replace(/[\.\s]*\(?\s*[Tt]raceable to:[^)]*\)?\.?\s*$/, '')
     .trim();
 
-  if (dismissBtn) dismissBtn.style.display = 'none';
+  // Measure before hiding anything so layout is stable
+  const colWidth = btn.offsetWidth;
 
-  // Wrap the Apply button + new Cancel in a column, in-place
-  const wrapper = document.createElement('div');
-  wrapper.style.cssText = 'display:flex;flex-direction:column;gap:4px;flex-shrink:0;';
-  btn.parentNode.insertBefore(wrapper, btn);
-  btn.textContent = 'Apply';
-  wrapper.appendChild(btn);
+  // Hide original text + buttons (don't move them — moving btn mid-click
+  // causes the browser to re-fire the new onclick on the same event)
+  if (ptext) ptext.style.display = 'none';
+  if (dismissBtn) dismissBtn.style.display = 'none';
+  btn.style.display = 'none';
+
+  // Textarea takes the ptext flex column
+  const ta2 = document.createElement('textarea');
+  ta2.spellcheck = false;
+  ta2.value = suggested;
+  ta2.style.cssText = 'flex:1;min-width:200px;min-height:80px;resize:vertical;font-size:12.5px;';
+  li.insertBefore(ta2, btn);
+
+  // Fresh Apply + Cancel buttons stacked in the same column width as before
+  const applyBtn = document.createElement('button');
+  applyBtn.className = 'btn primary ia-apply';
+  applyBtn.style.width = colWidth + 'px';
+  applyBtn.textContent = 'Apply';
 
   const cancelBtn = document.createElement('button');
   cancelBtn.className = 'btn ia-cancel';
+  cancelBtn.style.width = colWidth + 'px';
   cancelBtn.textContent = 'Cancel';
-  wrapper.appendChild(cancelBtn);
 
-  cancelBtn.onclick = () => {
-    wrapper.parentNode.insertBefore(btn, wrapper);
+  const wrapper = document.createElement('div');
+  wrapper.style.cssText = 'display:flex;flex-direction:column;gap:4px;flex-shrink:0;';
+  wrapper.appendChild(applyBtn);
+  wrapper.appendChild(cancelBtn);
+  li.insertBefore(wrapper, btn);
+
+  ta2.focus();
+
+  const teardown = () => {
+    ta2.remove();
     wrapper.remove();
-    btn.textContent = 'Apply as directive';
-    btn.onclick = () => openInlineApply(btn);
+    btn.style.display = '';
+    if (ptext) ptext.style.display = '';
     if (dismissBtn) dismissBtn.style.display = '';
   };
 
-  btn.onclick = async () => {
-    btn.disabled = true;
+  cancelBtn.onclick = teardown;
+
+  applyBtn.onclick = async () => {
+    applyBtn.disabled = true;
     cancelBtn.disabled = true;
     try {
       await api('/admin/console/insights/apply', {
@@ -719,7 +743,7 @@ function openInlineApply(btn) {
         body: JSON.stringify({
           reportId: btn.dataset.reportId,
           proposal: original,
-          text: suggested,
+          text: ta2.value.trim(),
           expires: null,
         }),
       });
@@ -731,7 +755,7 @@ function openInlineApply(btn) {
       loadDirectives();
     } catch (e) {
       status(e.message, 'err');
-      btn.disabled = false;
+      applyBtn.disabled = false;
       cancelBtn.disabled = false;
     }
   };
