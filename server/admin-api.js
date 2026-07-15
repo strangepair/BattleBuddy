@@ -43,7 +43,13 @@ function loadDesignLoopResult() {
 }
 function saveDesignLoopResult(data) {
   mkdirSync(ADMIN_DATA_ROOT, { recursive: true });
-  writeFileSync(DESIGN_LOOP_RESULT_PATH, JSON.stringify(data, null, 2));
+  const existing = loadDesignLoopResult() || {};
+  let history = existing.history || [];
+  // Completed runs (done or error) go into the history ledger; running state doesn't
+  if (data.status === 'done' || data.status === 'error') {
+    history = [{ ...data }, ...history.filter(h => h.startedAt !== data.startedAt)].slice(0, 10);
+  }
+  writeFileSync(DESIGN_LOOP_RESULT_PATH, JSON.stringify({ ...data, history }, null, 2));
 }
 
 // Every one of these must survive a prompt edit — buildSystemPrompt fills them
