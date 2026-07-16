@@ -66,6 +66,9 @@ export function loadDirectives() {
  * expiring "today" must not die at 7 PM Central. No expiry = always active. */
 export function isDirectiveActive(directive, timezone = 'America/Chicago') {
   if (!directive || directive.status === 'removed') return false;
+  // Only 'behavior' directives are injected into BB's prompt.
+  // 'prompt', 'code', and 'ui' directives are applied directly to their targets.
+  if (directive.target && directive.target !== 'behavior') return false;
   if (!directive.expires) return true;
   try {
     const today = new Intl.DateTimeFormat('en-CA', {

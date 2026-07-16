@@ -34,6 +34,7 @@ import {
 } from './contextAgent.js';
 import { runDesignLoop, AGENT_MD_VOLUME_PATH, readAgentMd } from './agentDesignLoop.js';
 import { runUXLoop, readUXDesign, writeUXDesign, loadUXLoopResult, saveUXLoopResult } from './agentUXLoop.js';
+import Anthropic from '@anthropic-ai/sdk';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const consoleHtmlPath = resolve(__dirname, 'admin-console.html');
@@ -91,9 +92,11 @@ function saveDirectives(list) {
   writeFileSync(DIRECTIVES_PATH, JSON.stringify(list, null, 2));
 }
 
+const VALID_TARGETS = ['behavior', 'prompt', 'code', 'ui'];
+
 /** Shared by POST /directives and POST /insights/apply. Throws with .status
  * on validation failure. */
-function addDirective(text, expires) {
+function addDirective(text, expires, target = 'behavior') {
   const trimmed = String(text || '').trim();
   if (!trimmed) throw Object.assign(new Error('Directive text is empty.'), { status: 400 });
   if (trimmed.length > MAX_DIRECTIVE_CHARS) {
@@ -102,15 +105,63 @@ function addDirective(text, expires) {
   if (expires && !/^\d{4}-\d{2}-\d{2}$/.test(expires)) {
     throw Object.assign(new Error('Expiry must be YYYY-MM-DD.'), { status: 400 });
   }
+  const resolvedTarget = VALID_TARGETS.includes(target) ? target : 'behavior';
   const directive = {
     id: `d-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
     text: trimmed,
     expires: expires || null,
     createdAt: new Date().toISOString(),
     status: 'staged',
+    target: resolvedTarget,
   };
   saveDirectives([...loadDirectives(), directive]);
   return directive;
+}
+
+const anthropic = new Anthropic();
+
+/** Apply a prompt-targeted directive by patching system.battlebuddy.md in-place. */
+async function applyDirectiveToPrompt(directive) {
+  const currentPrompt = readFileSync(SYSTEM_PROMPT_PATH, 'utf-8');
+  const response = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 2048,
+    system: `You are patching the BattleBuddy system prompt to incorporate a new behavioral directive.
+Output exactly ONE patch block:
+<<<FIND>>>
+[exact verbatim text from the current prompt — include at least 2 lines for context]
+<<<REPLACE>>>
+[the updated text with the directive naturally integrated]
+<<<END>>>
+
+Rules: output ONLY the patch block. FIND must appear verbatim. Choose the most relevant existing section.`,
+    messages: [{ role: 'user', content: `## Directive:\n${directive.text}\n\n## Current system prompt:\n${currentPrompt}` }],
+  });
+  const text = response.content[0].text;
+  const m = /<<<FIND>>>\n([\s\S]*?)\n<<<REPLACE>>>\n([\s\S]*?)\n<<<END>>>/.exec(text);
+  if (!m) throw Object.assign(new Error('Model returned no valid patch. Try rephrasing the directive.'), { status: 500 });
+  const [, find, replace] = m;
+  if (!currentPrompt.includes(find)) throw Object.assign(new Error('Patch anchor not found in system prompt — the directive may already be covered, or try rephrasing.'), { status: 500 });
+  persistPromptLive(currentPrompt.replace(find, replace));
+  return { linesChanged: Math.abs(replace.split('\n').length - find.split('\n').length) };
+}
+
+/** Analyze a code/UI directive and return a Claude Code implementation plan. */
+async function generateImplementationPlan(directive) {
+  const response = await anthropic.messages.create({
+    model: 'claude-haiku-4-5-20251001',
+    max_tokens: 1024,
+    system: `You analyze BattleBuddy directives that need code changes and produce implementation plans.
+The codebase is at /Users/strangepair/Claude/Projects/BattleBuddy/.
+Key paths: server/ (Node.js + Express), app/ (React Native + Expo), server/prompts/ (system prompts).
+Output JSON: { "files": ["path/from/repo/root", ...], "description": "2-3 sentence summary of the change", "claudeCodePrompt": "A ready-to-paste Claude Code prompt that fully describes the implementation task, referencing file paths." }`,
+    messages: [{ role: 'user', content: `Directive (${directive.target}): ${directive.text}` }],
+  });
+  try {
+    const m = /\{[\s\S]*\}/.exec(response.content[0].text);
+    if (m) return JSON.parse(m[0]);
+  } catch {}
+  return { files: [], description: directive.text, claudeCodePrompt: `Implement this BattleBuddy directive: ${directive.text}` };
 }
 
 // Insights apply/dismiss state lives in contextAgent.js (loadInsightsState &
@@ -416,9 +467,9 @@ export async function handleAdminConsole(req, res, { checkAdminSecret, CORS, sen
     }
 
     if (req.method === 'POST' && url === '/admin/console/directives') {
-      const { text, expires } = JSON.parse(await readBody(req));
-      const directive = addDirective(text, expires);
-      console.log(`[AdminConsole] Directive added: "${directive.text.slice(0, 60)}"${expires ? ` (expires ${expires})` : ''}`);
+      const { text, expires, target } = JSON.parse(await readBody(req));
+      const directive = addDirective(text, expires, target);
+      console.log(`[AdminConsole] Directive added (${directive.target}): "${directive.text.slice(0, 60)}"${expires ? ` (expires ${expires})` : ''}`);
       return json(res, CORS, 200, { ok: true, directive: { ...directive, active: isDirectiveActive(directive) } });
     }
 
@@ -525,6 +576,34 @@ export async function handleAdminConsole(req, res, { checkAdminSecret, CORS, sen
       saveDirectives(list.filter(x => x.id !== d.id));
       console.log(`[AdminConsole] Directive ${d.id} deleted`);
       return json(res, CORS, 200, { ok: true, softDeleted: false });
+    }
+
+    // Apply a prompt-targeted directive directly to system.battlebuddy.md
+    const applyPromptMatch = url.match(/^\/admin\/console\/directives\/([\w-]+)\/apply-prompt$/);
+    if (req.method === 'POST' && applyPromptMatch) {
+      const list = loadDirectives();
+      const idx = list.findIndex(d => d.id === applyPromptMatch[1]);
+      if (idx === -1) return json(res, CORS, 404, { error: 'Directive not found.' });
+      const d = list[idx];
+      if (d.target !== 'prompt') return json(res, CORS, 400, { error: 'Directive target is not "prompt".' });
+      const result = await applyDirectiveToPrompt(d);
+      list[idx] = { ...d, status: 'active', activatedAt: new Date().toISOString() };
+      saveDirectives(list);
+      console.log(`[AdminConsole] Directive ${d.id} applied to system prompt`);
+      return json(res, CORS, 200, { ok: true, ...result });
+    }
+
+    // Analyze a code/UI directive and return an implementation plan for Claude Code
+    const implementMatch = url.match(/^\/admin\/console\/directives\/([\w-]+)\/implement$/);
+    if (req.method === 'POST' && implementMatch) {
+      const list = loadDirectives();
+      const idx = list.findIndex(d => d.id === implementMatch[1]);
+      if (idx === -1) return json(res, CORS, 404, { error: 'Directive not found.' });
+      const d = list[idx];
+      if (d.target !== 'code' && d.target !== 'ui') return json(res, CORS, 400, { error: 'Target must be "code" or "ui".' });
+      const plan = await generateImplementationPlan(d);
+      console.log(`[AdminConsole] Implementation plan generated for directive ${d.id}`);
+      return json(res, CORS, 200, { ok: true, plan });
     }
 
     // ─── Design loop (runs in-process; no dependence on a dev machine) ─────

@@ -70,6 +70,22 @@
   .badge.live { color: var(--green); border-color: rgba(52,199,89,.4); }
   .badge.staged-badge { color: var(--accent); border-color: rgba(232,98,74,.4); }
   .badge.removed-badge { color: var(--dim); border-color: var(--border); opacity: .6; }
+  /* directive target badges */
+  .badge.tgt-behavior { color: var(--green); border-color: rgba(52,199,89,.35); }
+  .badge.tgt-prompt   { color: #4da6ff;      border-color: rgba(0,122,255,.35); }
+  .badge.tgt-code     { color: #ff9500;      border-color: rgba(255,149,0,.35); }
+  .badge.tgt-ui       { color: #bf5af2;      border-color: rgba(175,82,222,.35); }
+  /* target selector in the add-directive form */
+  .dir-target-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 4px 0; }
+  .dir-target-row span { font-size: 12px; color: var(--dim); }
+  .dir-target-btn { display: flex; align-items: center; gap: 4px; font-size: 12px; cursor: pointer; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--panel2); color: var(--dim); }
+  .dir-target-btn input { display: none; }
+  .dir-target-btn.sel { border-color: var(--accent); color: var(--text); }
+  /* implementation plan card */
+  .impl-plan { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin-top: 6px; font-size: 12.5px; line-height: 1.55; }
+  .impl-plan h5 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); margin-bottom: 4px; }
+  .impl-plan .prompt-box { font-family: var(--mono); font-size: 11.5px; background: var(--bg); border-radius: 4px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; margin-top: 6px; }
+  .impl-plan .copy-btn { margin-top: 6px; }
   .dir-filter { display:flex; align-items:center; gap:10px; padding:8px 14px; border-bottom:1px solid var(--border); flex-shrink:0; }
   .dir-filter #dir-summary { font-size:12px; color:var(--dim); }
   .dir-filter .btn.active-filter { color: var(--accent); border-color: rgba(232,98,74,.4); }
@@ -297,13 +313,20 @@
         <button class="btn" id="dir-hide-active" style="margin-left:auto">Hide active</button>
       </div>
       <div class="list-scroll" id="dir-list"></div>
-      <div class="add-form">
+      <div class=”add-form”>
         <h3>Add directive</h3>
-        <textarea id="dir-text" placeholder="Short behavioral instruction, e.g. “Lead with breathing exercises before anything else this week.”" style="min-height:60px; resize:vertical;"></textarea>
-        <div id="dir-count"></div>
-        <div class="frow">
-          <input type="date" id="dir-expires" title="Optional — directive auto-expires at the end of this day (Central time)">
-          <button class="btn primary" id="dir-add">Add directive</button>
+        <textarea id=”dir-text” placeholder=”Short instruction, e.g. &quot;Lead with breathing exercises before anything else this week.&quot;” style=”min-height:60px; resize:vertical;”></textarea>
+        <div id=”dir-count”></div>
+        <div class=”dir-target-row”>
+          <span>Target:</span>
+          <label class=”dir-target-btn sel” id=”tgt-behavior”><input type=”radio” name=”dir-target” value=”behavior” checked> BB behavior</label>
+          <label class=”dir-target-btn” id=”tgt-prompt”><input type=”radio” name=”dir-target” value=”prompt”> System prompt</label>
+          <label class=”dir-target-btn” id=”tgt-code”><input type=”radio” name=”dir-target” value=”code”> Code</label>
+          <label class=”dir-target-btn” id=”tgt-ui”><input type=”radio” name=”dir-target” value=”ui”> UI</label>
+        </div>
+        <div class=”frow”>
+          <input type=”date” id=”dir-expires” title=”Optional — directive auto-expires at the end of this day (Central time)”>
+          <button class=”btn primary” id=”dir-add”>Add directive</button>
         </div>
       </div>
     </div>
@@ -730,31 +753,46 @@ async function loadDirectives() {
     }
 
     const dateStr = iso => iso ? new Date(iso).toLocaleDateString() : '—';
+    const tgtLabel = { behavior: 'behavior', prompt: 'prompt', code: 'code', ui: 'ui' };
     list.innerHTML = visible.map(d => {
       const isStaged  = d.status === 'staged';
       const isActive  = d.status === 'active';
       const isRemoved = d.status === 'removed';
-      const badgeCls  = isStaged ? 'staged-badge' : isActive ? 'live' : 'removed-badge';
-      const badgeTxt  = isStaged ? 'staged' : isActive ? 'active' : 'removed';
+      const tgt       = d.target || 'behavior';
+      const statusBadgeCls = isStaged ? 'staged-badge' : isActive ? 'live' : 'removed-badge';
+      const statusBadgeTxt = isStaged ? 'staged' : isActive ? 'active' : 'removed';
       const cardCls   = isRemoved ? 'card expired' : 'card';
 
-      const actionBtns = isStaged
-        ? `<button class="btn dir-done" style="font-size:11px;padding:2px 8px" title="Mark as implemented — hides from default view">Mark done</button>
-           <button class="del" title="Delete">✕</button>`
-        : isActive
-        ? `<button class="del" title="Remove directive from BB">✕</button>`
-        : `<button class="btn dir-reapply" style="font-size:11px;padding:2px 8px" title="Re-apply this directive">Re-apply</button>
-           <button class="del" title="Delete permanently">✕</button>`;
+      // Primary action button depends on target + status
+      let primaryBtn = '';
+      if (isStaged) {
+        if (tgt === 'prompt') {
+          primaryBtn = `<button class="btn dir-apply-prompt" style="font-size:11px;padding:2px 8px" title="Apply this directly to the system prompt">Apply to prompt</button>`;
+        } else if (tgt === 'code' || tgt === 'ui') {
+          primaryBtn = `<button class="btn dir-implement" style="font-size:11px;padding:2px 8px" title="Generate implementation plan">Implement</button>`;
+        } else {
+          primaryBtn = `<button class="btn dir-done" style="font-size:11px;padding:2px 8px" title="Mark as implemented">Mark done</button>`;
+        }
+      } else if (isRemoved) {
+        primaryBtn = `<button class="btn dir-reapply" style="font-size:11px;padding:2px 8px" title="Re-apply this directive">Re-apply</button>`;
+      }
+
+      const delTitle = isActive
+        ? (tgt === 'behavior' ? 'Remove from BB injection' : 'Remove directive')
+        : isRemoved ? 'Delete permanently' : 'Delete';
+      const actionBtns = primaryBtn + `<button class="del" title="${delTitle}">✕</button>`;
 
       const sub = isRemoved
         ? `removed ${dateStr(d.removedAt)} · originally added ${dateStr(d.createdAt)}`
         : isActive
-        ? `implemented ${dateStr(d.activatedAt)} · added ${dateStr(d.createdAt)}${d.expires ? ' · expires ' + d.expires : ''}`
+        ? `applied ${dateStr(d.activatedAt)} · added ${dateStr(d.createdAt)}${d.expires ? ' · expires ' + d.expires : ''}`
         : `added ${dateStr(d.createdAt)}${d.expires ? ' · through ' + d.expires : ''}`;
 
-      return `<div class="${cardCls}" data-id="${escapeHtml(d.id)}" data-status="${d.status}">
+      return `<div class="${cardCls}" data-id="${escapeHtml(d.id)}" data-status="${d.status}" data-target="${escapeHtml(tgt)}">
         <div class="row1">
-          <span class="badge ${badgeCls}">${badgeTxt}</span>
+          <span class="badge ${statusBadgeCls}">${statusBadgeTxt}</span>
+          <span class="badge tgt-${escapeHtml(tgt)}" style="margin-left:4px">${escapeHtml(tgtLabel[tgt] || tgt)}</span>
+          <span style="flex:1"></span>
           ${actionBtns}
         </div>
         <div class="dtext">${escapeHtml(d.text)}</div>
@@ -765,17 +803,20 @@ async function loadDirectives() {
     list.querySelectorAll('.card').forEach(card => {
       const id = card.dataset.id;
       const cardStatus = card.dataset.status;
+      const cardTarget = card.dataset.target;
 
       card.querySelector('.del')?.addEventListener('click', async () => {
         const msg = cardStatus === 'active'
-          ? 'Remove this directive from BB? It will stop being injected and be kept as a tombstone you can re-apply.'
+          ? (cardTarget === 'behavior'
+              ? 'Remove this directive from BB? It will stop being injected and be kept as a tombstone you can re-apply.'
+              : 'Remove this directive? It will be kept as a tombstone you can re-apply.')
           : cardStatus === 'removed'
           ? 'Permanently delete this removed directive?'
           : 'Delete this staged directive?';
         if (!confirm(msg)) return;
         try {
           const r = await api('/admin/console/directives/' + id, { method: 'DELETE' });
-          status(r.softDeleted ? 'Directive removed from BB.' : 'Directive deleted.', 'ok');
+          status(r.softDeleted ? 'Directive removed.' : 'Directive deleted.', 'ok');
           loadDirectives();
         } catch (e) { status(e.message, 'err'); }
       });
@@ -794,6 +835,36 @@ async function loadDirectives() {
           status('Directive re-applied.', 'ok');
           loadDirectives();
         } catch (e) { status(e.message, 'err'); }
+      });
+
+      card.querySelector('.dir-apply-prompt')?.addEventListener('click', async () => {
+        const btn = card.querySelector('.dir-apply-prompt');
+        btn.disabled = true; btn.textContent = 'Applying…';
+        try {
+          await api('/admin/console/directives/' + id + '/apply-prompt', { method: 'POST', body: '{}' });
+          status('Applied to system prompt — live on the next turn.', 'ok');
+          loadDirectives();
+        } catch (e) { status(e.message, 'err'); btn.disabled = false; btn.textContent = 'Apply to prompt'; }
+      });
+
+      card.querySelector('.dir-implement')?.addEventListener('click', async () => {
+        const btn = card.querySelector('.dir-implement');
+        btn.disabled = true; btn.textContent = 'Analyzing…';
+        try {
+          const { plan } = await api('/admin/console/directives/' + id + '/implement', { method: 'POST', body: '{}' });
+          btn.disabled = false; btn.textContent = 'Implement';
+          // Show plan inline below the card
+          let planEl = card.querySelector('.impl-plan');
+          if (!planEl) { planEl = document.createElement('div'); planEl.className = 'impl-plan'; card.appendChild(planEl); }
+          planEl.innerHTML = `<h5>Implementation plan</h5>
+            <div>${escapeHtml(plan.description || '')}</div>
+            ${plan.files?.length ? `<div style="margin-top:4px;font-size:11px;color:var(--dim)">${plan.files.map(f => escapeHtml(f)).join(' · ')}</div>` : ''}
+            <div class="prompt-box">${escapeHtml(plan.claudeCodePrompt || '')}</div>
+            <button class="btn copy-btn" style="font-size:11px;padding:2px 8px">Copy prompt</button>`;
+          planEl.querySelector('.copy-btn').onclick = () => {
+            navigator.clipboard.writeText(plan.claudeCodePrompt || '').then(() => status('Copied to clipboard.', 'ok'));
+          };
+        } catch (e) { status(e.message, 'err'); btn.disabled = false; btn.textContent = 'Implement'; }
       });
     });
   } catch (e) { status('Failed to load directives: ' + e.message, 'err'); }
@@ -1110,10 +1181,24 @@ $('dir-text').addEventListener('input', () => {
   el.textContent = n ? `${n} / ${DIR_MAX}` : '';
   el.classList.toggle('over', n > DIR_MAX);
 });
+// Target radio button visual toggle
+document.querySelectorAll('input[name="dir-target"]').forEach(radio => {
+  radio.addEventListener('change', () => {
+    document.querySelectorAll('.dir-target-btn').forEach(lbl => lbl.classList.remove('sel'));
+    radio.closest('.dir-target-btn')?.classList.add('sel');
+  });
+});
+
 $('dir-add').onclick = async () => {
+  const target = document.querySelector('input[name="dir-target"]:checked')?.value || 'behavior';
   try {
-    await api('/admin/console/directives', { method: 'POST', body: JSON.stringify({ text: $('dir-text').value, expires: $('dir-expires').value || null }) });
-    status('Directive added — live on the next turn.', 'ok');
+    await api('/admin/console/directives', { method: 'POST', body: JSON.stringify({ text: $('dir-text').value, expires: $('dir-expires').value || null, target }) });
+    const liveMsg = target === 'behavior'
+      ? 'Directive added — injected into BB on the next turn.'
+      : target === 'prompt'
+      ? 'Directive added — click "Apply to prompt" to patch the system prompt.'
+      : `Directive added — click "Implement" to generate a ${target} implementation plan.`;
+    status(liveMsg, 'ok');
     $('dir-text').value = ''; $('dir-expires').value = '';
     $('dir-text').dispatchEvent(new Event('input'));
     loadDirectives();
