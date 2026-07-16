@@ -440,6 +440,33 @@ function showTab(name) {
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
 $('logo').onclick = () => showTab('overview');
 
+// ─── Swipe navigation ────────────────────────────────────────────────────────
+(function () {
+  const TABS = ['overview', 'prompt', 'resources', 'directives', 'insights', 'ux'];
+  function currentTab() {
+    const on = document.querySelector('nav button.on');
+    return on ? on.dataset.tab : TABS[0];
+  }
+  function stepTab(dir) {
+    const idx = TABS.indexOf(currentTab());
+    const next = TABS[idx + dir];
+    if (next) showTab(next);
+  }
+  let tx0 = 0, ty0 = 0;
+  const main = document.querySelector('main');
+  main.addEventListener('touchstart', e => {
+    tx0 = e.touches[0].clientX;
+    ty0 = e.touches[0].clientY;
+  }, { passive: true });
+  main.addEventListener('touchend', e => {
+    const dx = e.changedTouches[0].clientX - tx0;
+    const dy = e.changedTouches[0].clientY - ty0;
+    // Only fire if clearly horizontal (dx > dy) and long enough (> 50px)
+    if (Math.abs(dx) < 50 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+    stepTab(dx < 0 ? 1 : -1);
+  }, { passive: true });
+})();
+
 // ─── Overview dashboard ──────────────────────────────────────────────────────
 function relTime(ms) {
   if (!ms) return 'never';
