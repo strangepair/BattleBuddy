@@ -631,7 +631,7 @@ async function loadResources() {
   try {
     const { resources } = await api('/admin/console/resources');
     const list = $('res-list');
-    if (!resources.length) { list.innerHTML = '<div class="empty">No resources yet. Everything added here is injected into BB’s prompt under a “## Resources” section.</div>'; return; }
+    if (!resources.length) { list.innerHTML = '<div class="empty">No resources yet. Everything added here is injected into BB\'s prompt under a “## Resources” section.</div>'; return; }
     list.innerHTML = resources.map(r => `
       <div class="card" data-name="${encodeURIComponent(r.name)}">
         <div class="row1">
@@ -694,26 +694,26 @@ $('res-add').onclick = async () => {
 // ─── Directives tab ──────────────────────────────────────────────────────────
 let dirHideActive = false;
 
-$(‘dir-hide-active’).onclick = () => {
+$('dir-hide-active').onclick = () => {
   dirHideActive = !dirHideActive;
-  $(‘dir-hide-active’).classList.toggle(‘active-filter’, dirHideActive);
-  $(‘dir-hide-active’).textContent = dirHideActive ? ‘Show active’ : ‘Hide active’;
+  $('dir-hide-active').classList.toggle('active-filter', dirHideActive);
+  $('dir-hide-active').textContent = dirHideActive ? 'Show active' : 'Hide active';
   loadDirectives();
 };
 
 async function loadDirectives() {
   try {
-    const { directives } = await api(‘/admin/console/directives’);
-    const list = $(‘dir-list’);
+    const { directives } = await api('/admin/console/directives');
+    const list = $('dir-list');
 
-    // Normalise: pre-status directives default to ‘staged’ if they’re not expired
-    const all = directives.map(d => ({ ...d, status: d.status || (d.active ? ‘staged’ : ‘expired’) }));
-    const staged  = all.filter(d => d.status === ‘staged’);
-    const active  = all.filter(d => d.status === ‘active’);
-    const removed = all.filter(d => d.status === ‘removed’);
+    // Normalise: pre-status directives default to 'staged' if they're not expired
+    const all = directives.map(d => ({ ...d, status: d.status || (d.active ? 'staged' : 'expired') }));
+    const staged  = all.filter(d => d.status === 'staged');
+    const active  = all.filter(d => d.status === 'active');
+    const removed = all.filter(d => d.status === 'removed');
 
     const stagedCount = staged.length, activeCount = active.length, removedCount = removed.length;
-    $(‘dir-summary’).textContent =
+    $('dir-summary').textContent =
       `${stagedCount} staged · ${activeCount} active · ${removedCount} removed`;
 
     const visible = dirHideActive
@@ -721,22 +721,22 @@ async function loadDirectives() {
       : [...staged, ...active, ...removed];
 
     if (!visible.length && !all.length) {
-      list.innerHTML = ‘<div class="empty">No directives. Short instructions added here are injected at the very top of BB\’s prompt and override conflicting guidance.</div>’;
+      list.innerHTML = '<div class="empty">No directives. Short instructions added here are injected at the very top of BB\'s prompt and override conflicting guidance.</div>';
       return;
     }
     if (!visible.length) {
-      list.innerHTML = ‘<div class="empty">All directives are active — toggle "Show active" to see them.</div>’;
+      list.innerHTML = '<div class="empty">All directives are active — toggle "Show active" to see them.</div>';
       return;
     }
 
-    const dateStr = iso => iso ? new Date(iso).toLocaleDateString() : ‘—‘;
+    const dateStr = iso => iso ? new Date(iso).toLocaleDateString() : '—';
     list.innerHTML = visible.map(d => {
-      const isStaged  = d.status === ‘staged’;
-      const isActive  = d.status === ‘active’;
-      const isRemoved = d.status === ‘removed’;
-      const badgeCls  = isStaged ? ‘staged-badge’ : isActive ? ‘live’ : ‘removed-badge’;
-      const badgeTxt  = isStaged ? ‘staged’ : isActive ? ‘active’ : ‘removed’;
-      const cardCls   = isRemoved ? ‘card expired’ : ‘card’;
+      const isStaged  = d.status === 'staged';
+      const isActive  = d.status === 'active';
+      const isRemoved = d.status === 'removed';
+      const badgeCls  = isStaged ? 'staged-badge' : isActive ? 'live' : 'removed-badge';
+      const badgeTxt  = isStaged ? 'staged' : isActive ? 'active' : 'removed';
+      const cardCls   = isRemoved ? 'card expired' : 'card';
 
       const actionBtns = isStaged
         ? `<button class="btn dir-done" style="font-size:11px;padding:2px 8px" title="Mark as implemented — hides from default view">Mark done</button>
@@ -749,8 +749,8 @@ async function loadDirectives() {
       const sub = isRemoved
         ? `removed ${dateStr(d.removedAt)} · originally added ${dateStr(d.createdAt)}`
         : isActive
-        ? `implemented ${dateStr(d.activatedAt)} · added ${dateStr(d.createdAt)}${d.expires ? ‘ · expires ‘ + d.expires : ‘’}`
-        : `added ${dateStr(d.createdAt)}${d.expires ? ‘ · through ‘ + d.expires : ‘’}`;
+        ? `implemented ${dateStr(d.activatedAt)} · added ${dateStr(d.createdAt)}${d.expires ? ' · expires ' + d.expires : ''}`
+        : `added ${dateStr(d.createdAt)}${d.expires ? ' · through ' + d.expires : ''}`;
 
       return `<div class="${cardCls}" data-id="${escapeHtml(d.id)}" data-status="${d.status}">
         <div class="row1">
@@ -760,43 +760,43 @@ async function loadDirectives() {
         <div class="dtext">${escapeHtml(d.text)}</div>
         <div class="sub">${sub}</div>
       </div>`;
-    }).join(‘’);
+    }).join('');
 
-    list.querySelectorAll(‘.card’).forEach(card => {
+    list.querySelectorAll('.card').forEach(card => {
       const id = card.dataset.id;
       const cardStatus = card.dataset.status;
 
-      card.querySelector(‘.del’)?.addEventListener(‘click’, async () => {
-        const msg = cardStatus === ‘active’
-          ? ‘Remove this directive from BB? It will stop being injected and be kept as a tombstone you can re-apply.’
-          : cardStatus === ‘removed’
-          ? ‘Permanently delete this removed directive?’
-          : ‘Delete this staged directive?’;
+      card.querySelector('.del')?.addEventListener('click', async () => {
+        const msg = cardStatus === 'active'
+          ? 'Remove this directive from BB? It will stop being injected and be kept as a tombstone you can re-apply.'
+          : cardStatus === 'removed'
+          ? 'Permanently delete this removed directive?'
+          : 'Delete this staged directive?';
         if (!confirm(msg)) return;
         try {
-          const r = await api(‘/admin/console/directives/’ + id, { method: ‘DELETE’ });
-          status(r.softDeleted ? ‘Directive removed from BB.’ : ‘Directive deleted.’, ‘ok’);
+          const r = await api('/admin/console/directives/' + id, { method: 'DELETE' });
+          status(r.softDeleted ? 'Directive removed from BB.' : 'Directive deleted.', 'ok');
           loadDirectives();
-        } catch (e) { status(e.message, ‘err’); }
+        } catch (e) { status(e.message, 'err'); }
       });
 
-      card.querySelector(‘.dir-done’)?.addEventListener(‘click’, async () => {
+      card.querySelector('.dir-done')?.addEventListener('click', async () => {
         try {
-          await api(‘/admin/console/directives/’ + id, { method: ‘PATCH’, body: JSON.stringify({ status: ‘active’ }) });
-          status(‘Marked as implemented.’, ‘ok’);
+          await api('/admin/console/directives/' + id, { method: 'PATCH', body: JSON.stringify({ status: 'active' }) });
+          status('Marked as implemented.', 'ok');
           loadDirectives();
-        } catch (e) { status(e.message, ‘err’); }
+        } catch (e) { status(e.message, 'err'); }
       });
 
-      card.querySelector(‘.dir-reapply’)?.addEventListener(‘click’, async () => {
+      card.querySelector('.dir-reapply')?.addEventListener('click', async () => {
         try {
-          await api(‘/admin/console/directives/’ + id, { method: ‘PATCH’, body: JSON.stringify({ status: ‘staged’ }) });
-          status(‘Directive re-applied.’, ‘ok’);
+          await api('/admin/console/directives/' + id, { method: 'PATCH', body: JSON.stringify({ status: 'staged' }) });
+          status('Directive re-applied.', 'ok');
           loadDirectives();
-        } catch (e) { status(e.message, ‘err’); }
+        } catch (e) { status(e.message, 'err'); }
       });
     });
-  } catch (e) { status(‘Failed to load directives: ‘ + e.message, ‘err’); }
+  } catch (e) { status('Failed to load directives: ' + e.message, 'err'); }
 }
 // ─── Insights tab ────────────────────────────────────────────────────────────
 function repSection(title, items, cls = '', reportId = '') {
