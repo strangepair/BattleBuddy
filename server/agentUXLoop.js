@@ -10,6 +10,7 @@ import { readFileSync, writeFileSync, readdirSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
+import WebSocket from 'ws';
 import Anthropic from '@anthropic-ai/sdk';
 import { ADMIN_DATA_ROOT, buildInsightsFeedback } from './contextAgent.js';
 
@@ -89,7 +90,7 @@ function loadRecentSessions(userId, { cutoffMs, limit = 10 } = {}) {
 
 async function buildUXDigest() {
   const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY)
-    ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY)
+    ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY, { realtime: { transport: WebSocket } })
     : null;
 
   const digest = {
