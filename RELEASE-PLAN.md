@@ -28,10 +28,12 @@ Prior art reviewed: openclaw's `memory-core` (promotion scoring, commitments, ac
   temporal deltas and the recall tool the plan called for were already in the code
   (`buildSessionContext`, `buildLastEventAwareness`, `recall_conversation`) — Phase 3 was
   mostly grounding and wiring, not new machinery.
-- **Phase 4 — not started.**
+- **Phase 4 — done, OFF by default.** Inferred commitments (`011` + `commitments.js`), gated
+  behind `COMMITMENTS_ENABLED`. Delivered in-conversation via the voice greeting, not push.
+  Nothing runs until the flag is set and real candidates are reviewed.
 
-30 tests green (`npm test` in `server/`). Nothing is committed, and no migration has been
-applied to any environment.
+43 tests green (`npm test` in `server/`). Phases 0–3 are committed (`13f5a20`). Phase 4 is
+staged but uncommitted. Migrations 009→010→011 are written and unapplied, and order-dependent.
 
 **Effective promotion bar, measured:** ~5 recalls across ~a week. Because recall evidence
 only starts accruing once `010` is applied, the promoted tier will be empty for roughly a

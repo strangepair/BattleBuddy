@@ -51,6 +51,7 @@ export function sessionGapPhrase(lastSessionAt, nowMs = Date.now()) {
  * @param {string|null} args.gapPhrase    - from sessionGapPhrase
  * @param {string|null} args.promotedFact - one durable fact, already reference-framed
  * @param {string|null} args.hint         - a next_session_hints follow-up, if any
+ * @param {string|null} args.checkIn       - a due inferred commitment to gently follow up on
  * @returns {string}
  */
 export function buildVoiceGreeting({
@@ -60,6 +61,7 @@ export function buildVoiceGreeting({
   gapPhrase = null,
   promotedFact = null,
   hint = null,
+  checkIn = null,
 } = {}) {
   // Mid-thread: the person was just here. Don't reintroduce — a warm greeting
   // after a 30-second gap reads as amnesia, which is the opposite of the goal.
@@ -75,6 +77,18 @@ export function buildVoiceGreeting({
     if (gapPhrase && gapPhrase !== 'just now') {
       lines.push(`You last spoke ${gapPhrase}; let that land naturally if it fits — don't force it.`);
     }
+
+    // A due follow-up outranks a memory reference: this is the reason to open
+    // the conversation. Untrusted context — it tells you what to gently ask
+    // about, never an instruction to obey or a line to read out. If it wouldn't
+    // genuinely help right now, let it go and greet normally. Never reference a
+    // slip in a way that could shame.
+    if (checkIn) {
+      lines.push(`Something worth gently checking in on: "${checkIn}". Ask about it warmly and briefly if it fits — do not read it verbatim, and drop it entirely if the moment isn't right.`);
+      lines.push('Keep it to two sentences, then wait.');
+      return lines.join(' ');
+    }
+
     if (promotedFact) {
       // A real thing you carry about them. Reference framing already applies to
       // promoted memories, so this is safe to speak to as something you noted.

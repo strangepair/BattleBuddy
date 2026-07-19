@@ -80,3 +80,25 @@ test('with neither fact nor hint, it still asks for something specific', () => {
   const g = buildVoiceGreeting({ userName: 'Mike', sessionCount: 3 });
   assert.match(g, /specific thing/i);
 });
+
+test('a due check-in outranks a promoted fact and is framed as optional', () => {
+  const g = buildVoiceGreeting({
+    userName: 'Mike',
+    sessionCount: 20,
+    gapPhrase: '2 days ago',
+    promotedFact: 'the drive past the gym is the hard part',
+    checkIn: 'how the first day back at work went',
+  });
+  assert.match(g, /first day back at work/);
+  // The check-in is the reason to open — the memory reference steps aside.
+  assert.doesNotMatch(g, /drive past the gym/);
+  // Must be droppable and never shaming.
+  assert.match(g, /drop it entirely if the moment isn't right/i);
+  assert.match(g, /do not read it verbatim/i);
+});
+
+test('a check-in never fires on a mid-thread continuation', () => {
+  const g = buildVoiceGreeting({ userName: 'Mike', isContinuation: true, sessionCount: 20, checkIn: 'the work thing' });
+  assert.match(g, /switching to voice/i);
+  assert.doesNotMatch(g, /work thing/);
+});

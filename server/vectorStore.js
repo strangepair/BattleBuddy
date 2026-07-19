@@ -276,6 +276,101 @@ export async function markPromoted(ids) {
   }
 }
 
+// ─── Commitments (Phase 4, gated behind COMMITMENTS_ENABLED) ────────────────
+
+/**
+ * Insert validated commitments. Relies on the partial unique index from
+ * migration 011 to drop duplicates of an already-open follow-up — a conflict is
+ * "already queued," not an error.
+ */
+export async function insertCommitments(userId, commitments, sourceSession = null) {
+  init();
+  if (!supabase || !commitments?.length) return 0;
+  const canonicalUserId = resolveUserId(userId);
+
+  const rows = commitments.map(c => ({
+    user_id: canonicalUserId,
+    kind: c.kind,
+    summary: c.summary,
+    dedupe_key: c.dedupe_key,
+    confidence: c.confidence,
+    due_after: c.due_after,
+    source_session: sourceSession,
+  }));
+
+  try {
+    // onConflict on the open-key index → ignore duplicates rather than stack them.
+    const { error } = await supabase
+      .from('user_commitments')
+      .upsert(rows, { onConflict: 'user_id,dedupe_key', ignoreDuplicates: true });
+    if (error) {
+      if (error.message.includes('user_commitments')) {
+        console.log('[Commitments] table absent (migration 011 not applied) — skipping');
+        return 0;
+      }
+      console.error('[Commitments] Insert failed:', error.message);
+      return 0;
+    }
+    return rows.length;
+  } catch (err) {
+    console.error('[Commitments] Insert failed:', err.message);
+    return 0;
+  }
+}
+
+/** This user's open commitment dedupe keys, for pre-insert dedup. */
+export async function getOpenCommitmentKeys(userId) {
+  init();
+  if (!supabase) return new Set();
+  const canonicalUserId = resolveUserId(userId);
+  try {
+    const { data, error } = await supabase
+      .from('user_commitments')
+      .select('dedupe_key')
+      .eq('user_id', canonicalUserId)
+      .eq('status', 'pending');
+    if (error) return new Set();
+    return new Set((data || []).map(r => r.dedupe_key));
+  } catch {
+    return new Set();
+  }
+}
+
+/** The oldest due, pending commitment for a user, or null. */
+export async function getDueCommitment(userId, nowIso) {
+  init();
+  if (!supabase) return null;
+  const canonicalUserId = resolveUserId(userId);
+  try {
+    const { data, error } = await supabase
+      .from('user_commitments')
+      .select('id, kind, summary, due_after, status')
+      .eq('user_id', canonicalUserId)
+      .eq('status', 'pending')
+      .lte('due_after', nowIso || new Date().toISOString())
+      .order('due_after', { ascending: true })
+      .limit(1);
+    if (error) return null;
+    return (data && data[0]) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Mark a commitment delivered so it can't fire twice. */
+export async function markCommitmentDelivered(id) {
+  init();
+  if (!supabase || !id) return;
+  try {
+    await supabase
+      .from('user_commitments')
+      .update({ status: 'delivered', delivered_at: new Date().toISOString() })
+      .eq('id', id);
+  } catch (err) {
+    console.error('[Commitments] Mark-delivered failed:', err.message);
+  }
+}
+
 /**
  * Check if the vector store is configured and ready.
  */

@@ -22,7 +22,20 @@ import { runDesignLoop } from './agentDesignLoop.js';
 import { embedAndStore, retrieveRelevant, getPromotedMemories, recordRecalls, isConfigured as isVectorConfigured } from './vectorStore.js';
 import { runPromotionSweep } from './promotionJob.js';
 import { buildVoiceGreeting, sessionGapPhrase } from './greeting.js';
+import {
+  insertCommitments, getOpenCommitmentKeys, getDueCommitment, markCommitmentDelivered,
+} from './vectorStore.js';
+import {
+  validateCommitmentCandidates, formatCommitmentContext,
+  COMMITMENT_EXTRACTION_PROMPT,
+} from './commitments.js';
+
+// Phase 4 is off unless explicitly enabled. Nothing infers or delivers a
+// commitment until Mike turns this on after reviewing real candidates — same
+// propose-then-approve posture as the design loop. See commitments.js.
+const COMMITMENTS_ENABLED = process.env.COMMITMENTS_ENABLED === 'true';
 import { toCachedSystemBlocks } from './promptCache.js';
+import { jsonrepair } from 'jsonrepair';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -258,6 +271,52 @@ async function fetchPromotedMemories(userId, timeoutMs = 800) {
     return memories.map(m => `- [${m.type}] ${m.content}`).join('\n');
   } catch {
     return null;
+  }
+}
+
+/**
+ * Infer forward-looking follow-ups from a finished session and queue them.
+ *
+ * Off unless COMMITMENTS_ENABLED. Runs on session end only, in the background —
+ * a separate hidden Sonnet pass, not the reply path. Everything risky is
+ * delegated to the pure gate in commitments.js: two-tier confidence, dedup
+ * against open commitments, a per-session cap, and a due time clamped so nothing
+ * can fire the same session.
+ */
+async function maybeInferCommitments(rawUserId, messages, timezone) {
+  if (!COMMITMENTS_ENABLED || !isVectorConfigured()) return;
+  if (!Array.isArray(messages) || messages.length < 4) return;
+
+  const userId = resolveUserId(rawUserId);
+  try {
+    const transcript = messages
+      .slice(-30)
+      .map(m => `${m.role === 'user' ? 'User' : 'BB'}: ${(m.content || '').slice(0, 500)}`)
+      .join('\n');
+
+    const response = await client.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 512,
+      system: COMMITMENT_EXTRACTION_PROMPT,
+      messages: [{ role: 'user', content: transcript }],
+    });
+
+    const text = response.content[0]?.text || '{}';
+    let parsed;
+    try { parsed = JSON.parse(text); }
+    catch {
+      try { parsed = JSON.parse(jsonrepair(text)); }
+      catch { const m = text.match(/\{[\s\S]*\}/); parsed = m ? JSON.parse(jsonrepair(m[0])) : {}; }
+    }
+
+    const existingKeys = await getOpenCommitmentKeys(userId);
+    const valid = validateCommitmentCandidates(parsed?.candidates, { existingKeys });
+    if (!valid.length) return;
+
+    const n = await insertCommitments(userId, valid);
+    if (n > 0) console.log(`[Commitments] Queued ${n} for ${userId}: ${valid.map(c => c.dedupe_key).join(', ')}`);
+  } catch (e) {
+    console.log(`[Commitments] Inference failed for ${userId}: ${e.message}`);
   }
 }
 
@@ -1270,6 +1329,24 @@ const server = createServer(async (req, res) => {
         : null;
       const hints = agentProfile?.next_session_hints || [];
 
+      // A due inferred commitment (Phase 4, off unless COMMITMENTS_ENABLED)
+      // becomes the reason to open the conversation — delivered in-session, not
+      // as a push, so BB phrases it warmly and it never lands on a lock screen.
+      // Only on a fresh greeting, never mid-thread. Marked delivered once it's
+      // handed to the agent, so it can't fire twice.
+      let checkIn = null;
+      const isFreshGreeting = !(context === 'switched_from_text' || priorMessages);
+      if (COMMITMENTS_ENABLED && isFreshGreeting) {
+        try {
+          const due = await getDueCommitment(effectiveUserId);
+          if (due) {
+            checkIn = due.summary;
+            markCommitmentDelivered(due.id).catch(() => {});
+            console.log(`[Commitments] Delivering to ${effectiveUserId}: ${due.kind}`);
+          }
+        } catch {}
+      }
+
       const greeting = buildVoiceGreeting({
         userName,
         isContinuation: context === 'switched_from_text' || !!priorMessages,
@@ -1277,6 +1354,7 @@ const server = createServer(async (req, res) => {
         gapPhrase: sessionGapPhrase(agentProfile?.last_session_at),
         promotedFact,
         hint: hints.length > 0 ? hints[0] : null,
+        checkIn,
       });
 
       // Dispatch the agent with the prompt and greeting baked in
@@ -1823,6 +1901,13 @@ Return ONLY the JSON object, no markdown, no explanation.`;
       // this must survive even if Sonnet analysis below fails.
       try { saveRawTranscript(userId || 'default', sessionId, messages, isSessionEnd, timezone || 'America/Chicago'); }
       catch (e) { console.error('Save raw transcript error:', e.message); }
+
+      // Infer follow-up commitments from a finished session (no-op unless
+      // COMMITMENTS_ENABLED). Independent of the analysis below and its own
+      // background pass, so a failure in either can't affect the other.
+      if (isSessionEnd) {
+        maybeInferCommitments(userId || 'default', messages, timezone || 'America/Chicago').catch(() => {});
+      }
 
       // Run async — respond immediately
       analyzeAndUpdate(userId || 'default', messages, isSessionEnd, timezone || 'America/Chicago')
