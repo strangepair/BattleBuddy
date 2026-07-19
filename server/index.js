@@ -19,7 +19,10 @@ import { sendPush, isQuietHours, pickNudgeMessage } from './notifications.js';
 import { analyzeAndUpdate, buildProfileSummary, buildLifeArchitectureSummary, buildCurrentGoal, computeUsageStats, lookupProfileField, loadProfile, seedProfile, mergeProfiles, resolveUserId, saveRawTranscript, appendTranscriptMessages, replaceProfile, persistProfile, findActiveRiskWindow, computeJourneyPhase, buildAdminInjections, buildInsightsFeedback } from './contextAgent.js';
 import { handleAdminConsole } from './admin-api.js';
 import { runDesignLoop } from './agentDesignLoop.js';
-import { embedAndStore, retrieveRelevant, isConfigured as isVectorConfigured } from './vectorStore.js';
+import { embedAndStore, retrieveRelevant, getPromotedMemories, recordRecalls, isConfigured as isVectorConfigured } from './vectorStore.js';
+import { runPromotionSweep } from './promotionJob.js';
+import { buildVoiceGreeting, sessionGapPhrase } from './greeting.js';
+import { toCachedSystemBlocks } from './promptCache.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -138,17 +141,11 @@ function buildSessionContext(profile) {
 
   const lastAt = new Date(profile.last_session_at).getTime();
   const now = Date.now();
-  const gapMs = now - lastAt;
-  const gapMinutes = Math.floor(gapMs / 60000);
-  const gapHours = Math.floor(gapMinutes / 60);
-  const gapDays = Math.floor(gapHours / 24);
+  const gapMinutes = Math.floor((now - lastAt) / 60000);
+  const gapDays = Math.floor(gapMinutes / 1440);
 
-  let gapStr;
-  if (gapMinutes < 5) gapStr = 'just now';
-  else if (gapMinutes < 60) gapStr = `${gapMinutes} minutes ago`;
-  else if (gapHours < 24) gapStr = `${gapHours} hours ago`;
-  else if (gapDays === 1) gapStr = 'yesterday';
-  else gapStr = `${gapDays} days ago`;
+  // Shared with the voice greeting so the two phrasings never drift.
+  const gapStr = sessionGapPhrase(lastAt, now);
 
   // Format last session time
   let lastTimeStr = '';
@@ -169,7 +166,28 @@ function buildSessionContext(profile) {
   return context;
 }
 
-function buildSystemPrompt(profile, triggerContext, recentHistory, timezone, lifeArchitecture, sessionContext, currentGoal, relevantMemories, sessionMemory) {
+/**
+ * Assemble the system prompt.
+ *
+ * Named fields rather than positional arguments: there are ten of them now,
+ * several optional, and the voice path deliberately omits some. Positionally
+ * that call reads `(…, currentGoal, undefined, undefined, promoted)` — one
+ * misplaced argument and a live prompt renders another section's data with no
+ * error to catch it. Same class of failure as the `[object Promise]` near-miss
+ * in DECISIONS.md 2026-07-09, so it's worth the named form.
+ */
+function buildSystemPrompt({
+  profile,
+  triggerContext,
+  recentHistory,
+  timezone,
+  lifeArchitecture,
+  sessionContext,
+  currentGoal,
+  relevantMemories,
+  promotedMemories,
+  sessionMemory,
+}) {
   const localTime = formatLocalTime(timezone);
   const timeContext = `User's local time: ${localTime}.` +
     (triggerContext ? ` ${triggerContext}` : '');
@@ -182,6 +200,7 @@ function buildSystemPrompt(profile, triggerContext, recentHistory, timezone, lif
     .replace('{{life_architecture}}', lifeArchitecture || 'Not yet discovered — learn through conversation.')
     .replace('{{session_context}}', sessionContext || 'No prior session data.')
     .replace('{{relevant_memories}}', relevantMemories || 'None retrieved for this turn.')
+    .replace('{{promoted_memories}}', promotedMemories || 'Nothing promoted yet — you are still building a picture of this person.')
     .replace('{{session_memory}}', sessionMemory || 'Nothing summarized yet — the session hasn\'t run long enough.');
 
   // Admin-console injections (read fresh per turn, same hot-reload contract
@@ -196,7 +215,7 @@ function buildSystemPrompt(profile, triggerContext, recentHistory, timezone, lif
  * Fetch memories relevant to the current message, capped so a slow Supabase
  * round-trip can never hold up the first token (latency is the product).
  */
-async function fetchRelevantMemories(userId, queryText, timeoutMs = 800) {
+async function fetchRelevantMemories(userId, queryText, timezone, timeoutMs = 800) {
   if (!queryText || !isVectorConfigured()) return null;
   try {
     const memories = await Promise.race([
@@ -204,9 +223,39 @@ async function fetchRelevantMemories(userId, queryText, timeoutMs = 800) {
       new Promise(res => setTimeout(() => res(null), timeoutMs)),
     ]);
     if (!memories || memories.length === 0) return null;
+
+    // Fire-and-forget. Surfacing into a prompt is what counts as a recall —
+    // this is the evidence the nightly promotion sweep scores on. A failure
+    // here costs one promotion signal and must never cost a turn.
+    recordRecalls(memories, queryText, timezone).catch(() => {});
+
     return memories
       .map(m => `- [${m.type}, ${new Date(m.created_at).toISOString().slice(0, 10)}] ${m.content}`)
       .join('\n');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch the promoted memory tier — the memories injected on every turn whether
+ * or not anything in the conversation asked for them.
+ *
+ * Same latency budget as fetchRelevantMemories, and callers should run the two
+ * concurrently so the turn pays 800ms once rather than twice. This one has no
+ * embedding step (see getPromotedMemories), so it should land well inside it;
+ * the race is there to keep a slow Supabase round-trip from ever holding the
+ * first token, per CLAUDE.md rule 5.
+ */
+async function fetchPromotedMemories(userId, timeoutMs = 800) {
+  if (!isVectorConfigured()) return null;
+  try {
+    const memories = await Promise.race([
+      getPromotedMemories(userId),
+      new Promise(res => setTimeout(() => res(null), timeoutMs)),
+    ]);
+    if (!memories || memories.length === 0) return null;
+    return memories.map(m => `- [${m.type}] ${m.content}`).join('\n');
   } catch {
     return null;
   }
@@ -553,12 +602,16 @@ function summarizeEvents(events) {
  *  2. raw transcript scan (most recent ~40 sessions, keyword match with
  *     surrounding turn for context)
  */
-async function recallConversation(rawUserId, query, date) {
+async function recallConversation(rawUserId, query, date, timezone = DEFAULT_TZ) {
   const userId = resolveUserId(rawUserId);
   const results = { memory_entries: [], transcript_excerpts: [] };
 
   try {
     const memories = await retrieveRelevant(userId, query, 8);
+    // A memory the model deliberately reached for is the strongest signal that
+    // it matters — stronger than the automatic per-turn retrieval. Feed it to
+    // the promotion loop, fire-and-forget, same as fetchRelevantMemories.
+    recordRecalls(memories, query, timezone).catch(() => {});
     results.memory_entries = (memories || []).map(m => ({
       date: (m.created_at || '').slice(0, 10),
       type: m.type,
@@ -641,7 +694,7 @@ async function executeToolUse(toolUse, userId, timezone = DEFAULT_TZ) {
   if (toolUse.name === 'recall_conversation') {
     try {
       const { query, date } = toolUse.input || {};
-      const recall = await recallConversation(userId, query || '', date);
+      const recall = await recallConversation(userId, query || '', date, timezone);
       return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(recall) };
     } catch (err) {
       return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: err.message }), is_error: true };
@@ -799,7 +852,7 @@ async function streamTextTurn(res, systemPrompt, conversationMessages, effective
     const stream = client.messages.stream({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 1024,
-      system: systemPrompt,
+      system: toCachedSystemBlocks(systemPrompt),
       tools: AGENT_TOOLS,
       messages: msgs,
     }, { signal: streamAbort.signal });
@@ -853,7 +906,17 @@ async function streamTextTurn(res, systemPrompt, conversationMessages, effective
       throw streamErr;
     }
 
-    return stream.finalMessage();
+    const finalMessage = await stream.finalMessage();
+    // Cache verification. If `read` stays 0 across consecutive turns, a silent
+    // invalidator has crept into the static half — something per-turn is being
+    // interpolated above "## Runtime context". Check there before anything else.
+    const u = finalMessage.usage || {};
+    console.log(
+      `[Cache] read=${u.cache_read_input_tokens ?? 0} ` +
+      `write=${u.cache_creation_input_tokens ?? 0} ` +
+      `uncached=${u.input_tokens ?? 0}`
+    );
+    return finalMessage;
   };
 
   let currentMessages = conversationMessages;
@@ -1066,24 +1129,30 @@ const server = createServer(async (req, res) => {
       // Pull memories relevant to what the user just said (bounded at 800ms
       // so retrieval can never delay the first token past budget).
       const lastUserMessage = [...(messages || [])].reverse().find(m => m.role === 'user')?.content || '';
-      const relevantMemories = await fetchRelevantMemories(resolveUserId(effectiveUserId), lastUserMessage);
+      // Concurrent, not sequential — both are bounded at 800ms and they are
+      // independent, so running them in series would double the worst case.
+      const [relevantMemories, promotedMemories] = await Promise.all([
+        fetchRelevantMemories(resolveUserId(effectiveUserId), lastUserMessage, timezone),
+        fetchPromotedMemories(effectiveUserId),
+      ]);
       const lastEventAwareness = await buildLastEventAwareness(effectiveUserId, timezone);
 
       // Fire-and-forget — never let summarization delay this turn's first token.
       maybeSummarizeMidSession(sessionId, messages);
       const sessionMemory = sessionId ? midSessionSummaries.get(sessionId)?.summary : null;
 
-      const systemPrompt = buildSystemPrompt(
-        finalProfile,
-        [trigger_context ? JSON.stringify(trigger_context) : null, lastEventAwareness].filter(Boolean).join(' ') || undefined,
-        recent_history || messages?.slice(-6).map(m => `${m.role}: ${m.content}`).join('\n'),
+      const systemPrompt = buildSystemPrompt({
+        profile: finalProfile,
+        triggerContext: [trigger_context ? JSON.stringify(trigger_context) : null, lastEventAwareness].filter(Boolean).join(' ') || undefined,
+        recentHistory: recent_history || messages?.slice(-6).map(m => `${m.role}: ${m.content}`).join('\n'),
         timezone,
         lifeArchitecture,
         sessionContext,
         currentGoal,
         relevantMemories,
+        promotedMemories,
         sessionMemory,
-      );
+      });
 
       // Background fact extraction (non-blocking). Throttled to roughly every
       // third user turn — session end runs a full extraction anyway, so a
@@ -1162,15 +1231,23 @@ const server = createServer(async (req, res) => {
       const sessionContext = buildSessionContext(agentProfile);
       const lastEventAwareness = await buildLastEventAwareness(effectiveUserId, timezone);
 
-      const voiceSystemPrompt = buildSystemPrompt(
-        finalProfile,
-        [triggerContext ? JSON.stringify(triggerContext) : null, lastEventAwareness].filter(Boolean).join(' ') || undefined,
-        priorMessages || recentHistory || undefined,
+      // The promoted tier is the only memory this path has. Voice is where the
+      // greeting happens, and a greeting has no user message to retrieve
+      // against — which is exactly why it read as though BB had never met the
+      // person. relevantMemories and sessionMemory stay omitted here on
+      // purpose: both need a conversation that hasn't started yet.
+      const promotedMemories = await fetchPromotedMemories(effectiveUserId);
+
+      const voiceSystemPrompt = buildSystemPrompt({
+        profile: finalProfile,
+        triggerContext: [triggerContext ? JSON.stringify(triggerContext) : null, lastEventAwareness].filter(Boolean).join(' ') || undefined,
+        recentHistory: priorMessages || recentHistory || undefined,
         timezone,
         lifeArchitecture,
         sessionContext,
         currentGoal,
-      );
+        promotedMemories,
+      });
 
       try {
         console.log(`[Voice] System prompt: ${voiceSystemPrompt.length} chars`);
@@ -1183,20 +1260,24 @@ const server = createServer(async (req, res) => {
         if (nameMatch) userName = nameMatch[1].trim();
       }
 
-      // Build the greeting instruction
-      let greeting;
-      if (context === 'switched_from_text' || priorMessages) {
-        greeting = 'Casually acknowledge switching to voice and continue the conversation. One sentence.';
-      } else if (agentProfile && agentProfile.session_count > 0) {
-        const hints = agentProfile.next_session_hints || [];
-        const hint = hints.length > 0 ? hints[0] : null;
-        greeting = `Greet ${userName} warmly by name. You know them well — you've had ${agentProfile.session_count} conversations. `
-          + `Reference ONE specific thing you know about them to show you remember. `
-          + (hint ? `Suggested follow-up from last session: "${hint}". ` : '')
-          + `Keep it to 2 sentences. Then wait.`;
-      } else {
-        greeting = `Say: 'Hey, ${userName}! How's it going?' and wait for their response.`;
-      }
+      // Build the greeting instruction. Grounded in a real time-gap and a
+      // durable promoted fact (see greeting.js) rather than asking the model to
+      // invent something to reference — invention is what read as generic.
+      // promotedMemories is a bullet list; take the first line as the one fact
+      // to anchor on, stripped of its "- [type] " prefix.
+      const promotedFact = promotedMemories
+        ? promotedMemories.split('\n')[0].replace(/^-\s*(\[[^\]]*\]\s*)?/, '').trim() || null
+        : null;
+      const hints = agentProfile?.next_session_hints || [];
+
+      const greeting = buildVoiceGreeting({
+        userName,
+        isContinuation: context === 'switched_from_text' || !!priorMessages,
+        sessionCount: agentProfile?.session_count || 0,
+        gapPhrase: sessionGapPhrase(agentProfile?.last_session_at),
+        promotedFact,
+        hint: hints.length > 0 ? hints[0] : null,
+      });
 
       // Dispatch the agent with the prompt and greeting baked in
       const { RoomServiceClient, AgentDispatchClient } = await import('livekit-server-sdk');
@@ -2592,6 +2673,37 @@ async function runScheduledDesignLoop() {
 }
 
 setInterval(() => { runScheduledDesignLoop().catch(() => {}); }, DESIGN_LOOP_CHECK_MS);
+
+// ─── Memory promotion sweep ─────────────────────────────────────────────────
+// Scores recall evidence and moves the memories that keep proving useful into
+// the always-injected tier (migrations 009 + 010, scoring in promotionJob.js).
+// Same shape as the design loop above: hourly tick, daily gap, first boot seeds
+// the state file instead of running so a deploy never triggers a surprise
+// sweep. Off the hot path entirely — nothing here can touch a turn.
+const PROMOTION_CHECK_MS = 60 * 60 * 1000;
+const PROMOTION_MIN_GAP_MS = 23 * 3600 * 1000;
+const promotionStatePath = () => resolve(process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store'), 'promotion-state.json');
+
+async function runScheduledPromotion() {
+  let state = {};
+  try { state = JSON.parse(readFileSync(promotionStatePath(), 'utf-8')); } catch {}
+  const now = Date.now();
+  if (!state.last_run_at) {
+    writeFileSync(promotionStatePath(), JSON.stringify({ last_run_at: now }));
+    return;
+  }
+  if (now - state.last_run_at < PROMOTION_MIN_GAP_MS) return;
+
+  writeFileSync(promotionStatePath(), JSON.stringify({ last_run_at: now }));
+  try {
+    const result = await runPromotionSweep();
+    console.log(`[Promotion] Sweep finished: ${result.promoted} promoted from ${result.scanned} candidates across ${result.users} users`);
+  } catch (e) {
+    console.error('[Promotion] Sweep failed:', e.message);
+  }
+}
+
+setInterval(() => { runScheduledPromotion().catch(() => {}); }, PROMOTION_CHECK_MS);
 
 const PORT = process.env.PORT || 3333;
 server.listen(PORT, '0.0.0.0', () => {

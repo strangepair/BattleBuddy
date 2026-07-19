@@ -10,9 +10,11 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import { createHash } from 'crypto';
 import WebSocket from 'ws';
 import { resolveUserId } from './contextAgent.js';
 import { embed } from './embeddings.js';
+import { deriveConceptTags } from './conceptTags.js';
 
 let supabase = null;
 let initialized = false;
@@ -60,6 +62,10 @@ export async function embedAndStore(userId, content, type, sessionId = null) {
       content,
       type,
       embedding,
+      // Tagged at write time so the promotion scorer has the signal. Rows
+      // written before migration 010 have none and score 0 on that component —
+      // worth at most 0.06, so they are not locked out of promotion.
+      concept_tags: deriveConceptTags(content),
     });
     if (error) {
       console.error('[VectorStore] Insert failed:', error.message);
@@ -107,6 +113,166 @@ export async function retrieveRelevant(userId, queryText, limit = 10) {
   } catch (err) {
     console.error('[VectorStore] Retrieve failed:', err.message);
     return [];
+  }
+}
+
+/**
+ * Fetch this user's promoted memories — the always-injected tier.
+ *
+ * No query and no embedding: these are the memories that earned a permanent
+ * place in context, so this is a plain indexed select. That is the whole point
+ * at session start, where retrieveRelevant has nothing to work with because the
+ * user hasn't said anything yet. See migrations/009_memory_promotion.sql.
+ *
+ * @param {string} userId
+ * @param {number} [limit=8] - kept small; this rides in every turn's prompt
+ * @returns {Array<{content: string, type: string, created_at: string, promoted_at: string}>}
+ */
+export async function getPromotedMemories(userId, limit = 8) {
+  init();
+  if (!supabase) return [];
+
+  const canonicalUserId = resolveUserId(userId);
+
+  try {
+    const { data, error } = await supabase
+      .from('user_memories')
+      .select('content, type, created_at, promoted_at')
+      .eq('user_id', canonicalUserId)
+      .eq('promoted', true)
+      .order('promoted_at', { ascending: false })
+      .limit(limit);
+
+    if (error) {
+      // Missing column means migration 009 hasn't been applied to this
+      // environment yet. Deploy order shouldn't be a runtime error — degrade to
+      // the same empty result a user with nothing promoted would get.
+      if (error.message.includes('promoted')) {
+        console.log('[VectorStore] promoted column absent (migration 009 not applied) — skipping tier');
+        return [];
+      }
+      console.error('[VectorStore] Promoted fetch failed:', error.message);
+      return [];
+    }
+
+    console.log(`[VectorStore] ${data?.length || 0} promoted memories for ${canonicalUserId}`);
+    return data || [];
+  } catch (err) {
+    console.error('[VectorStore] Promoted fetch failed:', err.message);
+    return [];
+  }
+}
+
+/**
+ * The dedupe key for one retrieval: '<local YYYY-MM-DD>:<query hash>'.
+ *
+ * Local date, not UTC — late-night sessions are common here, and an 11pm
+ * Central session falling into "tomorrow" in UTC would split one evening across
+ * two days, inflating exactly the spacing signal the scorer relies on.
+ *
+ * The query is hashed, not stored: this table already holds addiction and
+ * health content, and there is no reason for the recall trail to hold verbatim
+ * user text too.
+ */
+function buildRecallKey(queryText, timezone) {
+  let day;
+  try {
+    // en-CA renders as YYYY-MM-DD.
+    day = new Intl.DateTimeFormat('en-CA', { timeZone: timezone || 'America/Chicago' }).format(new Date());
+  } catch {
+    day = new Date().toISOString().slice(0, 10);
+  }
+  const hash = createHash('sha1').update(queryText || '').digest('hex').slice(0, 12);
+  return `${day}:${hash}`;
+}
+
+/**
+ * Record that these memories were retrieved and used in a turn.
+ *
+ * Retrieval frequency is the evidence the promotion sweep scores on — see
+ * migrations/010_memory_recall_signals.sql. Call fire-and-forget: this runs
+ * after the reply is already streaming, and a failure here costs a promotion
+ * signal, never a turn.
+ *
+ * @param {Array<{id: string, similarity: number}>} memories - as returned by retrieveRelevant
+ */
+export async function recordRecalls(memories, queryText, timezone) {
+  init();
+  if (!supabase || !memories?.length) return;
+
+  const withIds = memories.filter(m => m.id);
+  if (!withIds.length) return;
+
+  try {
+    const { error } = await supabase.rpc('record_memory_recalls', {
+      memory_ids: withIds.map(m => m.id),
+      similarities: withIds.map(m => (typeof m.similarity === 'number' ? m.similarity : 0)),
+      recall_key: buildRecallKey(queryText, timezone),
+    });
+    // Missing function means migration 010 hasn't been applied here yet. Log
+    // once at info level rather than erroring — recall signal is optional until
+    // the sweep is live.
+    if (error) {
+      if (error.message.includes('record_memory_recalls')) {
+        console.log('[VectorStore] record_memory_recalls absent (migration 010 not applied)');
+      } else {
+        console.error('[VectorStore] Recall recording failed:', error.message);
+      }
+    }
+  } catch (err) {
+    console.error('[VectorStore] Recall recording failed:', err.message);
+  }
+}
+
+/**
+ * Memories with enough recall evidence to be worth scoring, across all users.
+ *
+ * Takes the threshold as an argument rather than importing PROMOTION_GATES —
+ * promotionJob imports this module, and reaching back the other way would make
+ * a cycle.
+ */
+export async function getPromotionCandidates(minRecallCount = 3) {
+  init();
+  if (!supabase) return [];
+
+  try {
+    const { data, error } = await supabase
+      .from('user_memories')
+      .select('id, user_id, content, recall_count, total_score, recall_keys, concept_tags, last_recalled_at, promoted')
+      .gte('recall_count', minRecallCount);
+
+    if (error) {
+      console.error('[VectorStore] Promotion candidate fetch failed:', error.message);
+      return [];
+    }
+    return data || [];
+  } catch (err) {
+    console.error('[VectorStore] Promotion candidate fetch failed:', err.message);
+    return [];
+  }
+}
+
+/**
+ * Move memories into the always-injected tier.
+ */
+export async function markPromoted(ids) {
+  init();
+  if (!supabase || !ids?.length) return 0;
+
+  try {
+    const { error } = await supabase
+      .from('user_memories')
+      .update({ promoted: true, promoted_at: new Date().toISOString() })
+      .in('id', ids);
+
+    if (error) {
+      console.error('[VectorStore] Promotion write failed:', error.message);
+      return 0;
+    }
+    return ids.length;
+  } catch (err) {
+    console.error('[VectorStore] Promotion write failed:', err.message);
+    return 0;
   }
 }
 
