@@ -12,9 +12,11 @@ import {
   validateCommitmentCandidates,
   formatCommitmentContext,
   isCommitmentDue,
+  shouldAutoDeliver,
   COMMITMENT_EXTRACTION_PROMPT,
   CONFIDENCE_THRESHOLD,
   CARE_CONFIDENCE_THRESHOLD,
+  AUTO_DELIVER_MIN_CONFIDENCE,
   MAX_COMMITMENTS_PER_SESSION,
   MIN_DUE_GAP_MS,
 } from './commitments.js';
@@ -103,6 +105,32 @@ test('isCommitmentDue respects status and the due time', () => {
   assert.equal(isCommitmentDue({ ...base, due_after: new Date(NOW + 1000).toISOString() }, NOW), false, 'not yet due');
   assert.equal(isCommitmentDue({ ...base, status: 'delivered' }, NOW), false, 'already delivered');
   assert.equal(isCommitmentDue({ ...base, status: 'dismissed' }, NOW), false);
+});
+
+test('auto-delivery requires clearing the higher confidence bar', () => {
+  const c = (conf, kind = 'event_check_in') => ({ kind, confidence: conf });
+  assert.equal(shouldAutoDeliver(c(AUTO_DELIVER_MIN_CONFIDENCE)), true);
+  assert.equal(shouldAutoDeliver(c(AUTO_DELIVER_MIN_CONFIDENCE - 0.01)), false);
+  // The auto bar sits above the mere insert gate — queueing ≠ auto-firing.
+  assert.ok(AUTO_DELIVER_MIN_CONFIDENCE > CONFIDENCE_THRESHOLD);
+});
+
+test('care check-ins never auto-deliver by default, even at high confidence', () => {
+  const care = { kind: 'care_check_in', confidence: 0.99 };
+  assert.equal(shouldAutoDeliver(care), false, 'care must not auto-fire sight-unseen');
+  // Only an explicit opt-in lets a care check-in through.
+  assert.equal(shouldAutoDeliver(care, { allowCare: true }), true);
+});
+
+test('the auto-delivery bar is tunable, including observe-only above 1.0', () => {
+  const strong = { kind: 'event_check_in', confidence: 0.95 };
+  assert.equal(shouldAutoDeliver(strong, { minConfidence: 1.1 }), false, 'bar > 1.0 = nothing auto-fires');
+  assert.equal(shouldAutoDeliver(strong, { minConfidence: 0.9 }), true);
+});
+
+test('shouldAutoDeliver rejects malformed input', () => {
+  assert.equal(shouldAutoDeliver(null), false);
+  assert.equal(shouldAutoDeliver({ kind: 'event_check_in', confidence: 'high' }), false);
 });
 
 test('the extraction prompt keeps its non-negotiable guardrails', () => {

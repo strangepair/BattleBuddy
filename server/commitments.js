@@ -44,6 +44,13 @@ export const CARE_CONFIDENCE_THRESHOLD = 0.86;
 // of contact; most days should produce none.
 export const MAX_COMMITMENTS_PER_SESSION = 2;
 
+// Auto-delivery bar. A commitment clears the *insert* gate at 0.72/0.86, which
+// only means "worth queueing." Auto-delivering one to a person in recovery
+// without a human ever seeing it is a higher bar, so it defaults higher.
+// Tunable via COMMITMENTS_AUTO_DELIVER_MIN; set it above 1.0 to observe-only
+// (everything queues, nothing auto-fires) while you look at real scores.
+export const AUTO_DELIVER_MIN_CONFIDENCE = 0.85;
+
 // A follow-up must not be able to fire in the same session it was inferred, nor
 // immediately after. One nudge interval is the floor; the real due time comes
 // from the model's dueWindow, clamped to at least this.
@@ -161,4 +168,26 @@ export function isCommitmentDue(commitment, nowMs = Date.now()) {
   if (!commitment || commitment.status !== 'pending') return false;
   const dueMs = Date.parse(commitment.due_after);
   return Number.isFinite(dueMs) && nowMs >= dueMs;
+}
+
+/**
+ * May this commitment be delivered *without a human first reviewing it*?
+ *
+ * Two guards on top of the insert gate:
+ *   - confidence must clear the (higher) auto-delivery bar;
+ *   - care_check_in is excluded by default. A mistimed "you seemed to be
+ *     struggling" check-in is the most harmful move this system can make, so it
+ *     stays on the manual path unless explicitly opted in.
+ *
+ * Everything that fails this still sits queued in user_commitments as the review
+ * set — it's held, not discarded.
+ */
+export function shouldAutoDeliver(commitment, {
+  minConfidence = AUTO_DELIVER_MIN_CONFIDENCE,
+  allowCare = false,
+} = {}) {
+  if (!commitment) return false;
+  if (commitment.kind === 'care_check_in' && !allowCare) return false;
+  const c = Number(commitment.confidence);
+  return Number.isFinite(c) && c >= minConfidence;
 }

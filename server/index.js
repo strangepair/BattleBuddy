@@ -27,13 +27,8 @@ import {
 } from './vectorStore.js';
 import {
   validateCommitmentCandidates, formatCommitmentContext,
-  COMMITMENT_EXTRACTION_PROMPT,
+  COMMITMENT_EXTRACTION_PROMPT, AUTO_DELIVER_MIN_CONFIDENCE,
 } from './commitments.js';
-
-// Phase 4 is off unless explicitly enabled. Nothing infers or delivers a
-// commitment until Mike turns this on after reviewing real candidates — same
-// propose-then-approve posture as the design loop. See commitments.js.
-const COMMITMENTS_ENABLED = process.env.COMMITMENTS_ENABLED === 'true';
 import { toCachedSystemBlocks } from './promptCache.js';
 import { jsonrepair } from 'jsonrepair';
 
@@ -52,6 +47,21 @@ try {
     }
   }
 } catch {}
+
+// ─── Commitments config (Phase 4) ───────────────────────────────────────────
+// Read after the .env load above so a local .env is honored too (on Railway
+// these come from the platform env). Master switch off unless enabled; when on,
+// inference runs and high-confidence non-care commitments auto-deliver.
+const COMMITMENTS_ENABLED = process.env.COMMITMENTS_ENABLED === 'true';
+// Only commitments at/above this confidence auto-deliver without review;
+// everything else queues. Set above 1.0 to observe-only. Default 0.85.
+const COMMITMENTS_AUTO_DELIVER_MIN = Number.isFinite(Number(process.env.COMMITMENTS_AUTO_DELIVER_MIN))
+  && process.env.COMMITMENTS_AUTO_DELIVER_MIN !== undefined && process.env.COMMITMENTS_AUTO_DELIVER_MIN !== ''
+  ? Number(process.env.COMMITMENTS_AUTO_DELIVER_MIN)
+  : AUTO_DELIVER_MIN_CONFIDENCE;
+// care_check_in stays on the manual-review path unless explicitly opted in —
+// the highest-risk category to auto-fire in a recovery context.
+const COMMITMENTS_AUTO_DELIVER_CARE = process.env.COMMITMENTS_AUTO_DELIVER_CARE === 'true';
 
 const client = new Anthropic();
 
@@ -1338,11 +1348,17 @@ const server = createServer(async (req, res) => {
       const isFreshGreeting = !(context === 'switched_from_text' || priorMessages);
       if (COMMITMENTS_ENABLED && isFreshGreeting) {
         try {
-          const due = await getDueCommitment(effectiveUserId);
+          // Only high-confidence, non-care commitments auto-deliver; the rest
+          // stay queued for review. Filtering is in the query so a below-bar one
+          // at the front of the queue can't mask a qualifying one behind it.
+          const due = await getDueCommitment(effectiveUserId, {
+            minConfidence: COMMITMENTS_AUTO_DELIVER_MIN,
+            allowCare: COMMITMENTS_AUTO_DELIVER_CARE,
+          });
           if (due) {
             checkIn = due.summary;
             markCommitmentDelivered(due.id).catch(() => {});
-            console.log(`[Commitments] Delivering to ${effectiveUserId}: ${due.kind}`);
+            console.log(`[Commitments] Auto-delivering to ${effectiveUserId}: ${due.kind} (conf ${due.confidence})`);
           }
         } catch {}
       }

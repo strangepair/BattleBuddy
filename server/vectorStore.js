@@ -336,20 +336,32 @@ export async function getOpenCommitmentKeys(userId) {
   }
 }
 
-/** The oldest due, pending commitment for a user, or null. */
-export async function getDueCommitment(userId, nowIso) {
+/**
+ * The oldest due, pending, *auto-deliverable* commitment for a user, or null.
+ *
+ * Filtering happens in the query so a below-bar or care commitment sitting at
+ * the front of the queue doesn't mask a qualifying one behind it. Anything
+ * excluded here stays pending as the review set.
+ *
+ * @param {object} [opts]
+ * @param {number} [opts.minConfidence=0] - auto-delivery confidence bar
+ * @param {boolean} [opts.allowCare=false] - permit care_check_in to auto-deliver
+ */
+export async function getDueCommitment(userId, { nowIso, minConfidence = 0, allowCare = false } = {}) {
   init();
   if (!supabase) return null;
   const canonicalUserId = resolveUserId(userId);
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('user_commitments')
-      .select('id, kind, summary, due_after, status')
+      .select('id, kind, summary, due_after, status, confidence')
       .eq('user_id', canonicalUserId)
       .eq('status', 'pending')
       .lte('due_after', nowIso || new Date().toISOString())
-      .order('due_after', { ascending: true })
-      .limit(1);
+      .gte('confidence', minConfidence);
+    if (!allowCare) query = query.neq('kind', 'care_check_in');
+
+    const { data, error } = await query.order('due_after', { ascending: true }).limit(1);
     if (error) return null;
     return (data && data[0]) || null;
   } catch {
