@@ -1,0 +1,135 @@
+name: Deploy
+
+# Runs on every push to main (i.e. after a PR auto-merges). Path-filtered so
+# only the affected target(s) deploy: Railway (server/agent), Supabase
+# (migrations), and EAS→TestFlight (mobile). Reports status back to the backend
+# so the Dev tab flips Under development → Deploying → Deployed.
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      server: ${{ steps.f.outputs.server }}
+      agent: ${{ steps.f.outputs.agent }}
+      supabase: ${{ steps.f.outputs.supabase }}
+      mobile: ${{ steps.f.outputs.mobile }}
+      reqid: ${{ steps.rid.outputs.id }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 2 }
+      - name: Detect changed areas
+        id: f
+        run: |
+          BASE="${{ github.event.before }}"
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE" 2>/dev/null; then BASE="HEAD~1"; fi
+          CHANGED=$(git diff --name-only "$BASE" "${{ github.sha }}")
+          echo "$CHANGED"
+          echo "server=$(echo "$CHANGED"   | grep -Eq '^server/'                         && echo true || echo false)"   >> "$GITHUB_OUTPUT"
+          echo "agent=$(echo "$CHANGED"    | grep -Eq '^agent/'                          && echo true || echo false)"   >> "$GITHUB_OUTPUT"
+          echo "supabase=$(echo "$CHANGED" | grep -Eq '^(supabase|server)/migrations/'   && echo true || echo false)"   >> "$GITHUB_OUTPUT"
+          echo "mobile=$(echo "$CHANGED"   | grep -Eq '^mobile/'                         && echo true || echo false)"   >> "$GITHUB_OUTPUT"
+      - name: Extract Dev-Request-Id
+        id: rid
+        run: |
+          ID=$(git log -1 --format=%B | sed -n 's/^Dev-Request-Id: //p' | head -1)
+          echo "id=$ID" >> "$GITHUB_OUTPUT"
+      - name: Mark deploying
+        if: steps.rid.outputs.id != ''
+        run: |
+          curl -sf -X POST "${{ secrets.BB_SERVER_URL }}/dev/github/webhook" \
+            -H "content-type: application/json" -H "x-bb-status-token: ${{ secrets.BB_STATUS_WEBHOOK_TOKEN }}" \
+            -d "{\"requestId\":\"${{ steps.rid.outputs.id }}\",\"event\":\"merged\"}" || true
+
+  railway:
+    needs: detect
+    if: needs.detect.outputs.server == 'true' || needs.detect.outputs.agent == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm i -g @railway/cli
+      - name: Deploy server service
+        if: needs.detect.outputs.server == 'true'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway up --service "${{ vars.RAILWAY_SERVICE_SERVER || 'bb-server' }}" --ci
+      - name: Deploy agent service
+        if: needs.detect.outputs.agent == 'true'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: railway up --service "${{ vars.RAILWAY_SERVICE_AGENT || 'bb-agent' }}" --ci
+
+  supabase:
+    needs: detect
+    if: needs.detect.outputs.supabase == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install psql
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Apply migrations (idempotent, additive only)
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -e
+          FILES=$(ls supabase/migrations/*.sql server/migrations/*.sql 2>/dev/null | sort)
+          # Refuse destructive DDL — those go to a human (needs_attention).
+          if grep -Eil '(drop\s+(table|column|schema)|truncate\s|delete\s+from)' $FILES; then
+            echo "Destructive migration detected — refusing to auto-apply."
+            curl -sf -X POST "${{ secrets.BB_SERVER_URL }}/dev/github/webhook" \
+              -H "content-type: application/json" -H "x-bb-status-token: ${{ secrets.BB_STATUS_WEBHOOK_TOKEN }}" \
+              -d "{\"requestId\":\"${{ needs.detect.outputs.reqid }}\",\"event\":\"needs_attention\",\"error\":\"destructive migration\"}" || true
+            exit 1
+          fi
+          for f in $FILES; do echo ">> $f"; psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -f "$f"; done
+
+  mobile:
+    needs: detect
+    if: needs.detect.outputs.mobile == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm i -g eas-cli
+      - run: npm ci
+      - name: Build iOS (EAS cloud) + submit to TestFlight
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          printf '%s' "${{ secrets.ASC_API_KEY_P8 }}" > /tmp/asc.p8
+          eas build --platform ios --profile production --non-interactive --wait
+          eas submit --platform ios --profile production --non-interactive --latest \
+            --asc-api-key-path /tmp/asc.p8 --asc-api-key-id "$ASC_KEY_ID" --asc-api-key-issuer-id "$ASC_ISSUER_ID"
+
+  report:
+    needs: [detect, railway, supabase, mobile]
+    if: always() && needs.detect.outputs.reqid != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report deployed / failed
+        run: |
+          # Any needed job that failed → deploy_failed; skipped jobs don't count.
+          FAIL=0
+          for r in "${{ needs.railway.result }}" "${{ needs.supabase.result }}" "${{ needs.mobile.result }}"; do
+            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then FAIL=1; fi
+          done
+          if [ "$FAIL" = "1" ]; then EVT="deploy_failed"; else EVT="deployed"; fi
+          curl -sf -X POST "${{ secrets.BB_SERVER_URL }}/dev/github/webhook" \
+            -H "content-type: application/json" -H "x-bb-status-token: ${{ secrets.BB_STATUS_WEBHOOK_TOKEN }}" \
+            -d "{\"requestId\":\"${{ needs.detect.outputs.reqid }}\",\"event\":\"$EVT\",\"deploy_status\":\"$EVT\"}" || true

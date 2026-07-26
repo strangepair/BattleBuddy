@@ -27,6 +27,12 @@ export const FeatureFlags = {
 
   // Enables offline-first SQLite persistence + sync (Phase 7)
   offlineResilience: true,
+
+  // Build-time gate for whether the Developer-mode toggle + Dev tab are even
+  // offered. Keep true only for internal/TestFlight builds; the runtime on/off
+  // state itself lives (per user) in settingsStore.developerMode. Overridable
+  // via EXPO_PUBLIC_DEV_MODE_AVAILABLE ('1'/'0').
+  developerModeAvailable: (process.env.EXPO_PUBLIC_DEV_MODE_AVAILABLE ?? '1') === '1',
 } as const;
 
 export const RouterConfig = {
@@ -61,6 +67,10 @@ export const ApiConfig = {
   // (context/analyze, context/seed, context/session-outcome). Set via EAS
   // secret env var for builds — never commit the real value (public repo).
   CLIENT_TOKEN: process.env.EXPO_PUBLIC_BB_CLIENT_TOKEN ?? '',
+
+  // Developer-mode build pipeline control plane. Defaults to the same backend
+  // as chat; split out so it can point elsewhere later without touching CHAT_URL.
+  DEV_URL: process.env.EXPO_PUBLIC_DEV_URL ?? process.env.EXPO_PUBLIC_CHAT_URL ?? 'http://192.168.1.102:3333',
 } as const;
 
 export const EngagementConfig = {

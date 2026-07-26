@@ -74,6 +74,25 @@ export async function recordOutcome(result: SessionResult): Promise<void> {
     }
   }
 
+  // Developer mode: when the user has it on and the session actually ended,
+  // capture the transcript into the build pipeline. Fire-and-forget; a failed
+  // capture never affects the normal session flow.
+  if (result.finalize) {
+    try {
+      const { useSettingsStore } = await import('../stores/settingsStore');
+      if (useSettingsStore.getState().developerMode && nonEmpty.length >= 2) {
+        const { captureTranscript } = await import('./devService');
+        captureTranscript({
+          userId,
+          sessionId: result.sessionId,
+          messages: nonEmpty.map((m) => ({ role: m.role, content: m.content })),
+        });
+      }
+    } catch {
+      // dev capture is best-effort
+    }
+  }
+
   // Generate the session report (async, non-blocking)
   generateSessionReport({ ...result, userId }, null);
 }

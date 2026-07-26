@@ -546,7 +546,7 @@ export async function handleAdminConsole(req, res, { checkAdminSecret, CORS, sen
 
     const directiveMatch = url.match(/^\/admin\/console\/directives\/([\w-]+)$/);
     if (req.method === 'PATCH' && directiveMatch) {
-      const { status } = body;
+      const { status } = JSON.parse(await readBody(req));
       const VALID = ['staged', 'active', 'removed'];
       if (!VALID.includes(status)) return json(res, CORS, 400, { error: 'status must be staged | active | removed' });
       const list = loadDirectives();

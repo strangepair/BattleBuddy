@@ -1,0 +1,110 @@
+import { ApiConfig } from '../config';
+
+// Client for the Developer-mode build pipeline (control plane lives on the
+// backend at ApiConfig.DEV_URL). All routes are app-identity authed with the
+// shared CLIENT_TOKEN, matching outcomeRecorder / context routes.
+
+export type DevRequestStatus =
+  | 'pending'
+  | 'building'
+  | 'in_review'
+  | 'merging'
+  | 'deploying'
+  | 'deployed'
+  | 'failed'
+  | 'needs_attention';
+
+export type DevTarget = 'backend' | 'agent' | 'ui' | 'prompt';
+
+export interface DevRequest {
+  id: string;
+  title: string;
+  target: DevTarget;
+  status: DevRequestStatus;
+  source: 'transcript' | 'directive';
+  description?: string;
+  pr_url?: string | null;
+  pr_number?: number | null;
+  branch?: string | null;
+  deploy_status?: string | null;
+  error?: string | null;
+  created_at: string;
+  updated_at?: string;
+}
+
+function tz(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch {
+    return 'America/Chicago';
+  }
+}
+
+function authHeaders(): Record<string, string> {
+  return {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${ApiConfig.CLIENT_TOKEN}`,
+  };
+}
+
+/** Send a captured developer-mode transcript to the pipeline. Non-blocking:
+    swallows errors so a failed capture never disrupts the conversation. */
+export async function captureTranscript(input: {
+  userId: string | null;
+  sessionId: string;
+  messages: { role: string; content: string }[];
+}): Promise<void> {
+  try {
+    await fetch(`${ApiConfig.DEV_URL}/dev/capture`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ ...input, timezone: tz() }),
+    });
+  } catch (err) {
+    console.warn('[devService] capture failed:', err);
+  }
+}
+
+/** Submit a typed directive from the Dev tab. Returns the created request(s). */
+export async function submitDirective(input: {
+  userId: string | null;
+  text: string;
+  target?: DevTarget;
+}): Promise<DevRequest[]> {
+  const res = await fetch(`${ApiConfig.DEV_URL}/dev/directive`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(`directive failed: ${res.status}`);
+  const json = await res.json();
+  return json.requests ?? [];
+}
+
+/** List all build requests (newest first) for the Dev tab. */
+export async function listRequests(userId: string | null): Promise<DevRequest[]> {
+  try {
+    const q = userId ? `?userId=${encodeURIComponent(userId)}` : '';
+    const res = await fetch(`${ApiConfig.DEV_URL}/dev/requests${q}`, {
+      headers: authHeaders(),
+    });
+    if (!res.ok) return [];
+    const json = await res.json();
+    return json.requests ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function getRequest(id: string): Promise<DevRequest | null> {
+  try {
+    const res = await fetch(`${ApiConfig.DEV_URL}/dev/requests/${encodeURIComponent(id)}`, {
+      headers: authHeaders(),
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    return json.request ?? null;
+  } catch {
+    return null;
+  }
+}
