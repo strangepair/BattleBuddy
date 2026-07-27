@@ -2,8 +2,6 @@ import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import type { ComponentProps } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing } from '../../theme';
-import { FeatureFlags } from '../../config';
-import { useSettingsStore } from '../../stores/settingsStore';
 
 export interface DrawerItem {
   key: string;
@@ -20,17 +18,13 @@ const ITEMS: DrawerItem[] = [
   { key: 'preferences', label: 'Preferences', icon: 'settings-outline' },
 ];
 
-const DEV_ITEM: DrawerItem = { key: 'dev', label: 'Developer', icon: 'construct-outline' };
-
 interface DrawerMenuProps {
   onSelect: (key: string) => void;
   onClose: () => void;
 }
 
 export default function DrawerMenu({ onSelect, onClose }: DrawerMenuProps) {
-  const developerMode = useSettingsStore((s) => s.developerMode);
-  const items =
-    FeatureFlags.developerModeAvailable && developerMode ? [...ITEMS, DEV_ITEM] : ITEMS;
+  const items = ITEMS;
 
   return (
     <View style={styles.container}>

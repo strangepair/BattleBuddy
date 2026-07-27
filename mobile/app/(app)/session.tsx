@@ -24,6 +24,7 @@ import HomeDashboard, {
   type TalkAboutTopic,
 } from '../../src/components/session/HomeDashboard';
 import ContentPane from '../../src/components/session/ContentPane';
+import DevPane from '../../src/components/session/DevPane';
 import VoiceSession from '../../src/components/session/VoiceSession';
 import VoiceBand from '../../src/components/session/VoiceBand';
 import { useSessionStore } from '../../src/stores/sessionStore';
@@ -33,6 +34,7 @@ import { useSessionChat } from '../../src/hooks/useSessionChat';
 import { useEngagementEngine } from '../../src/services/engagementEngine';
 import { fetchUserProfile } from '../../src/services/profileBuilder';
 import { logEvent } from '../../src/services/eventService';
+import { FeatureFlags } from '../../src/config';
 import { Colors } from '../../src/theme';
 
 const QL_EVENT: Record<Exclude<QuickLogKind, 'urge'>, string> = {
@@ -55,7 +57,8 @@ const NOT_RESISTING_RE = /not (trying|resisting)/i;
 const JOURNEY_RE = /(how am i doing|journey|progress|show me|reflect)/i;
 
 // Tab order for the horizontal swipe (Phase 1a): left/right moves one view.
-const VIEW_ORDER: SessionView[] = ['home', 'chat', 'content'];
+// Dev tab is appended at runtime when developer mode is active (see session component).
+const BASE_VIEW_ORDER: SessionView[] = ['home', 'chat', 'content'];
 
 // The One Conversation surface: one screen, one stream, three views over it.
 // Home and Content are lenses; everything routes back into the conversation.
@@ -239,6 +242,14 @@ export default function SessionScreen() {
     [sendMessage],
   );
 
+  const hand = useSettingsStore((s) => s.hand);
+  const developerMode = useSettingsStore((s) => s.developerMode);
+  const VIEW_ORDER: SessionView[] =
+    FeatureFlags.developerModeAvailable && developerMode
+      ? [...BASE_VIEW_ORDER, 'dev']
+      : BASE_VIEW_ORDER;
+  const switchMode = useSessionStore((s) => s.switchMode);
+
   // Phase 1a: horizontal swipe between views — a native PagerView, which is
   // built to page horizontally over vertically-scrolling children (a raw
   // Pan gesture loses the touch to the panes' own scroll recognizers).
@@ -253,14 +264,11 @@ export default function SessionScreen() {
       Haptics.selectionAsync().catch(() => {});
       return next;
     });
-  }, []);
+  }, [VIEW_ORDER]);
 
   useEffect(() => {
     pagerRef.current?.setPage(VIEW_ORDER.indexOf(view));
-  }, [view]);
-
-  const hand = useSettingsStore((s) => s.hand);
-  const switchMode = useSessionStore((s) => s.switchMode);
+  }, [view, VIEW_ORDER]);
 
   // The speaker tap: voice joins the same stream in place. Turning it off
   // drops the room, resets mute, and the conversation just keeps going.
@@ -374,6 +382,11 @@ export default function SessionScreen() {
                 <ContentPane height={paneHeight} onOpenChat={openChat} onTalk={handleContentTalk} />
               ) : null}
             </View>
+            {FeatureFlags.developerModeAvailable && developerMode ? (
+              <View key="dev" style={styles.page} collapsable={false}>
+                <DevPane />
+              </View>
+            ) : null}
           </PagerView>
 
           {/* Voice rides above the dock, in the same conversation. */}
