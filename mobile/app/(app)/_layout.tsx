@@ -187,6 +187,7 @@ export default function AppLayout() {
         <Stack.Screen name="preferences" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="voice-settings" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="insights" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="dev" options={{ animation: 'slide_from_right' }} />
         {/* Hub destinations animate themselves via EdgeEntrance, sliding in
             from their fixed edge relative to home — native transition is
             disabled here so the two don't stack. */}

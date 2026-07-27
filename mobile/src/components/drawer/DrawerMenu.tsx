@@ -24,6 +24,8 @@ interface DrawerMenuProps {
 }
 
 export default function DrawerMenu({ onSelect, onClose }: DrawerMenuProps) {
+  const items = ITEMS;
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -34,7 +36,7 @@ export default function DrawerMenu({ onSelect, onClose }: DrawerMenuProps) {
       </View>
 
       <View style={styles.items}>
-        {ITEMS.map(({ key, label, icon }) => (
+        {items.map(({ key, label, icon }) => (
           <TouchableOpacity
             key={key}
             style={styles.item}

@@ -1,0 +1,69 @@
+name: CI
+
+# Required status checks. Auto-merge (in autobuild.yml) only completes when
+# these pass, so this workflow is the automated green-gate for the whole
+# Developer-mode pipeline. Runs on every PR.
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mobile:
+    name: mobile (typecheck · lint · test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm run ci   # typecheck && lint && test
+
+  server:
+    name: server (node --test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm test
+
+  # Report the aggregate check result back to the backend so the Dev tab can
+  # flip the request to "Under development → checks passed/failed". Only fires
+  # for pipeline branches (auto/dev-<id>); no-op otherwise.
+  report:
+    name: report status
+    runs-on: ubuntu-latest
+    needs: [mobile, server]
+    if: always() && startsWith(github.head_ref, 'auto/dev-')
+    steps:
+      - name: Extract request id
+        id: rid
+        run: echo "id=${GITHUB_HEAD_REF#auto/dev-}" >> "$GITHUB_OUTPUT"
+      - name: Callback (passed)
+        if: needs.mobile.result == 'success' && needs.server.result == 'success'
+        run: |
+          curl -sf -X POST "${{ secrets.BB_SERVER_URL }}/dev/github/webhook" \
+            -H "content-type: application/json" \
+            -H "x-bb-status-token: ${{ secrets.BB_STATUS_WEBHOOK_TOKEN }}" \
+            -d "{\"requestId\":\"${{ steps.rid.outputs.id }}\",\"event\":\"checks_passed\"}" || true
+      - name: Callback (failed)
+        if: needs.mobile.result != 'success' || needs.server.result != 'success'
+        run: |
+          curl -sf -X POST "${{ secrets.BB_SERVER_URL }}/dev/github/webhook" \
+            -H "content-type: application/json" \
+            -H "x-bb-status-token: ${{ secrets.BB_STATUS_WEBHOOK_TOKEN }}" \
+            -d "{\"requestId\":\"${{ steps.rid.outputs.id }}\",\"event\":\"checks_failed\",\"error\":\"CI failed\"}" || true

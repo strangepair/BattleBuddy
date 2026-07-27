@@ -1,0 +1,166 @@
+name: Autobuild
+
+# Fired by the backend build worker via repository_dispatch (event dev_build).
+# A headless Claude Code agent implements the requested change on a fresh
+# branch, we scope-fence the diff, open a PR, and (unless dry-run) enable
+# auto-merge so it lands when CI (ci.yml) is green.
+
+on:
+  repository_dispatch:
+    types: [dev_build]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # Payload passed as env (data), never interpolated into script source, so
+      # a crafted directive can't inject shell commands.
+      REQ_ID: ${{ github.event.client_payload.requestId }}
+      TARGET: ${{ github.event.client_payload.target }}
+      TITLE: ${{ github.event.client_payload.title }}
+      C_PROMPT: ${{ github.event.client_payload.prompt }}
+      C_ACCEPT: ${{ toJSON(github.event.client_payload.acceptance) }}
+      C_FILES: ${{ toJSON(github.event.client_payload.files) }}
+      SERVER_URL: ${{ secrets.BB_SERVER_URL }}
+      STATUS_TOKEN: ${{ secrets.BB_STATUS_WEBHOOK_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Configure git + branch
+        run: |
+          git config user.name "battlebuddy-bot"
+          git config user.email "bot@battlebuddy.network"
+          git checkout -b "auto/dev-${REQ_ID}"
+
+      - name: Build the implementation prompt
+        run: |
+          {
+            echo "You are implementing ONE change in the BattleBuddy repo."
+            echo
+            echo "TITLE: $TITLE"
+            echo "TARGET AREA: $TARGET"
+            echo "  - ui      -> the Expo app in mobile/"
+            echo "  - backend -> the Node server in server/"
+            echo "  - agent   -> the Python voice agent in agent/ or agent/system-prompt behaviour"
+            echo "  - prompt  -> wording-only tweak to server/prompts/system.battlebuddy.md"
+            echo
+            echo "INSTRUCTION:"
+            echo "$C_PROMPT"
+            echo
+            echo "ACCEPTANCE CRITERIA:"
+            echo "$C_ACCEPT" | jq -r '.[]? | "- \(.)"' 2>/dev/null || true
+            echo
+            echo "LIKELY FILES: $(echo "$C_FILES" | jq -r 'join(", ")' 2>/dev/null || true)"
+            echo
+            echo "HARD RULES (do not violate):"
+            echo "- Only modify files inside the target area above. Do NOT touch .github/**,"
+            echo "  eas.json, any signing/secret material (*.p8, *.p12, *.mobileprovision), or"
+            echo "  the '## Hard limits' / 988 crisis off-ramp in system.battlebuddy.md."
+            echo "- Make the smallest change that satisfies the request. Additive and reversible."
+            echo "- Match existing code style. No new dependencies unless essential."
+            echo "- Ensure the project still typechecks/tests where applicable."
+          } > /tmp/task.md
+          echo "Prompt written ($(wc -l < /tmp/task.md) lines)."
+
+      - name: Run Claude Code (headless)
+        uses: anthropics/claude-code-base-action@beta
+        with:
+          # NOTE: input names are pinned to @beta; adjust if you pin a release.
+          prompt_file: /tmp/task.md
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Pin explicitly — the action's default pointed at a retired model
+          # (claude-sonnet-4-20250514) and every build 404'd. Same model the
+          # control plane uses for spec generation.
+          model: "claude-sonnet-4-6"
+          allowed_tools: "Edit,Write,Read,Bash,Glob,Grep"
+          timeout_minutes: "20"
+
+      - name: Drop agent scratch artifacts
+        # claude-code-base-action writes its raw JSONL execution log to
+        # output.txt at the repo root. It used to be committed by `git add -A`,
+        # so every auto PR modified the same file and ANY TWO auto PRs
+        # conflicted by construction — the queue deadlocked itself, and a
+        # conflicted PR gets no CI, so auto-merge could never recover. It is
+        # now gitignored; delete it here too so it can never re-enter a diff.
+        run: rm -f output.txt
+
+      - name: Scope-fence the diff
+        id: fence
+        run: |
+          # Use `git status --porcelain`, NOT `git diff --name-only`: the latter
+          # lists modified TRACKED files only, so a file the agent *creates* is
+          # invisible to the fence while `git add -A` commits it anyway. That
+          # let a new .github/workflows/*.yml (or a signing key) slip past the
+          # protected-path check entirely. Porcelain sees untracked files too.
+          CHANGED=$(git status --porcelain | sed 's/^...//' | sed 's/.* -> //')
+          echo "Changed files:"; echo "$CHANGED"
+          if echo "$CHANGED" | grep -Eq '(^|/)\.github/|(^|/)eas\.json$|\.p8$|\.p12$|\.mobileprovision$'; then
+            echo "reason=touched a protected path" >> "$GITHUB_OUTPUT"
+            echo "blocked=1" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if echo "$CHANGED" | grep -q 'system.battlebuddy.md'; then
+            if ! grep -q '988' server/prompts/system.battlebuddy.md || ! grep -q '## Hard limits' server/prompts/system.battlebuddy.md; then
+              echo "reason=safety markers (988 / Hard limits) would be removed" >> "$GITHUB_OUTPUT"
+              echo "blocked=1" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+          fi
+          if [ -z "$CHANGED" ]; then
+            echo "reason=agent produced no changes" >> "$GITHUB_OUTPUT"
+            echo "blocked=1" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "blocked=0" >> "$GITHUB_OUTPUT"
+
+      - name: Abort → needs_attention
+        if: steps.fence.outputs.blocked == '1'
+        run: |
+          curl -sf -X POST "$SERVER_URL/dev/github/webhook" \
+            -H "content-type: application/json" -H "x-bb-status-token: $STATUS_TOKEN" \
+            -d "{\"requestId\":\"$REQ_ID\",\"event\":\"needs_attention\",\"error\":\"${{ steps.fence.outputs.reason }}\"}" || true
+          echo "Blocked: ${{ steps.fence.outputs.reason }}"; exit 1
+
+      - name: Commit + push
+        run: |
+          git add -A
+          git commit -m "auto: ${TITLE}" -m "Dev-Request-Id: ${REQ_ID}"
+          git push origin "auto/dev-${REQ_ID}"
+
+      - name: Open PR
+        id: pr
+        # Must be a PAT, NOT the built-in GITHUB_TOKEN: GitHub deliberately does
+        # not trigger workflows from events raised by GITHUB_TOKEN, so a PR
+        # opened with it would never run ci.yml — no required checks, no green
+        # gate, and auto-merge could never complete. Same PAT as the backend's
+        # GITHUB_TOKEN env (contents, pull-requests, workflows, actions).
+        env:
+          GH_TOKEN: ${{ secrets.BB_PAT }}
+        run: |
+          URL=$(gh pr create \
+            --base main --head "auto/dev-${REQ_ID}" \
+            --title "auto: ${TITLE}" \
+            --body "Autonomous change for Dev-Request-Id \`${REQ_ID}\` (target: ${TARGET}).
+
+          Generated by the BattleBuddy Developer-mode pipeline." \
+            --label "auto" --label "${TARGET}")
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "num=$(gh pr view "$URL" --json number -q .number)" >> "$GITHUB_OUTPUT"
+
+      - name: Callback pr_opened
+        run: |
+          curl -sf -X POST "$SERVER_URL/dev/github/webhook" \
+            -H "content-type: application/json" -H "x-bb-status-token: $STATUS_TOKEN" \
+            -d "{\"requestId\":\"$REQ_ID\",\"event\":\"pr_opened\",\"pr_url\":\"${{ steps.pr.outputs.url }}\",\"pr_number\":${{ steps.pr.outputs.num }},\"branch\":\"auto/dev-${REQ_ID}\"}" || true
+
+      - name: Enable auto-merge
+        # Full autonomy: merges automatically once ci.yml passes. Skipped on a
+        # dry run or when the DEV_PIPELINE_AUTOMERGE repo variable is not 'true'.
+        if: ${{ github.event.client_payload.dryRun != true && vars.DEV_PIPELINE_AUTOMERGE == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.BB_PAT }}
+        run: gh pr merge "${{ steps.pr.outputs.url }}" --auto --squash --delete-branch

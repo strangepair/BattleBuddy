@@ -30,6 +30,7 @@ import {
   COMMITMENT_EXTRACTION_PROMPT, AUTO_DELIVER_MIN_CONFIDENCE,
 } from './commitments.js';
 import { toCachedSystemBlocks } from './promptCache.js';
+import { handleDevPipeline, runDevBuildWorker } from './devPipeline.js';
 import { jsonrepair } from 'jsonrepair';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -227,6 +228,7 @@ function buildSystemPrompt({
   relevantMemories,
   promotedMemories,
   sessionMemory,
+  devMode = false,
 }) {
   const localTime = formatLocalTime(timezone);
   const timeContext = `User's local time: ${localTime}.` +
@@ -242,6 +244,10 @@ function buildSystemPrompt({
     .replace('{{relevant_memories}}', relevantMemories || 'None retrieved for this turn.')
     .replace('{{promoted_memories}}', promotedMemories || 'Nothing promoted yet — you are still building a picture of this person.')
     .replace('{{session_memory}}', sessionMemory || 'Nothing summarized yet — the session hasn\'t run long enough.');
+
+  if (devMode) {
+    prompt = prompt + '\n\n## Developer Session\nYou are currently speaking with the BattleBuddy developer. This is not a live user coaching session. When the developer shares product feedback, feature ideas, or bug observations, acknowledge them naturally and conversationally (e.g. "Good callout, I\'ll note that.") rather than treating them as personal habit-coaching topics. All safety protocols and hard limits remain fully in effect.';
+  }
 
   // Admin-console injections (read fresh per turn, same hot-reload contract
   // as the prompt file): directives above the persona, resources at the end.
@@ -1202,7 +1208,7 @@ const server = createServer(async (req, res) => {
     for await (const chunk of req) body += chunk;
 
     try {
-      const { messages, profile, trigger_context, recent_history, userId, timezone, sessionId } = JSON.parse(body);
+      const { messages, profile, trigger_context, recent_history, userId, timezone, sessionId, devMode } = JSON.parse(body);
 
       // Use the context agent's profile if available, fall back to client-provided.
       // Anonymous fallback must NOT be 'default' — that aliases to the founder's
@@ -1245,6 +1251,7 @@ const server = createServer(async (req, res) => {
         relevantMemories,
         promotedMemories,
         sessionMemory,
+        devMode: devMode === true,
       });
 
       // Background fact extraction (non-blocking). Throttled to roughly every
@@ -1283,7 +1290,7 @@ const server = createServer(async (req, res) => {
     for await (const chunk of req) body += chunk;
 
     try {
-      const { room, identity, context, sessionCount, profile, recentHistory, triggerContext, priorMessages, timezone } = JSON.parse(body);
+      const { room, identity, context, sessionCount, profile, recentHistory, triggerContext, priorMessages, timezone, devMode } = JSON.parse(body);
       const apiKey = process.env.LIVEKIT_API_KEY;
       const apiSecret = process.env.LIVEKIT_API_SECRET;
 
@@ -1340,6 +1347,7 @@ const server = createServer(async (req, res) => {
         sessionContext,
         currentGoal,
         promotedMemories,
+        devMode: devMode === true,
       });
 
       try {
@@ -1409,6 +1417,7 @@ const server = createServer(async (req, res) => {
             userId: effectiveUserId,
             timezone: timezone || 'America/Chicago',
             last_session_at: agentProfile?.last_session_at || null,
+            devMode: devMode === true,
           }),
         });
         console.log(`Dispatched agent to room: ${roomName} (user: ${userName})`);
@@ -2291,6 +2300,15 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     return handleAdminConsole(req, res, { checkAdminSecret, CORS, send401, runTranscriptAudit, fetchAuditReports, fetchDashboardEvents });
   }
 
+  // ─── Developer-mode build pipeline (control plane) ─────────────────────────
+  // /dev/* routes: capture transcripts / directives → product requests, serve
+  // the app's Dev tab, receive status callbacks from the GitHub workflows.
+  if (req.url === '/dev' || req.url.startsWith('/dev/')) {
+    return handleDevPipeline(req, res, {
+      CORS, checkClientToken, checkAdminSecret, anthropic: client, supabase, resolveUserId,
+    });
+  }
+
   // The shell itself carries no data — a plain browser navigation can't attach
   // custom headers, so gating this route would make the page unloadable before
   // its JS ever runs to prompt for the secret. Every route the page actually
@@ -2829,6 +2847,16 @@ async function runScheduledPromotion() {
 }
 
 setInterval(() => { runScheduledPromotion().catch(() => {}); }, PROMOTION_CHECK_MS);
+
+// ─── Dev-mode build worker ─────────────────────────────────────────────────
+// Picks up `pending` build requests and dispatches them to GitHub Actions.
+// No-ops entirely unless DEV_PIPELINE_ENABLED is set (and not paused), so it's
+// inert on every deploy until the pipeline is explicitly switched on. Frequent
+// tick because these are user-initiated and should feel responsive.
+const DEV_BUILD_CHECK_MS = 60 * 1000;
+setInterval(() => {
+  runDevBuildWorker({ supabase }).catch((err) => console.error('[devPipeline] worker:', err.message));
+}, DEV_BUILD_CHECK_MS);
 
 const PORT = process.env.PORT || 3333;
 server.listen(PORT, '0.0.0.0', () => {

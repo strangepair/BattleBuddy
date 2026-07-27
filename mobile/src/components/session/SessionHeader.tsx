@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, Switch, StyleSheet } from 'react-native';
 import Animated, {
   Easing,
   useAnimatedStyle,
@@ -10,6 +10,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import type { MascotState } from '../mascot';
 import { useSettingsStore } from '../../stores/settingsStore';
+import { FeatureFlags } from '../../config';
 import { Colors } from '../../theme';
 
 export type SessionPhase = 'observation' | 'resistance';
@@ -41,7 +42,7 @@ interface SessionHeaderProps {
   phase: SessionPhase;
 }
 
-export default function SessionHeader({ mascotState, phase }: SessionHeaderProps) {
+export default function SessionHeader({ mascotState, phase: _phase }: SessionHeaderProps) {
   const [now, setNow] = useState(() => new Date());
 
   useEffect(() => {
@@ -67,9 +68,10 @@ export default function SessionHeader({ mascotState, phase }: SessionHeaderProps
   }));
 
   const orbColor = STATE_COLOR[mascotState];
-  const resistance = phase === 'resistance';
 
   const hand = useSettingsStore((s) => s.hand);
+  const developerMode = useSettingsStore((s) => s.developerMode);
+  const setDeveloperMode = useSettingsStore((s) => s.setDeveloperMode);
   const time = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   const day = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
 
@@ -79,14 +81,19 @@ export default function SessionHeader({ mascotState, phase }: SessionHeaderProps
       <Text style={styles.day}>{day}</Text>
     </View>
   );
-  const chip = (
-    <View style={[styles.chip, resistance ? styles.chipResistance : styles.chipObservation]}>
-      <View style={[styles.chipDot, { backgroundColor: resistance ? Colors.coral : Colors.stateIdle }]} />
-      <Text style={[styles.chipLabel, { color: resistance ? Colors.coral : Colors.stateIdle }]}>
-        {resistance ? 'RESISTANCE' : 'OBSERVATION'}
-      </Text>
+  const chip = FeatureFlags.developerModeAvailable ? (
+    <View style={styles.devToggleWrap}>
+      <Text style={styles.devToggleLabel}>DEV</Text>
+      <Switch
+        value={developerMode}
+        onValueChange={setDeveloperMode}
+        accessibilityLabel="Developer mode"
+        trackColor={{ false: 'rgba(255,255,255,0.15)', true: Colors.coral }}
+        thumbColor={developerMode ? Colors.textPrimary : Colors.textSecondary}
+        style={styles.devToggleSwitch}
+      />
     </View>
-  );
+  ) : null;
   const buddy = (
     <View style={[styles.meta, hand === 'left' && styles.metaLeftHand]}>
       <Text style={styles.name}>Buddy</Text>
@@ -100,11 +107,10 @@ export default function SessionHeader({ mascotState, phase }: SessionHeaderProps
     </View>
   );
 
-  // Buddy's presence lives on the thumb side; clock and chip on the other.
+  // Buddy's presence lives on the thumb side; clock on the other.
   return hand === 'right' ? (
     <View style={styles.row}>
       {clock}
-      {chip}
       <View style={styles.spacer} />
       {buddy}
       {orb}
@@ -114,7 +120,6 @@ export default function SessionHeader({ mascotState, phase }: SessionHeaderProps
       {orb}
       {buddy}
       <View style={styles.spacer} />
-      {chip}
       {clock}
     </View>
   );
@@ -168,32 +173,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.textSecondary,
   },
-  chip: {
+  devToggleWrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 999,
-    borderWidth: 1,
+    gap: 4,
   },
-  chipObservation: {
-    borderColor: 'rgba(91,159,255,0.45)',
-    backgroundColor: 'rgba(91,159,255,0.10)',
-  },
-  chipResistance: {
-    borderColor: 'rgba(232,98,74,0.55)',
-    backgroundColor: 'rgba(232,98,74,0.12)',
-  },
-  chipDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  chipLabel: {
+  devToggleLabel: {
     fontSize: 10,
     fontWeight: '700',
     letterSpacing: 1.2,
+    color: Colors.textSecondary,
+  },
+  devToggleSwitch: {
+    transform: [{ scaleX: 0.75 }, { scaleY: 0.75 }],
   },
   clock: {
     alignItems: 'flex-start',
