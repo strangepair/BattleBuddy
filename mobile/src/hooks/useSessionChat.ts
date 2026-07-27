@@ -1,6 +1,7 @@
 import { useRef, useCallback, useEffect } from 'react';
 import { useSessionStore } from '../stores/sessionStore';
 import { useAuthStore } from '../stores/authStore';
+import { useSettingsStore } from '../stores/settingsStore';
 import { streamChatTurn } from '../services/chatStream';
 import { isOnline } from './useNetworkStatus';
 import { getEngagementContext } from '../services/engagementEngine';
@@ -62,6 +63,7 @@ export function useSessionChat() {
             triggerContext: state.triggerContext,
             userId: await resolveAuthUserId(),
             sessionId: state.sessionId,
+            devMode: useSettingsStore.getState().developerMode,
           },
           (accumulated) => {
             if (firstToken) {
@@ -130,6 +132,7 @@ export function useSessionChat() {
           // stranger ("acts like it doesn't know me").
           userId: await resolveAuthUserId(),
           sessionId: state.sessionId,
+          devMode: useSettingsStore.getState().developerMode,
         },
         (accumulated) => {
           if (firstToken) {

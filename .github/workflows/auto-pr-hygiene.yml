@@ -1,0 +1,123 @@
+name: Auto PR hygiene
+
+# Keeps the Developer-mode pipeline's auto/dev-* PRs landable, and guarantees
+# that anything it CANNOT fix becomes visible instead of silently deadlocking.
+#
+# The failure this exists to prevent: several auto PRs are cut from the same
+# main, one merges, the rest go stale or conflict. GitHub does not run
+# `pull_request` workflows on a conflicted PR (it can't compute a merge ref),
+# so those PRs get no CI, never go green, and auto-merge can never fire. That
+# is a *stable* stuck state — it never resolves on its own.
+#
+# Runs after every push to main (the moment siblings go stale) and on a timer
+# as a backstop.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: auto-pr-hygiene
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update stale auto PRs, surface the stuck ones
+        env:
+          # PAT, not GITHUB_TOKEN: updating a branch with GITHUB_TOKEN would not
+          # re-trigger ci.yml, which is the whole point of updating it.
+          GH_TOKEN: ${{ secrets.BB_PAT }}
+          REPO: ${{ github.repository }}
+          SERVER_URL: ${{ secrets.BB_SERVER_URL }}
+          STATUS_TOKEN: ${{ secrets.BB_STATUS_WEBHOOK_TOKEN }}
+        run: |
+          set -uo pipefail
+
+          gh label create needs-attention \
+            --color B60205 \
+            --description "Pipeline PR that cannot land on its own" \
+            --repo "$REPO" 2>/dev/null || true
+
+          # mergeable/mergeStateStatus are computed asynchronously; a fresh push
+          # leaves them UNKNOWN for a few seconds. Give GitHub a moment first.
+          sleep 10
+
+          PRS=$(gh pr list --repo "$REPO" --state open --limit 50 \
+                  --json number,headRefName,mergeable,mergeStateStatus \
+                  --jq '.[] | select(.headRefName | startswith("auto/dev-")) | @base64')
+
+          if [ -z "$PRS" ]; then echo "No open auto/dev-* PRs."; exit 0; fi
+
+          surface() {   # $1=pr number  $2=reason
+            local n="$1" reason="$2"
+            echo "::warning::PR #$n needs attention — $reason"
+
+            # Label is also the idempotency guard: comment only on first sight.
+            if gh pr view "$n" --repo "$REPO" --json labels \
+                 --jq '[.labels[].name]|index("needs-attention")' | grep -q '^[0-9]'; then
+              echo "  (already surfaced)"
+            else
+              gh pr edit "$n" --repo "$REPO" --add-label needs-attention || true
+              BODY=$(printf '%s\n' \
+                "⚠️ **This PR cannot land on its own.**" \
+                "" \
+                "> \`$reason\`" \
+                "" \
+                "The pipeline branched this change from an older \`main\` and the" \
+                "branch could not be updated automatically. A conflicted PR also" \
+                "gets no CI run, so auto-merge can never fire — it will sit here" \
+                "until a human acts." \
+                "" \
+                "Resolve the conflict and push, or close this PR and re-issue the" \
+                "directive.")
+              gh pr comment "$n" --repo "$REPO" --body "$BODY" || true
+            fi
+
+            # Mirror into the Dev tab so it shows as "Needs attention" there too.
+            local rid
+            rid=$(gh pr view "$n" --repo "$REPO" --json headRefName \
+                    --jq '.headRefName | sub("^auto/dev-"; "")')
+            if [ -n "${SERVER_URL:-}" ] && [ -n "$rid" ]; then
+              curl -sf -X POST "$SERVER_URL/dev/github/webhook" \
+                -H "content-type: application/json" \
+                -H "x-bb-status-token: $STATUS_TOKEN" \
+                -d "{\"requestId\":\"$rid\",\"event\":\"needs_attention\",\"error\":\"$reason\"}" \
+                >/dev/null || true
+            fi
+          }
+
+          for row in $PRS; do
+            json=$(echo "$row" | base64 -d)
+            n=$(echo "$json"      | jq -r .number)
+            state=$(echo "$json"  | jq -r .mergeStateStatus)
+            mergeable=$(echo "$json" | jq -r .mergeable)
+            echo "── PR #$n: mergeable=$mergeable state=$state"
+
+            case "$mergeable:$state" in
+              CONFLICTING:*)
+                surface "$n" "merge conflict with main"
+                ;;
+              MERGEABLE:BEHIND|MERGEABLE:BLOCKED|UNKNOWN:*)
+                # BEHIND under strict branch protection, or still-computing.
+                # Updating re-triggers ci.yml on the refreshed branch.
+                if gh api -X PUT "repos/$REPO/pulls/$n/update-branch" >/dev/null 2>&1; then
+                  echo "  updated onto main; CI will re-run"
+                else
+                  # 422 here means the update itself conflicts.
+                  surface "$n" "branch update failed (conflicts with main)"
+                fi
+                ;;
+              *)
+                echo "  nothing to do"
+                ;;
+            esac
+          done
