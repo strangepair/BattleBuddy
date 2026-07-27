@@ -34,6 +34,7 @@ import { useEngagementEngine } from '../../src/services/engagementEngine';
 import { fetchUserProfile } from '../../src/services/profileBuilder';
 import { logEvent } from '../../src/services/eventService';
 import { Colors } from '../../src/theme';
+import DevScreen from './dev';
 
 const QL_EVENT: Record<Exclude<QuickLogKind, 'urge'>, string> = {
   resisted: 'urge_resisted',
@@ -54,8 +55,12 @@ const URGE_RE = /(urge|craving|about to (smoke|light)|need help|it'?s loud|want 
 const NOT_RESISTING_RE = /not (trying|resisting)/i;
 const JOURNEY_RE = /(how am i doing|journey|progress|show me|reflect)/i;
 
-// Tab order for the horizontal swipe (Phase 1a): left/right moves one view.
-const VIEW_ORDER: SessionView[] = ['home', 'chat', 'content'];
+// Base tab order for horizontal swipe; dev tab appended when developerMode is on.
+const BASE_VIEW_ORDER: SessionView[] = ['home', 'chat', 'content'];
+
+function DevDashboardScreen() {
+  return <DevScreen />;
+}
 
 // The One Conversation surface: one screen, one stream, three views over it.
 // Home and Content are lenses; everything routes back into the conversation.
@@ -245,22 +250,35 @@ export default function SessionScreen() {
   // `view` stays the single source of truth: taps call setView, and the
   // effect below steers the pager; swipes land in onPageSelected.
   const pagerRef = useRef<PagerView>(null);
+
+  const hand = useSettingsStore((s) => s.hand);
+  const developerMode = useSettingsStore((s) => s.developerMode);
+  const switchMode = useSessionStore((s) => s.switchMode);
+
+  const viewOrder: SessionView[] = developerMode
+    ? [...BASE_VIEW_ORDER, 'dev']
+    : BASE_VIEW_ORDER;
+
+  useEffect(() => {
+    if (!developerMode && view === 'dev') {
+      setView('content');
+    }
+  }, [developerMode]);
+
   const handlePageSelected = useCallback((position: number) => {
-    const next = VIEW_ORDER[position];
+    const next = viewOrder[position];
     if (!next) return;
     setView((current) => {
       if (current === next) return current;
       Haptics.selectionAsync().catch(() => {});
       return next;
     });
-  }, []);
+  }, [viewOrder]);
 
   useEffect(() => {
-    pagerRef.current?.setPage(VIEW_ORDER.indexOf(view));
-  }, [view]);
-
-  const hand = useSettingsStore((s) => s.hand);
-  const switchMode = useSessionStore((s) => s.switchMode);
+    const idx = viewOrder.indexOf(view);
+    pagerRef.current?.setPage(idx >= 0 ? idx : 0);
+  }, [view, viewOrder]);
 
   // The speaker tap: voice joins the same stream in place. Turning it off
   // drops the room, resets mute, and the conversation just keeps going.
@@ -351,7 +369,7 @@ export default function SessionScreen() {
           <PagerView
             ref={pagerRef}
             style={styles.pane}
-            initialPage={VIEW_ORDER.indexOf(view)}
+            initialPage={viewOrder.indexOf(view) >= 0 ? viewOrder.indexOf(view) : 0}
             onPageSelected={(e) => handlePageSelected(e.nativeEvent.position)}
             onLayout={(e) => setPaneHeight(e.nativeEvent.layout.height)}
           >
@@ -374,6 +392,11 @@ export default function SessionScreen() {
                 <ContentPane height={paneHeight} onOpenChat={openChat} onTalk={handleContentTalk} />
               ) : null}
             </View>
+            {developerMode && (
+              <View key="dev" style={styles.page} collapsable={false}>
+                <DevDashboardScreen />
+              </View>
+            )}
           </PagerView>
 
           {/* Voice rides above the dock, in the same conversation. */}

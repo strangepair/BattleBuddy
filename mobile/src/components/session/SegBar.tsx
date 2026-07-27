@@ -10,13 +10,15 @@ import {
 } from '../../stores/settingsStore';
 import { Colors } from '../../theme';
 
-export type SessionView = 'home' | 'chat' | 'content';
+export type SessionView = 'home' | 'chat' | 'content' | 'dev';
 
-const SEGMENTS: { key: SessionView; label: string }[] = [
+const BASE_SEGMENTS: { key: SessionView; label: string }[] = [
   { key: 'home', label: 'Mission' },
   { key: 'chat', label: 'Comms' },
   { key: 'content', label: 'Content' },
 ];
+
+const DEV_SEGMENT: { key: SessionView; label: string } = { key: 'dev', label: 'Dev' };
 
 interface SegBarProps {
   view: SessionView;
@@ -27,10 +29,13 @@ interface SegBarProps {
 // seg-bar. Tabs sit on the thumb side (handedness), the slider opposite.
 export default function SegBar({ view, onChange }: SegBarProps) {
   const hand = useSettingsStore((s) => s.hand);
+  const developerMode = useSettingsStore((s) => s.developerMode);
+
+  const segments = developerMode ? [...BASE_SEGMENTS, DEV_SEGMENT] : BASE_SEGMENTS;
 
   const tabs = (
     <View style={styles.seg}>
-      {SEGMENTS.map(({ key, label }) => {
+      {segments.map(({ key, label }) => {
         const on = view === key;
         return (
           <TouchableOpacity
