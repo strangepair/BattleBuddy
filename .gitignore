@@ -55,3 +55,9 @@ server/transcripts/
 
 # Local mirror of the Railway /data volume (admin-console resources/directives)
 server/data/
+
+# Headless Claude Code execution log. claude-code-base-action writes its raw
+# JSONL transcript to output.txt at the repo root; autobuild.yml's `git add -A`
+# used to sweep it into every auto PR, so any two auto PRs conflicted on it by
+# construction and the pipeline deadlocked itself. Never commit it.
+output.txt

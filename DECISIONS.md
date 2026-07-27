@@ -220,4 +220,22 @@ The `craving_events`/`messages`/`session_reports` tables and their RLS design st
 
 ---
 
+## 2026-07-27 — Dev pipeline: fix the self-inflicted PR deadlock
+
+**Context.** Within an hour of going autonomous the pipeline wedged: five `auto/dev-*` PRs (#6, #9, #10, #11, #12) all sat `CONFLICTING`, auto-merge armed but unable to fire. Three of them had *zero* check runs — GitHub does not run `pull_request` workflows on a conflicted PR because it cannot compute a merge ref. So: conflict → no CI → never green → auto-merge never fires → conflict persists. A stable stuck state that never resolves itself.
+
+**Root cause (primary).** `claude-code-base-action` writes its raw JSONL execution log to `output.txt` at the repo root. `autobuild.yml` committed with `git add -A`, which swept that log into *every* auto PR — and it was tracked on `main`. Every auto PR therefore modified the same file, so **any two auto PRs conflicted by construction**. The sibling race was real but secondary; this made collision a certainty rather than a chance.
+
+**Decision.**
+1. `output.txt` untracked and gitignored; `autobuild.yml` deletes it before fencing/committing.
+2. `autobuild.yml`'s scope-fence now reads `git status --porcelain` instead of `git diff --name-only`. The old form listed modified *tracked* files only, so a file the agent **created** was invisible to the fence while `git add -A` committed it regardless — a new `.github/workflows/*.yml` or a signing key could slip straight past the protected-path check. This was a security hole, not just a correctness one.
+3. New `.github/workflows/auto-pr-hygiene.yml`: after every push to `main` (and on a 30-min backstop) it updates stale `auto/dev-*` PRs onto `main` — which re-triggers CI — and anything it cannot fix gets a `needs-attention` label, a one-time explanatory comment, and a `needs_attention` webhook so it surfaces in the Dev tab. **No silent deadlocks.**
+4. `DEV_MAX_CONCURRENT` 6 → 1. Serializes dispatch so each change is cut from a `main` that already contains its predecessor.
+
+**Considered and rejected: GitHub merge queue.** It is the natural fit for "re-test each PR against the latest main," and it would have prevented the sibling race. Rejected for now because (a) it does **not** resolve textual conflicts — a genuinely conflicting PR still dead-ends, so the surfacing mechanism in (3) is required either way; (b) enabling it means changing branch protection and adding a `merge_group` trigger to `ci.yml` on a live, already-merging pipeline, which is real risk for a race that (1) and (4) largely eliminate at the source; (c) `gh pr merge --auto` changes semantics under a queue, so `autobuild.yml` would need revalidating too. Worth revisiting if throughput ever needs `DEV_MAX_CONCURRENT > 1` — at that point the queue becomes the right tool and (4) can be relaxed.
+
+**Affects.** `.github/workflows/autobuild.yml`, new `.github/workflows/auto-pr-hygiene.yml`, `.gitignore`, `output.txt` (deleted), and the `DEV_MAX_CONCURRENT` Railway env var. Note the pipeline is scope-fenced out of `.github/**`, so it can never make this class of fix itself — these always land as a human-authored PR.
+
+---
+
 > Tip: pre-existing strategic choices that predate this log and still stand — React Native + Expo, Supabase, the hybrid Gemma (on-device) + Claude (cloud) brain, and Sesame CSM for voice — are documented in `CLAUDE.md` and `docs/`. Only log *changes* and *new* decisions here.
