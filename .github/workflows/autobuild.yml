@@ -75,6 +75,10 @@ jobs:
           # NOTE: input names are pinned to @beta; adjust if you pin a release.
           prompt_file: /tmp/task.md
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Pin explicitly — the action's default pointed at a retired model
+          # (claude-sonnet-4-20250514) and every build 404'd. Same model the
+          # control plane uses for spec generation.
+          model: "claude-sonnet-4-6"
           allowed_tools: "Edit,Write,Read,Bash,Glob,Grep"
           timeout_minutes: "20"
 
