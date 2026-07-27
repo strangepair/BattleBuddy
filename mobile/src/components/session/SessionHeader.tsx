@@ -42,7 +42,7 @@ interface SessionHeaderProps {
   phase: SessionPhase;
 }
 
-export default function SessionHeader({ mascotState, phase }: SessionHeaderProps) {
+export default function SessionHeader({ mascotState, phase: _phase }: SessionHeaderProps) {
   const [now, setNow] = useState(() => new Date());
 
   useEffect(() => {
@@ -68,7 +68,6 @@ export default function SessionHeader({ mascotState, phase }: SessionHeaderProps
   }));
 
   const orbColor = STATE_COLOR[mascotState];
-  const resistance = phase === 'resistance';
 
   const hand = useSettingsStore((s) => s.hand);
   const developerMode = useSettingsStore((s) => s.developerMode);
@@ -108,11 +107,10 @@ export default function SessionHeader({ mascotState, phase }: SessionHeaderProps
     </View>
   );
 
-  // Buddy's presence lives on the thumb side; clock and chip on the other.
+  // Buddy's presence lives on the thumb side; clock on the other.
   return hand === 'right' ? (
     <View style={styles.row}>
       {clock}
-      {chip}
       <View style={styles.spacer} />
       {buddy}
       {orb}
@@ -122,7 +120,6 @@ export default function SessionHeader({ mascotState, phase }: SessionHeaderProps
       {orb}
       {buddy}
       <View style={styles.spacer} />
-      {chip}
       {clock}
     </View>
   );

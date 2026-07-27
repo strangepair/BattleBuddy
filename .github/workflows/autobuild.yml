@@ -82,10 +82,24 @@ jobs:
           allowed_tools: "Edit,Write,Read,Bash,Glob,Grep"
           timeout_minutes: "20"
 
+      - name: Drop agent scratch artifacts
+        # claude-code-base-action writes its raw JSONL execution log to
+        # output.txt at the repo root. It used to be committed by `git add -A`,
+        # so every auto PR modified the same file and ANY TWO auto PRs
+        # conflicted by construction — the queue deadlocked itself, and a
+        # conflicted PR gets no CI, so auto-merge could never recover. It is
+        # now gitignored; delete it here too so it can never re-enter a diff.
+        run: rm -f output.txt
+
       - name: Scope-fence the diff
         id: fence
         run: |
-          CHANGED=$(git diff --name-only)
+          # Use `git status --porcelain`, NOT `git diff --name-only`: the latter
+          # lists modified TRACKED files only, so a file the agent *creates* is
+          # invisible to the fence while `git add -A` commits it anyway. That
+          # let a new .github/workflows/*.yml (or a signing key) slip past the
+          # protected-path check entirely. Porcelain sees untracked files too.
+          CHANGED=$(git status --porcelain | sed 's/^...//' | sed 's/.* -> //')
           echo "Changed files:"; echo "$CHANGED"
           if echo "$CHANGED" | grep -Eq '(^|/)\.github/|(^|/)eas\.json$|\.p8$|\.p12$|\.mobileprovision$'; then
             echo "reason=touched a protected path" >> "$GITHUB_OUTPUT"
