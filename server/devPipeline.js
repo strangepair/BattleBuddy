@@ -60,7 +60,16 @@ export function dedupeKey(target, title) {
 }
 
 export function looksForbidden(text) {
-  const t = String(text || '').toLowerCase();
+  let t = String(text || '').toLowerCase();
+  // The spec generator dutifully caveats prompt work with "without changing
+  // hard limits / crisis language" — preserve/negation phrasing about a
+  // protected area is reassurance, not intent, and was flagging every
+  // prompt-target request. Strip those clauses before matching; the diff-time
+  // scope-fence in autobuild.yml still hard-blocks any actual violation.
+  t = t.replace(
+    /\b(?:without|not|never|don'?t|avoid|preserv\w*|keep\w*|leav\w*|maintain\w*|retain\w*|protect\w*)\b[^.;\n]*/g,
+    ' ',
+  );
   return FORBIDDEN_HINTS.some((h) => t.includes(h));
 }
 
