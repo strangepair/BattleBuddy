@@ -54,8 +54,7 @@ Deploying → Deployed**, plus **Failed** / **Needs attention**.
 | `BB_STATUS_WEBHOOK_TOKEN` | all | authenticates callbacks → `/dev/github/webhook` |
 | `RAILWAY_TOKEN` | deploy | Railway CLI deploy. Must be a **project token** (Project → Settings → Tokens), not an account token: `deploy.yml` runs `railway up` with no `railway link` step, so the project/environment can only be resolved from the token itself. |
 | `SUPABASE_DB_URL` | deploy | Postgres connection string for migrations (`psql`) |
-| `EXPO_TOKEN` | deploy | EAS build/submit |
-| `ASC_API_KEY_P8`, `ASC_KEY_ID`, `ASC_ISSUER_ID` | deploy | App Store Connect API key for TestFlight submit |
+| `EXPO_TOKEN` | deploy | EAS build/submit. TestFlight submission uses the ASC API key **stored server-side in EAS** (set up during prior submits) — no `ASC_*` secrets needed unless EAS loses the key, in which case re-add explicit `--asc-api-key-*` flags to `deploy.yml`. |
 
 **2. GitHub repository variables:**
 

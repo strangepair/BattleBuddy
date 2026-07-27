@@ -107,15 +107,16 @@ jobs:
       - run: npm i -g eas-cli
       - run: npm ci
       - name: Build iOS (EAS cloud) + submit to TestFlight
+        # Submission credentials (ASC API key) are stored server-side in EAS —
+        # every prior TestFlight build used them (the "Team (Expo)" tester
+        # group is EAS Submit's marker). --non-interactive reuses the stored
+        # key, so no .p8 material lives in this repo's secrets. If EAS ever
+        # loses the key, re-add explicit --asc-api-key-* flags here.
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
         run: |
-          printf '%s' "${{ secrets.ASC_API_KEY_P8 }}" > /tmp/asc.p8
           eas build --platform ios --profile production --non-interactive --wait
-          eas submit --platform ios --profile production --non-interactive --latest \
-            --asc-api-key-path /tmp/asc.p8 --asc-api-key-id "$ASC_KEY_ID" --asc-api-key-issuer-id "$ASC_ISSUER_ID"
+          eas submit --platform ios --profile production --non-interactive --latest
 
   report:
     needs: [detect, railway, supabase, mobile]
