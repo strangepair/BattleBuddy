@@ -10,6 +10,21 @@ jest.mock('@react-native-community/netinfo', () => ({
   addEventListener: jest.fn(() => jest.fn()),
   fetch: jest.fn().mockResolvedValue({ isConnected: true }),
 }));
+// syncWorker pulls in authStore, which imports ../supabase — and that module
+// calls createClient() at load time, constructing a RealtimeClient that throws
+// under jest (no WebSocket). Keep the import chain inert; these tests only read
+// the current user id and never touch Supabase.
+jest.mock('../supabase', () => ({
+  supabase: {
+    auth: {
+      onAuthStateChange: jest.fn(() => ({
+        data: { subscription: { unsubscribe: jest.fn() } },
+      })),
+      getSession: jest.fn().mockResolvedValue({ data: { session: null } }),
+    },
+  },
+  getAuthToken: jest.fn().mockResolvedValue(null),
+}));
 
 import { runSync } from '../syncWorker';
 import * as localDb from '../localDb';
