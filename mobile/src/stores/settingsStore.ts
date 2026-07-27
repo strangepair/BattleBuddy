@@ -9,6 +9,7 @@ import { scopedKey } from '../services/scopedStorage';
 const KEYS = {
   textScale: 'bb_tscale',
   hand: 'bb_hand',
+  developerMode: 'bb_dev_mode',
 };
 
 export type Hand = 'left' | 'right';
@@ -22,8 +23,13 @@ interface SettingsState {
       fifty-something eyes without reading glasses. */
   textScale: number;
   hand: Hand;
+  /** Developer mode: when on, the current conversation transcript is captured
+      and routed to the build pipeline as product requests, and the Dev tab
+      becomes visible. Persisted per user. Default off. */
+  developerMode: boolean;
   setTextScale: (scale: number) => void;
   setHand: (hand: Hand) => void;
+  setDeveloperMode: (on: boolean) => void;
 }
 
 function clampScale(v: number): number {
@@ -33,6 +39,7 @@ function clampScale(v: number): number {
 export const useSettingsStore = create<SettingsState>((set) => ({
   textScale: TEXT_SCALE_DEFAULT,
   hand: 'right',
+  developerMode: false,
 
   setTextScale: (scale) => {
     const clamped = clampScale(scale);
@@ -44,17 +51,24 @@ export const useSettingsStore = create<SettingsState>((set) => ({
     AsyncStorage.setItem(scopedKey(KEYS.hand), hand).catch(() => {});
     set({ hand });
   },
+
+  setDeveloperMode: (on) => {
+    AsyncStorage.setItem(scopedKey(KEYS.developerMode), on ? '1' : '0').catch(() => {});
+    set({ developerMode: on });
+  },
 }));
 
 export async function hydrateSettingsStore(): Promise<void> {
   try {
-    const [scaleStr, hand] = await Promise.all([
+    const [scaleStr, hand, devMode] = await Promise.all([
       AsyncStorage.getItem(scopedKey(KEYS.textScale)),
       AsyncStorage.getItem(scopedKey(KEYS.hand)),
+      AsyncStorage.getItem(scopedKey(KEYS.developerMode)),
     ]);
     useSettingsStore.setState({
       textScale: scaleStr ? clampScale(parseFloat(scaleStr) || TEXT_SCALE_DEFAULT) : TEXT_SCALE_DEFAULT,
       hand: hand === 'left' ? 'left' : 'right',
+      developerMode: devMode === '1',
     });
   } catch {
     // defaults stand

@@ -30,6 +30,7 @@ import {
   COMMITMENT_EXTRACTION_PROMPT, AUTO_DELIVER_MIN_CONFIDENCE,
 } from './commitments.js';
 import { toCachedSystemBlocks } from './promptCache.js';
+import { handleDevPipeline, runDevBuildWorker } from './devPipeline.js';
 import { jsonrepair } from 'jsonrepair';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2267,6 +2268,15 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     return handleAdminConsole(req, res, { checkAdminSecret, CORS, send401, runTranscriptAudit, fetchAuditReports, fetchDashboardEvents });
   }
 
+  // ─── Developer-mode build pipeline (control plane) ─────────────────────────
+  // /dev/* routes: capture transcripts / directives → product requests, serve
+  // the app's Dev tab, receive status callbacks from the GitHub workflows.
+  if (req.url === '/dev' || req.url.startsWith('/dev/')) {
+    return handleDevPipeline(req, res, {
+      CORS, checkClientToken, checkAdminSecret, anthropic: client, supabase, resolveUserId,
+    });
+  }
+
   // The shell itself carries no data — a plain browser navigation can't attach
   // custom headers, so gating this route would make the page unloadable before
   // its JS ever runs to prompt for the secret. Every route the page actually
@@ -2805,6 +2815,16 @@ async function runScheduledPromotion() {
 }
 
 setInterval(() => { runScheduledPromotion().catch(() => {}); }, PROMOTION_CHECK_MS);
+
+// ─── Dev-mode build worker ─────────────────────────────────────────────────
+// Picks up `pending` build requests and dispatches them to GitHub Actions.
+// No-ops entirely unless DEV_PIPELINE_ENABLED is set (and not paused), so it's
+// inert on every deploy until the pipeline is explicitly switched on. Frequent
+// tick because these are user-initiated and should feel responsive.
+const DEV_BUILD_CHECK_MS = 60 * 1000;
+setInterval(() => {
+  runDevBuildWorker({ supabase }).catch((err) => console.error('[devPipeline] worker:', err.message));
+}, DEV_BUILD_CHECK_MS);
 
 const PORT = process.env.PORT || 3333;
 server.listen(PORT, '0.0.0.0', () => {
