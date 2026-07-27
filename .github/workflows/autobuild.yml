@@ -115,8 +115,13 @@ jobs:
 
       - name: Open PR
         id: pr
+        # Must be a PAT, NOT the built-in GITHUB_TOKEN: GitHub deliberately does
+        # not trigger workflows from events raised by GITHUB_TOKEN, so a PR
+        # opened with it would never run ci.yml — no required checks, no green
+        # gate, and auto-merge could never complete. Same PAT as the backend's
+        # GITHUB_TOKEN env (contents, pull-requests, workflows, actions).
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.BB_PAT }}
         run: |
           URL=$(gh pr create \
             --base main --head "auto/dev-${REQ_ID}" \
@@ -139,5 +144,5 @@ jobs:
         # dry run or when the DEV_PIPELINE_AUTOMERGE repo variable is not 'true'.
         if: ${{ github.event.client_payload.dryRun != true && vars.DEV_PIPELINE_AUTOMERGE == 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.BB_PAT }}
         run: gh pr merge "${{ steps.pr.outputs.url }}" --auto --squash --delete-branch

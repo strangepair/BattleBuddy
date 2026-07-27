@@ -49,9 +49,10 @@ Deploying → Deployed**, plus **Failed** / **Needs attention**.
 | Secret | Used by | Purpose |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | autobuild | headless Claude Code |
+| `BB_PAT` | autobuild | fine-grained PAT used to open the PR + enable auto-merge. **Must not be the built-in `GITHUB_TOKEN`** — GitHub does not trigger workflows from events it raises, so a PR opened with it never runs `ci.yml` and can never satisfy the green gate. Same PAT as the backend's `GITHUB_TOKEN`. |
 | `BB_SERVER_URL` | all | backend base URL for status callbacks (the Railway URL) |
 | `BB_STATUS_WEBHOOK_TOKEN` | all | authenticates callbacks → `/dev/github/webhook` |
-| `RAILWAY_TOKEN` | deploy | Railway CLI deploy |
+| `RAILWAY_TOKEN` | deploy | Railway CLI deploy. Must be a **project token** (Project → Settings → Tokens), not an account token: `deploy.yml` runs `railway up` with no `railway link` step, so the project/environment can only be resolved from the token itself. |
 | `SUPABASE_DB_URL` | deploy | Postgres connection string for migrations (`psql`) |
 | `EXPO_TOKEN` | deploy | EAS build/submit |
 | `ASC_API_KEY_P8`, `ASC_KEY_ID`, `ASC_ISSUER_ID` | deploy | App Store Connect API key for TestFlight submit |
@@ -64,8 +65,17 @@ Deploying → Deployed**, plus **Failed** / **Needs attention**.
 | `RAILWAY_SERVICE_SERVER` | e.g. `bb-server` | Railway service name for the backend |
 | `RAILWAY_SERVICE_AGENT` | e.g. `bb-agent` | Railway service name for the voice agent |
 
-**3. Branch protection** on `main`: require status checks `mobile` and `server`
-(from `ci.yml`); allow auto-merge in repo settings.
+**3. Branch protection** on `main`: require the two status checks from `ci.yml`,
+and enable auto-merge in repo settings (`allow_auto_merge`) or `gh pr merge
+--auto` fails.
+
+Required check *contexts* are the jobs' display names, not their job ids —
+requiring `mobile`/`server` would wait forever on contexts that never report:
+
+- `mobile (typecheck · lint · test)`
+- `server (node --test)`
+
+(the separator is a middle dot, U+00B7)
 
 **4. Backend (Railway) env:**
 
@@ -91,6 +101,28 @@ the toggle in that build.
    **Deployed**.
 4. Rails check: submit a directive that tries to edit `eas.json` or the crisis
    off-ramp → expect **Needs attention**, no PR merged.
+
+## Account topology (as of 2026-07-26)
+
+Code and CI live on GitHub under **strangepair**; the Railway project lives under
+the **codegrad** workspace. This split is fine — every cross-plane hop is a
+token-mediated HTTPS call, and `railway up` uploads the runner's checked-out
+strangepair tree, so deploys carry the right code regardless of which repo
+`bb-server` is nominally connected to (its `rootDirectory` is `/server`, so the
+repo-root upload still builds `server/Dockerfile`).
+
+Two caveats:
+
+- `bb-server`'s build source is still the stale `codegrad/BattleBuddy` (frozen,
+  4 commits behind). Deploys bypass it, but Railway still watches it — a push
+  there would auto-deploy old code over the pipeline's deploy, a silent
+  production rollback. Recommend disconnecting the source so the service is
+  CLI-deploy-only.
+- `bb-agent` has no source and no root directory, but `agent/Dockerfile` expects
+  the **repo root** as build context. A `railway up` from the repo root finds no
+  Dockerfile at the upload root and Railpack would misdetect the root
+  `package.json`. Pin `dockerfilePath: agent/Dockerfile` before any directive
+  targets `agent/**`.
 
 ## Notes / validation surface
 
