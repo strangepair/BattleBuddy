@@ -89,7 +89,7 @@ async def battlebuddy_session(ctx: agents.JobContext):
     system_prompt = dispatch_meta.get("systemPrompt") or FALLBACK_PROMPT
     if dispatch_meta.get("devMode", False):
         system_prompt = system_prompt + "\n\n## Developer Session\nYou are currently speaking with the BattleBuddy developer. This is not a live user coaching session. When the developer shares product feedback, feature ideas, or bug observations, acknowledge them naturally and conversationally (e.g. \"Good callout, I'll note that.\") rather than treating them as personal habit-coaching topics. All safety protocols and hard limits remain fully in effect."
-    greeting = dispatch_meta.get("greeting") or "Say: 'Hey! How's it going?'"
+    greeting = dispatch_meta.get("greeting") or "Say: 'Hey, really glad you're here. How are you doing?'"
 
     user_id = dispatch_meta.get("userId") or "default"
     timezone = dispatch_meta.get("timezone") or "America/Chicago"
