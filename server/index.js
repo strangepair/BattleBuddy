@@ -154,6 +154,23 @@ function formatLocalTime(timezone) {
   }
 }
 
+// Render a stored UTC instant as a human-readable time IN THE USER'S TIMEZONE.
+// Everything in bb_events is UTC; the model must never see a bare `...Z` string
+// or it reports UTC clock times back to the user. Attach this alongside every
+// event/summary time the model can read.
+function formatEventTimeLocal(iso, timezone = DEFAULT_TZ) {
+  if (!iso) return null;
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone || DEFAULT_TZ,
+      weekday: 'short', month: 'short', day: 'numeric',
+      hour: 'numeric', minute: '2-digit', hour12: true,
+    }).format(new Date(iso));
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Build the session context string for the {{session_context}} placeholder.
  * Tells the agent how long since last session and whether to skip greeting.
@@ -398,7 +415,7 @@ const AGENT_TOOLS = [
   },
   {
     name: 'get_usage_stats',
-    description: "Query the user's smoking and urge event history from the database. Use this for ANY question about cigarette counts, timestamps, last cigarette time, gaps between cigarettes, urges (live or resisted or given in), decisions, or milestones. Returns authoritative data — never guess or recall from memory when you can call this tool.",
+    description: "Query the user's smoking and urge event history from the database. Use this for ANY question about cigarette counts, timestamps, last cigarette time, gaps between cigarettes, urges (live or resisted or given in), decisions, or milestones. Returns authoritative data — never guess or recall from memory when you can call this tool. When telling the user a clock time, ALWAYS use the `local_time` and `last_cigarette_local` fields (already in the user's local timezone); never read back the raw `occurred_at` / `last_cigarette_at` values — those are UTC.",
     input_schema: {
       type: 'object',
       properties: {
@@ -534,7 +551,9 @@ async function queryEvents(userId, { date, eventTypes, limit = 20, timezone = DE
 
   const { data, error } = await query;
   if (error) throw new Error(error.message);
-  return data || [];
+  // Attach a localized time string so any consumer that hands these rows to the
+  // model reports the user's local time, never the raw UTC `occurred_at`.
+  return (data || []).map((e) => ({ ...e, local_time: formatEventTimeLocal(e.occurred_at, timezone) }));
 }
 
 /**
@@ -553,7 +572,7 @@ async function buildUsageSummary(userId, timezone = DEFAULT_TZ) {
   try {
     const today = localDateInTz(timezone);
     const events = await queryEvents(userId, { date: today, limit: 100, timezone });
-    result.event_log = { date: today, events, summary: summarizeEvents(events) };
+    result.event_log = { date: today, events, summary: summarizeEvents(events, timezone) };
   } catch (e) {
     result.event_log = { unavailable: true, error: e.message };
   }
@@ -650,7 +669,7 @@ async function mirrorActivityToEvents(rawUserId, updates, timezone = DEFAULT_TZ)
   }
 }
 
-function summarizeEvents(events) {
+function summarizeEvents(events, timezone = DEFAULT_TZ) {
   const cigarettes = events.filter(e => e.event_type === 'cigarette');
   const lastCigarette = cigarettes[0] || null;
   const gapMinutes = lastCigarette
@@ -660,7 +679,9 @@ function summarizeEvents(events) {
   return {
     total_events: events.length,
     cigarette_count: cigarettes.length,
+    // Raw UTC kept for machine use; *_local is what the model should report.
     last_cigarette_at: lastCigarette?.occurred_at || null,
+    last_cigarette_local: formatEventTimeLocal(lastCigarette?.occurred_at, timezone),
     minutes_since_last_cigarette: gapMinutes,
     urges_live: events.filter(e => e.event_type === 'urge').length,
     urges_resisted: events.filter(e => e.event_type === 'urge_resisted').length,
@@ -788,7 +809,7 @@ async function executeToolUse(toolUse, userId, timezone = DEFAULT_TZ) {
       return {
         type: 'tool_result',
         tool_use_id: toolUse.id,
-        content: JSON.stringify({ events, summary: summarizeEvents(events), profile_stats: profileStats }),
+        content: JSON.stringify({ events, summary: summarizeEvents(events, timezone), profile_stats: profileStats }),
       };
     } catch (err) {
       return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: err.message }), is_error: true };
@@ -1148,8 +1169,11 @@ const server = createServer(async (req, res) => {
   if (req.method === 'GET' && req.url.match(/^\/context\/stats\//)) {
     const parts = req.url.split('/context/stats/');
     const userId = decodeURIComponent((parts[1] || '').split('?')[0]);
+    // Honor the caller's timezone (voice agent passes ?timezone=) so "today"
+    // windows and reported times match the user's clock, not the server's.
+    const tz = new URL(req.url, 'http://x').searchParams.get('timezone') || DEFAULT_TZ;
     try {
-      const stats = await buildUsageSummary(resolveUserId(userId), DEFAULT_TZ);
+      const stats = await buildUsageSummary(resolveUserId(userId), tz);
       res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify(stats));
     } catch (err) {
