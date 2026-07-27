@@ -15,6 +15,7 @@ export interface ChatTurnOptions {
   triggerContext?: { trigger: string; intensity: number; time: string } | null;
   userId?: string;
   sessionId?: string | null;
+  devMode?: boolean;
 }
 
 const REQUEST_TIMEOUT_MS = 30000;
@@ -49,6 +50,7 @@ export async function streamChatTurn(
         userId: options.userId,
         sessionId: options.sessionId,
         timezone: getTimezone(),
+        devMode: options.devMode ?? false,
       }),
       signal: combinedController.signal,
     });
