@@ -157,9 +157,6 @@ export default function AppLayout() {
       case 'insights':
         router.push('/insights');
         break;
-      case 'dev':
-        router.push('/dev');
-        break;
     }
   }, [closeDrawer]);
 
