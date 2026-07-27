@@ -87,7 +87,7 @@ async def battlebuddy_session(ctx: agents.JobContext):
         pass
 
     system_prompt = dispatch_meta.get("systemPrompt") or FALLBACK_PROMPT
-    greeting = dispatch_meta.get("greeting") or "Say: 'Hey! How's it going?'"
+    greeting = dispatch_meta.get("greeting") or "Say: 'Hey, really glad you're here. How are you doing?'"
 
     user_id = dispatch_meta.get("userId") or "default"
     timezone = dispatch_meta.get("timezone") or "America/Chicago"
