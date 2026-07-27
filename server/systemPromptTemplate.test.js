@@ -58,3 +58,57 @@ test('promoted memory tier is wired end to end', () => {
     'the voice path builds its prompt without the promoted tier — greetings stay memory-blind'
   );
 });
+
+test('devMode flag is accepted by buildSystemPrompt', () => {
+  assert.ok(
+    indexSource.includes('devMode = false'),
+    'buildSystemPrompt must have devMode defaulting to false'
+  );
+  assert.ok(
+    indexSource.includes('if (devMode)'),
+    'buildSystemPrompt must branch on devMode'
+  );
+  assert.ok(
+    indexSource.includes('## Developer Session'),
+    'buildSystemPrompt must append the Developer Session block when devMode is true'
+  );
+});
+
+test('devMode is extracted and forwarded in the /session/turn route', () => {
+  const turnRouteStart = indexSource.indexOf("req.url === '/session/turn'");
+  const turnRouteEnd = indexSource.indexOf("req.url === '/livekit/token'");
+  const turnSource = indexSource.slice(turnRouteStart, turnRouteEnd);
+
+  assert.ok(
+    turnSource.includes('devMode') && turnSource.includes('JSON.parse(body)'),
+    '/session/turn must destructure devMode from the request body'
+  );
+  assert.ok(
+    turnSource.includes('devMode: devMode === true'),
+    '/session/turn must pass devMode to buildSystemPrompt'
+  );
+});
+
+test('devMode is forwarded in the /livekit/token route and included in agent dispatch metadata', () => {
+  const voiceRouteStart = indexSource.indexOf("req.url === '/livekit/token'");
+  const voiceSource = indexSource.slice(voiceRouteStart, voiceRouteStart + 4000);
+
+  assert.ok(
+    voiceSource.includes('devMode') && voiceSource.includes('JSON.parse(body)'),
+    '/livekit/token must destructure devMode from the request body'
+  );
+
+  const voiceCall = indexSource.slice(indexSource.indexOf('const voiceSystemPrompt = buildSystemPrompt({'));
+  const voiceArgs = voiceCall.slice(0, voiceCall.indexOf('});'));
+  assert.ok(
+    voiceArgs.includes('devMode: devMode === true'),
+    'the voice path must pass devMode to buildSystemPrompt'
+  );
+
+  const dispatchStart = indexSource.indexOf('agentDispatch.createDispatch(');
+  const dispatchArgs = indexSource.slice(dispatchStart, indexSource.indexOf('})', dispatchStart) + 2);
+  assert.ok(
+    dispatchArgs.includes('devMode'),
+    'the agent dispatch metadata must include the devMode field'
+  );
+});

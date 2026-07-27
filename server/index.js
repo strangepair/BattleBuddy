@@ -211,6 +211,7 @@ function buildSystemPrompt({
   relevantMemories,
   promotedMemories,
   sessionMemory,
+  devMode = false,
 }) {
   const localTime = formatLocalTime(timezone);
   const timeContext = `User's local time: ${localTime}.` +
@@ -226,6 +227,10 @@ function buildSystemPrompt({
     .replace('{{relevant_memories}}', relevantMemories || 'None retrieved for this turn.')
     .replace('{{promoted_memories}}', promotedMemories || 'Nothing promoted yet — you are still building a picture of this person.')
     .replace('{{session_memory}}', sessionMemory || 'Nothing summarized yet — the session hasn\'t run long enough.');
+
+  if (devMode) {
+    prompt = prompt + '\n\n## Developer Session\nYou are currently speaking with the BattleBuddy developer. This is not a live user coaching session. When the developer shares product feedback, feature ideas, or bug observations, acknowledge them naturally and conversationally (e.g. "Good callout, I\'ll note that.") rather than treating them as personal habit-coaching topics. All safety protocols and hard limits remain fully in effect.';
+  }
 
   // Admin-console injections (read fresh per turn, same hot-reload contract
   // as the prompt file): directives above the persona, resources at the end.
@@ -1179,7 +1184,7 @@ const server = createServer(async (req, res) => {
     for await (const chunk of req) body += chunk;
 
     try {
-      const { messages, profile, trigger_context, recent_history, userId, timezone, sessionId } = JSON.parse(body);
+      const { messages, profile, trigger_context, recent_history, userId, timezone, sessionId, devMode } = JSON.parse(body);
 
       // Use the context agent's profile if available, fall back to client-provided.
       // Anonymous fallback must NOT be 'default' — that aliases to the founder's
@@ -1222,6 +1227,7 @@ const server = createServer(async (req, res) => {
         relevantMemories,
         promotedMemories,
         sessionMemory,
+        devMode: devMode === true,
       });
 
       // Background fact extraction (non-blocking). Throttled to roughly every
@@ -1260,7 +1266,7 @@ const server = createServer(async (req, res) => {
     for await (const chunk of req) body += chunk;
 
     try {
-      const { room, identity, context, sessionCount, profile, recentHistory, triggerContext, priorMessages, timezone } = JSON.parse(body);
+      const { room, identity, context, sessionCount, profile, recentHistory, triggerContext, priorMessages, timezone, devMode } = JSON.parse(body);
       const apiKey = process.env.LIVEKIT_API_KEY;
       const apiSecret = process.env.LIVEKIT_API_SECRET;
 
@@ -1317,6 +1323,7 @@ const server = createServer(async (req, res) => {
         sessionContext,
         currentGoal,
         promotedMemories,
+        devMode: devMode === true,
       });
 
       try {
@@ -1386,6 +1393,7 @@ const server = createServer(async (req, res) => {
             userId: effectiveUserId,
             timezone: timezone || 'America/Chicago',
             last_session_at: agentProfile?.last_session_at || null,
+            devMode: devMode === true,
           }),
         });
         console.log(`Dispatched agent to room: ${roomName} (user: ${userName})`);
