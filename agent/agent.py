@@ -131,7 +131,7 @@ async def battlebuddy_session(ctx: agents.JobContext):
             try:
                 async with aiohttp.ClientSession() as http:
                     resp = await http.get(
-                        f"{SERVER_URL}/context/stats/{user_id}",
+                        f"{SERVER_URL}/context/stats/{user_id}?timezone={timezone}",
                         timeout=aiohttp.ClientTimeout(total=10),
                     )
                     data = await resp.json()
