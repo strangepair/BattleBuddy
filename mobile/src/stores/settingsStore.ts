@@ -10,8 +10,6 @@ const KEYS = {
   textScale: 'bb_tscale',
   hand: 'bb_hand',
   developerMode: 'bb_dev_mode',
-  // Unscoped marker for the one-shot developer-mode reset below.
-  developerModeReset: 'bb_dev_mode_reset_v1',
 };
 
 export type Hand = 'left' | 'right';
@@ -60,31 +58,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   },
 }));
 
-/** Build 50 shipped a launch-time react-native-worklets fatal (RCTFatal →
-    SIGABRT) that we have only ever seen with developer mode on. Until the
-    cause is pinned down, clear the persisted flag exactly once per install so
-    an *update* comes up in the known-good (off) state — an app update keeps
-    AsyncStorage, so without this a crashing install stays crashing.
-    The programmatic equivalent of delete + reinstall.
-
-    Scanned rather than read by key: hydrate can run before auth resolves, so
-    the flag may sit under either the bare key or `bb_dev_mode:<userId>`. The
-    marker is deliberately unscoped so this runs once per install, not once
-    per user. Remove once developer mode is verified safe. */
-async function clearDeveloperModeOnce(): Promise<void> {
-  const alreadyReset = await AsyncStorage.getItem(KEYS.developerModeReset);
-  if (alreadyReset) return;
-  const keys = await AsyncStorage.getAllKeys();
-  const devKeys = keys.filter(
-    (k) => k === KEYS.developerMode || k.startsWith(`${KEYS.developerMode}:`),
-  );
-  if (devKeys.length) await AsyncStorage.removeMany(devKeys);
-  await AsyncStorage.setItem(KEYS.developerModeReset, '1');
-}
-
 export async function hydrateSettingsStore(): Promise<void> {
   try {
-    await clearDeveloperModeOnce();
     const [scaleStr, hand, devMode] = await Promise.all([
       AsyncStorage.getItem(scopedKey(KEYS.textScale)),
       AsyncStorage.getItem(scopedKey(KEYS.hand)),
