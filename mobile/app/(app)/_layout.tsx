@@ -194,8 +194,15 @@ export default function AppLayout() {
         <Stack.Screen name="content-feed" options={{ animation: 'none' }} />
         <Stack.Screen name="profile" options={{ animation: 'none' }} />
         {/* The One Conversation surface — chat, voice, dashboard, and content
-            on one screen. Replaced session-chat and session-voice. */}
-        <Stack.Screen name="session" options={{ animation: 'none' }} />
+            on one screen. Replaced session-chat and session-voice.
+
+            freezeOnBlur is off deliberately. Freezing makes react-native-screens
+            snapshot this screen on the way out (setViewToSnapshot), which is the
+            exact frame build 51 crashed in. SessionHeader now cancels its
+            repeating animation on unmount, which should be enough on its own —
+            this is the belt to that pair of braces, and only costs us an
+            optimization on a screen that is already the app's hot surface. */}
+        <Stack.Screen name="session" options={{ animation: 'none', freezeOnBlur: false }} />
       </Stack>
     </AppDrawer>
   );
