@@ -107,10 +107,11 @@ export default function SessionHeader({ mascotState, phase: _phase }: SessionHea
     </View>
   );
 
-  // Buddy's presence lives on the thumb side; clock on the other.
+  // Buddy's presence lives on the thumb side; clock and dev toggle on the other.
   return hand === 'right' ? (
     <View style={styles.row}>
       {clock}
+      {chip}
       <View style={styles.spacer} />
       {buddy}
       {orb}
@@ -120,6 +121,7 @@ export default function SessionHeader({ mascotState, phase: _phase }: SessionHea
       {orb}
       {buddy}
       <View style={styles.spacer} />
+      {chip}
       {clock}
     </View>
   );
