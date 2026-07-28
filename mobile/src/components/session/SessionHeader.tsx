@@ -107,11 +107,16 @@ export default function SessionHeader({ mascotState, phase: _phase }: SessionHea
     </View>
   );
 
-  // Buddy's presence lives on the thumb side; clock and dev toggle on the other.
+  // Buddy's presence lives on the thumb side; clock on the other.
+  //
+  // The dev toggle (`chip`) is deliberately built but NOT rendered. Rendering it
+  // is the only mobile diff between build 50 (launches) and build 51 (crashes on
+  // launch: RNSScreenStackView.unmountChildComponentView → setViewToSnapshot,
+  // fatal via RCTExceptionsManager). Until that is root-caused, the header stays
+  // in the known-launching shape. Re-render {chip} only with a verified fix.
   return hand === 'right' ? (
     <View style={styles.row}>
       {clock}
-      {chip}
       <View style={styles.spacer} />
       {buddy}
       {orb}
@@ -121,7 +126,6 @@ export default function SessionHeader({ mascotState, phase: _phase }: SessionHea
       {orb}
       {buddy}
       <View style={styles.spacer} />
-      {chip}
       {clock}
     </View>
   );
