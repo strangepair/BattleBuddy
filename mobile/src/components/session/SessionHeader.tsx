@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { View, Text, Switch, StyleSheet } from 'react-native';
 import Animated, {
+  cancelAnimation,
   Easing,
   useAnimatedStyle,
   useSharedValue,
@@ -61,6 +62,16 @@ export default function SessionHeader({ mascotState, phase: _phase }: SessionHea
       withSequence(withTiming(0.5, { duration: 0 }), withTiming(0, { duration: 2600, easing: Easing.out(Easing.ease) })),
       -1,
     );
+    // These repeat forever (-1), so without this cleanup they keep driving the
+    // ring's opacity/transform on the UI thread after the header unmounts —
+    // including while react-native-screens snapshots this very view to animate
+    // the screen away (RNSScreenStackView.unmountChildComponentView →
+    // setViewToSnapshot, the frame build 51 died in). Stop them on unmount so
+    // nothing mutates the view mid-teardown.
+    return () => {
+      cancelAnimation(ringScale);
+      cancelAnimation(ringOpacity);
+    };
   }, [ringScale, ringOpacity]);
   const ringStyle = useAnimatedStyle(() => ({
     opacity: ringOpacity.value,
@@ -107,16 +118,11 @@ export default function SessionHeader({ mascotState, phase: _phase }: SessionHea
     </View>
   );
 
-  // Buddy's presence lives on the thumb side; clock on the other.
-  //
-  // The dev toggle (`chip`) is deliberately built but NOT rendered. Rendering it
-  // is the only mobile diff between build 50 (launches) and build 51 (crashes on
-  // launch: RNSScreenStackView.unmountChildComponentView → setViewToSnapshot,
-  // fatal via RCTExceptionsManager). Until that is root-caused, the header stays
-  // in the known-launching shape. Re-render {chip} only with a verified fix.
+  // Buddy's presence lives on the thumb side; clock and dev toggle on the other.
   return hand === 'right' ? (
     <View style={styles.row}>
       {clock}
+      {chip}
       <View style={styles.spacer} />
       {buddy}
       {orb}
@@ -126,6 +132,7 @@ export default function SessionHeader({ mascotState, phase: _phase }: SessionHea
       {orb}
       {buddy}
       <View style={styles.spacer} />
+      {chip}
       {clock}
     </View>
   );
