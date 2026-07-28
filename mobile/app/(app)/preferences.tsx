@@ -1,16 +1,12 @@
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Switch } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { useAuthStore } from '../../src/stores/authStore';
-import { useSettingsStore } from '../../src/stores/settingsStore';
-import { FeatureFlags } from '../../src/config';
 import { Colors, Spacing, Radii } from '../../src/theme';
 
 export default function PreferencesScreen() {
   const user = useAuthStore((s) => s.user);
   const signOut = useAuthStore((s) => s.signOut);
-  const developerMode = useSettingsStore((s) => s.developerMode);
-  const setDeveloperMode = useSettingsStore((s) => s.setDeveloperMode);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -65,38 +61,6 @@ export default function PreferencesScreen() {
           <Text style={styles.rowIcon}>🚪</Text>
           <Text style={[styles.rowLabel, styles.destructive]}>Sign out</Text>
         </TouchableOpacity>
-
-        {FeatureFlags.developerModeAvailable && (
-          <>
-            <Text style={[styles.sectionHeader, styles.sectionGap]}>DEVELOPER</Text>
-            <View style={styles.row}>
-              <Text style={styles.rowIcon}>🛠</Text>
-              <View style={styles.rowTextCol}>
-                <Text style={styles.rowLabel}>Developer mode</Text>
-                <Text style={styles.rowHint}>
-                  Records this conversation and turns it into build requests that
-                  ship automatically.
-                </Text>
-              </View>
-              <Switch
-                value={developerMode}
-                onValueChange={setDeveloperMode}
-                trackColor={{ false: Colors.surfaceBorder, true: Colors.coral }}
-              />
-            </View>
-            {developerMode && (
-              <TouchableOpacity
-                style={styles.row}
-                onPress={() => router.push('/dev')}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.rowIcon}>📦</Text>
-                <Text style={styles.rowLabel}>Build pipeline (Dev)</Text>
-                <Text style={styles.rowChevron}>›</Text>
-              </TouchableOpacity>
-            )}
-          </>
-        )}
 
         <Text style={[styles.sectionHeader, styles.sectionGap]}>APP</Text>
         <View style={styles.row}>
