@@ -20,6 +20,9 @@ import { analyzeAndUpdate, buildProfileSummary, buildLifeArchitectureSummary, bu
 import { handleAdminConsole } from './admin-api.js';
 import { runDesignLoop } from './agentDesignLoop.js';
 import { embedAndStore, retrieveRelevant, getPromotedMemories, recordRecalls, isConfigured as isVectorConfigured } from './vectorStore.js';
+import { getActiveFacts, getFactsByStatus, insertFact, activateFact, rejectFact, listKeys as listFactKeys, warmFactCache } from './factStore.js';
+import { renderMemoryDoc } from './memoryDoc.js';
+import { deriveFactsFromProfile, buildSonnetBackfillPrompt, groundSonnetProposals } from './factBackfill.js';
 import { runPromotionSweep } from './promotionJob.js';
 import { buildVoiceGreeting, sessionGapPhrase } from './greeting.js';
 import {
@@ -2300,6 +2303,144 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     }
   }
 
+  // ─── Canonical fact store — Phase 0 backfill + review (docs/12 PR 1) ───────
+  // Everything lands status='proposed'; nothing is injected into any prompt
+  // until reviewed and activated (stop-point b in docs/12-MEMORY-IMPL-PLAN.md).
+
+  // Backfill one user's profile blob into fact proposals. {userId, sonnet?}
+  // Idempotent: proposals whose key already exists in user_facts are skipped.
+  if (req.method === 'POST' && req.url === '/admin/facts/backfill') {
+    if (!checkAdminSecret(req)) return send401(res, 401, 'Unauthorized');
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const { userId, sonnet } = JSON.parse(body || '{}');
+      const targetUser = resolveUserId(userId || 'default');
+      const profile = loadProfile(targetUser);
+
+      const existingKeys = await listFactKeys(targetUser);
+      const derived = deriveFactsFromProfile(profile);
+      const result = { deterministic: { proposed: 0, skipped_existing: 0 }, sonnet: null };
+
+      for (const p of derived) {
+        if (existingKeys.has(p.key)) {
+          result.deterministic.skipped_existing++;
+          continue;
+        }
+        const inserted = await insertFact(targetUser, { ...p, status: 'proposed', source: 'backfill' });
+        if (inserted) {
+          result.deterministic.proposed++;
+          existingKeys.add(p.key);
+        }
+      }
+
+      if (sonnet) {
+        let memories = [];
+        if (supabase) {
+          const { data } = await supabase
+            .from('user_memories')
+            .select('content, type, created_at')
+            .eq('user_id', targetUser)
+            .order('created_at', { ascending: false })
+            .limit(300);
+          memories = data || [];
+        }
+        const prompt = buildSonnetBackfillPrompt({ profile, memories, existingProposals: derived });
+        const response = await client.messages.create({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 3000,
+          messages: [{ role: 'user', content: prompt }],
+        });
+        const text = response.content[0]?.text || '[]';
+        let entries = [];
+        try { entries = JSON.parse(text); } catch {
+          try { entries = JSON.parse(jsonrepair(text)); } catch {
+            const m = text.match(/\[[\s\S]*\]/);
+            entries = m ? JSON.parse(jsonrepair(m[0])) : [];
+          }
+        }
+        const { grounded, dropped } = groundSonnetProposals(entries, existingKeys);
+        result.sonnet = { proposed: 0, dropped_ungrounded: dropped, skipped_existing: 0 };
+        for (const p of grounded) {
+          if (existingKeys.has(p.key)) {
+            result.sonnet.skipped_existing++;
+            continue;
+          }
+          const inserted = await insertFact(targetUser, { ...p, status: 'proposed', source: 'backfill' });
+          if (inserted) {
+            result.sonnet.proposed++;
+            existingKeys.add(p.key);
+          }
+        }
+      }
+
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, userId: targetUser, ...result }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  // Review surface: rows by status + the rendered document (active-only, and
+  // an audit preview that renders proposed rows as if active — this preview is
+  // what Mike reads for the Phase-0 accuracy audit).
+  if (req.method === 'GET' && req.url.startsWith('/admin/facts/')) {
+    if (!checkAdminSecret(req)) return send401(res, 401, 'Unauthorized');
+    try {
+      const userId = resolveUserId(decodeURIComponent(req.url.split('/admin/facts/')[1].split('?')[0]));
+      const profile = loadProfile(userId);
+      const [active, proposed] = await Promise.all([
+        getActiveFacts(userId),
+        getFactsByStatus(userId, 'proposed'),
+      ]);
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        userId,
+        counts: { active: active.length, proposed: proposed.length },
+        active,
+        proposed,
+        rendered: {
+          active_doc: renderMemoryDoc(active, { name: profile.name || 'this person' }),
+          audit_preview: renderMemoryDoc(
+            [...active, ...proposed.map(f => ({ ...f, status: 'active' }))],
+            { name: profile.name || 'this person' }
+          ),
+        },
+      }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  // Resolve proposed rows: {userId, ids: [], action: 'activate' | 'reject'}
+  if (req.method === 'POST' && req.url === '/admin/facts/resolve') {
+    if (!checkAdminSecret(req)) return send401(res, 401, 'Unauthorized');
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const { userId, ids, action } = JSON.parse(body || '{}');
+      if (!Array.isArray(ids) || !['activate', 'reject'].includes(action)) {
+        res.writeHead(400, { ...CORS, 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: "ids[] and action ('activate'|'reject') required" }));
+      }
+      const targetUser = resolveUserId(userId || 'default');
+      const results = [];
+      for (const id of ids) {
+        const r = action === 'activate'
+          ? await activateFact(targetUser, id)
+          : await rejectFact(targetUser, id);
+        results.push({ id, ...r });
+      }
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, action, results }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
   // Trigger a transcript audit on demand
   if (req.method === 'POST' && req.url === '/admin/audit/run') {
     if (!checkAdminSecret(req)) return send401(res, 401, 'Unauthorized');
@@ -2882,4 +3023,8 @@ const PORT = process.env.PORT || 3333;
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`BattleBuddy API running on http://0.0.0.0:${PORT}`);
   console.log(`Vector store: ${isVectorConfigured() ? 'configured' : 'not configured (set SUPABASE_URL + SUPABASE_SERVICE_KEY)'}`);
+  // Canonical fact cache (docs/12 PR 1). Nothing reads it on the hot path yet
+  // (that's the Phase 2 cutover) — warming now validates the table and gives
+  // boot logs a fact count. Fire-and-forget: a failure degrades to empty.
+  warmFactCache().catch(() => {});
 });
