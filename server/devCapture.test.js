@@ -7,11 +7,14 @@
 
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import {
   recordTextTurn,
   recordVoiceSessionStart,
   recordVoiceTranscript,
   sweepIdleSegments,
+  flushAllSegments,
+  registerShutdownFlush,
   _resetCaptureState,
   _captureSegmentCount,
 } from './devCapture.js';
@@ -121,8 +124,76 @@ test('voice: /context/analyze traffic without an open dev segment is ignored', a
   const d = deps(anthropic, supabase);
 
   await recordVoiceTranscript(d, { userId: 'normal-user', sessionId: 'v9', messages: MSGS, isSessionEnd: true });
+  await recordVoiceTranscript(d, { userId: 'normal-user', sessionId: 'v9', messages: MSGS, isSessionEnd: true, devMode: false });
   assert.equal(anthropic.calls.length, 0);
   assert.equal(supabase.inserted.length, 0);
+  assert.equal(_captureSegmentCount(), 0);
+});
+
+test('voice: dev-mode session-end with NO open segment still files a request (redeploy recovery)', async () => {
+  const anthropic = fakeAnthropic();
+  const supabase = fakeSupabase();
+  const d = deps(anthropic, supabase);
+
+  // No recordVoiceSessionStart — the container that opened the segment is
+  // gone. The agent's final post is a full snapshot and says devMode=true,
+  // which is everything a fresh container needs.
+  await recordVoiceTranscript(d, { userId: 'mike', sessionId: 'v3', messages: MSGS, isSessionEnd: true, devMode: true });
+
+  assert.equal(anthropic.calls.length, 1);
+  assert.equal(supabase.inserted.length, 1);
+  assert.equal(supabase.inserted[0].session_id, 'v3');
+  assert.equal(supabase.inserted[0].user_id, 'mike');
+  assert.equal(_captureSegmentCount(), 0);
+});
+
+test('voice: mid-session dev-mode post rebuilds a segment a redeploy wiped', async () => {
+  const anthropic = fakeAnthropic();
+  const supabase = fakeSupabase();
+  const d = deps(anthropic, supabase);
+
+  // Periodic (non-end) agent post after a container swap: reopens the
+  // segment silently, no flush yet.
+  recordVoiceTranscript(d, { userId: 'mike', sessionId: 'v4', messages: MSGS.slice(0, 2), isSessionEnd: false, devMode: true });
+  assert.equal(_captureSegmentCount(), 1);
+  assert.equal(supabase.inserted.length, 0);
+
+  await recordVoiceTranscript(d, { userId: 'mike', sessionId: 'v4', messages: MSGS, isSessionEnd: true, devMode: true });
+  assert.equal(supabase.inserted.length, 1);
+  assert.equal(supabase.inserted[0].session_id, 'v4');
+  assert.equal(_captureSegmentCount(), 0);
+});
+
+test('shutdown: SIGTERM flush drains pending segments before exit', async () => {
+  const anthropic = fakeAnthropic();
+  const supabase = fakeSupabase();
+  const d = deps(anthropic, supabase);
+
+  recordTextTurn(d, { userId: 'mike', sessionId: 's6', messages: MSGS, devMode: true });
+  recordVoiceSessionStart(d, { userId: 'ann', devMode: true });
+  recordVoiceTranscript(d, { userId: 'ann', sessionId: 'v6', messages: MSGS, isSessionEnd: false });
+  assert.equal(_captureSegmentCount(), 2);
+
+  const exits = [];
+  const proc = new EventEmitter();
+  const handler = registerShutdownFlush(d, { proc, exit: (code) => exits.push(code) });
+  assert.equal(proc.listenerCount('SIGTERM'), 1);
+  assert.equal(proc.listenerCount('SIGINT'), 1);
+
+  await handler('SIGTERM');
+
+  assert.equal(supabase.inserted.length, 2, 'both segments flushed on shutdown');
+  assert.deepEqual(exits, [0], 'process exits after the flush');
+  assert.equal(_captureSegmentCount(), 0);
+
+  // Re-entry (SIGTERM then SIGINT) is a no-op — no double exit.
+  await handler('SIGINT');
+  assert.deepEqual(exits, [0]);
+});
+
+test('shutdown: flushAllSegments with nothing pending resolves empty', async () => {
+  const d = deps(fakeAnthropic(), fakeSupabase());
+  assert.deepEqual(await flushAllSegments(d), []);
 });
 
 test('idle sweep flushes a dev session the user just walked away from', async () => {
