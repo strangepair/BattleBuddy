@@ -24,6 +24,7 @@ import { getActiveFacts, getFactsByStatus, insertFact, activateFact, rejectFact,
 import { renderMemoryDoc } from './memoryDoc.js';
 import { deriveFactsFromProfile, buildSonnetBackfillPrompt, groundSonnetProposals } from './factBackfill.js';
 import { runGateCycle, readGateLog } from './factGate.js';
+import { FACT_TOOLS, FACT_TOOL_NAMES, executeFactTool } from './factTools.js';
 import { proposalsFromExtraction } from './factExtraction.js';
 import { runFactConsolidation, readConsolidationReport } from './factConsolidation.js';
 import { runPromotionSweep } from './promotionJob.js';
@@ -450,8 +451,8 @@ function maybeSummarizeMidSession(sessionId, messages) {
 
 const AGENT_TOOLS = [
   {
-    name: 'recall_conversation',
-    description: "Search past conversations with this user — full transcript history plus distilled memory entries, all dated. Use whenever the user references something discussed before ('remember when…', 'what did we talk about', 'you said…'), when a memory probe arrives, or when past context would make the response materially better. Returns dated excerpts; cite dates conservatively from what it returns.",
+    name: 'recall_episodes',
+    description: "Search past conversations with this user — full transcript history plus distilled memory entries, all dated. Use whenever the user references something discussed before ('remember when…', 'what did we talk about', 'you said…'), when a memory probe arrives, or when past context would make the response materially better. Returns dated excerpts; cite dates conservatively from what it returns. For durable FACTS about the person, read your memory document or lookup_fact instead — this tool is for episodes and moments.",
     input_schema: {
       type: 'object',
       properties: {
@@ -582,6 +583,9 @@ const AGENT_TOOLS = [
       required: ['event_id', 'action'],
     },
   },
+  // Canonical-memory write/read tools (Phase 3) — shared schemas with the
+  // voice agent via factTools.js; the prompt's Tools section documents them.
+  ...FACT_TOOLS,
   {
     name: 'check_dev_mode',
     description: "Check whether this conversation is currently in developer mode (the DEV toggle on the chat screen). Call this whenever the user mentions being in dev mode / developer mode, or wants to create a PR, file a build request, report a bug for the pipeline, or ship a product change — verify the actual state before responding; never assume it from conversation memory. Returns { dev_mode, meaning }.",
@@ -856,11 +860,26 @@ async function executeToolUse(toolUse, userId, timezone = DEFAULT_TZ, requestCon
     return checkDevModeToolResult(toolUse.id, requestContext);
   }
 
-  if (toolUse.name === 'recall_conversation') {
+  // Both names accepted: 'recall_episodes' is current; 'recall_conversation'
+  // tolerated so a voice agent one deploy behind can't strand a tool call.
+  if (toolUse.name === 'recall_episodes' || toolUse.name === 'recall_conversation') {
     try {
       const { query, date } = toolUse.input || {};
       const recall = await recallConversation(userId, query || '', date, timezone);
       return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(recall) };
+    } catch (err) {
+      return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: err.message }), is_error: true };
+    }
+  }
+
+  if (FACT_TOOL_NAMES.has(toolUse.name)) {
+    try {
+      const { content, is_error } = await executeFactTool(toolUse.name, toolUse.input || {}, {
+        userId,
+        client,
+        sessionId: requestContext.sessionId || null,
+      });
+      return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(content), is_error: !!is_error };
     } catch (err) {
       return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: err.message }), is_error: true };
     }
@@ -1360,7 +1379,7 @@ const server = createServer(async (req, res) => {
       await streamTextTurn(res, systemPrompt, messages.map(m => ({
         role: m.role,
         content: m.content,
-      })), resolveUserId(effectiveUserId), timezone, { devMode: devMode === true });
+      })), resolveUserId(effectiveUserId), timezone, { devMode: devMode === true, sessionId });
     } catch (err) {
       console.error('Error:', err.message);
       if (!res.headersSent) {
@@ -1920,7 +1939,7 @@ Return ONLY the JSON object, no markdown, no explanation.`;
 
   // ─── Context Agent API ──────────────────────────────────────────────────────
 
-  // Conversation recall for the voice agent's recall_conversation tool
+  // Conversation recall for the voice agent's recall_episodes tool
   if (req.method === 'GET' && req.url.startsWith('/context/recall')) {
     try {
       const url = new URL(req.url, 'http://localhost');
@@ -2079,8 +2098,11 @@ Return ONLY the JSON object, no markdown, no explanation.`;
           mirrorActivityToEvents(userId || 'default', updates, timezone || 'America/Chicago').catch(() => {});
           // Shadow-write the same extraction through the fact gate (Phase 1)
           maybeShadowWriteFacts(userId || 'default', updates, messages, sessionId);
-          // After analysis, embed observations into vector store
-          if (updates && isVectorConfigured()) {
+          // After analysis, embed observations into vector store. Under the
+          // write cutover, trigger/insight rows stop being written as
+          // episodic memories — they are facts now and flow via the gate
+          // (spec §3.7); session summaries/conversation rows are unaffected.
+          if (updates && isVectorConfigured() && process.env.FACTS_WRITE_CUTOVER !== 'true') {
             const effectiveUserId = resolveUserId(userId || 'default');
             if (updates.recent_insights) {
               const insights = Array.isArray(updates.recent_insights) ? updates.recent_insights : [updates.recent_insights];
@@ -2101,6 +2123,32 @@ Return ONLY the JSON object, no markdown, no explanation.`;
         .catch(() => {});
       res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ ok: true, queued: true }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  // ─── Voice-agent fact tools (Phase 3) ──────────────────────────────────────
+  // One endpoint delegating to the shared executor so text and voice can
+  // never drift. Same auth posture as the other voice endpoints
+  // (/context/recall, /events): server-to-server within the private deploy.
+  if (req.method === 'POST' && req.url === '/context/facts/tool') {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const { userId, name, input, sessionId } = JSON.parse(body || '{}');
+      if (!FACT_TOOL_NAMES.has(name)) {
+        res.writeHead(400, { ...CORS, 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: `unknown fact tool: ${name}` }));
+      }
+      const { content, is_error } = await executeFactTool(name, input || {}, {
+        userId: resolveUserId(userId || 'default'),
+        client,
+        sessionId: sessionId || null,
+      });
+      res.writeHead(is_error ? 422 : 200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(content));
     } catch (err) {
       res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: err.message }));

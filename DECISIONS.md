@@ -248,4 +248,12 @@ The `craving_events`/`messages`/`session_reports` tables and their RLS design st
 
 ---
 
+## 2026-07-28 — Canonical memory Phase 3: two deliberate deviations from docs/11 §3.4/§3.5
+
+**Decision.** (1) The `forget` tool retires the fact and tombstones matching episodic `user_memories` rows, but does NOT redact raw transcripts as the spec sketched. Transcript redaction is irreversible bulk destruction; triggering it from a model tool call inferred mid-conversation is the wrong risk shape. It moves to the My Memory screen's explicit user-clicked delete (Phase 4), where the human confirms the scope themselves. Tombstones, by contrast, are a reversible flag — appropriate for a model-invoked action. (2) Consolidation stays report-only and the promotion sweep keeps its current mandate until the Phase-4/cutover PR: acting consolidation auto-merges near-duplicates through the gate, and doing that before Mike's Phase-0 audit lands would let the gate reorganize facts nobody has verified yet.
+**Why.** Both are ordered-by-risk deferrals, not scope cuts — the spec's own §6 prizes reversibility and conservative bias; these apply that principle to the two most destructive automations in the plan.
+**Affects.** `server/factTools.js` (forget), `server/factConsolidation.js` (mode gate), docs/12-MEMORY-IMPL-PLAN.md PR-4 scope.
+
+---
+
 > Tip: pre-existing strategic choices that predate this log and still stand — React Native + Expo, Supabase, the hybrid Gemma (on-device) + Claude (cloud) brain, and Sesame CSM for voice — are documented in `CLAUDE.md` and `docs/`. Only log *changes* and *new* decisions here.

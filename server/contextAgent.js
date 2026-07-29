@@ -1766,10 +1766,27 @@ Return ONLY valid JSON. No markdown, no explanation.`;
       return null;
     }
 
+    // Phase 3 write cutover (FACTS_WRITE_CUTOVER=true): fact-like fields are
+    // ceded to the canonical store — the same extraction output reaches it
+    // via the merge gate (index.js maybeShadowWriteFacts), so writing them
+    // here too would just re-grow the blob the facts layer replaces. The
+    // blob keeps what Phase 4 relocates: activity_log (ledger mirror),
+    // session_history/session bookkeeping, and episodic texture fields.
+    const factFieldsCeded = process.env.FACTS_WRITE_CUTOVER === 'true';
+    const FACT_LIKE_FIELDS = new Set([
+      'triggers', 'coping_strategies', 'what_works', 'what_doesnt_work',
+      'motivations', 'unknowns',
+      'name', 'age', 'location', 'occupation', 'family', 'addiction_type',
+      'substance_history', 'daily_usage', 'quit_reason', 'health_concerns',
+      'previous_quit_attempts', 'longest_quit',
+      'preferred_coping_style', 'response_preference',
+    ]);
+
     // Merge updates into profile
     for (const [key, value] of Object.entries(updates)) {
       if (value === null || value === undefined) continue;
       if (key === 'resolved_unknowns') continue;
+      if (factFieldsCeded && FACT_LIKE_FIELDS.has(key)) continue;
       if (key === 'risk_windows' || key === 'activity_log' || key === 'life_architecture' || key === 'schedule_model' || key === 'session_summary') continue; // handled separately below
 
       if (TIMESTAMPED_ARRAYS.includes(key) && Array.isArray(value)) {
@@ -1796,8 +1813,10 @@ Return ONLY valid JSON. No markdown, no explanation.`;
       }
     }
 
-    // Handle risk_windows — merge by hour+day_of_week, update weight
-    if (updates.risk_windows && Array.isArray(updates.risk_windows)) {
+    // Handle risk_windows — merge by hour+day_of_week, update weight.
+    // Ceded to window.* facts under the write cutover, along with the
+    // life_architecture/schedule_model structures below.
+    if (!factFieldsCeded && updates.risk_windows && Array.isArray(updates.risk_windows)) {
       if (!Array.isArray(profile.risk_windows)) profile.risk_windows = [];
       for (const rw of updates.risk_windows) {
         if (!rw || typeof rw.hour !== 'number') continue;
@@ -1846,7 +1865,7 @@ Return ONLY valid JSON. No markdown, no explanation.`;
     }
 
     // Handle life_architecture — merge discovered fields
-    if (updates.life_architecture && typeof updates.life_architecture === 'object') {
+    if (!factFieldsCeded && updates.life_architecture && typeof updates.life_architecture === 'object') {
       if (!profile.life_architecture) {
         profile.life_architecture = {
           trigger_taxonomy: [], flow_state_activities: [], physical_risk_spaces: [],
@@ -1884,7 +1903,7 @@ Return ONLY valid JSON. No markdown, no explanation.`;
 
     // Handle schedule_model — merge discovered routine/vulnerability/life-change
     // entries, then keep risk_windows in sync with vulnerability_windows.
-    if (updates.schedule_model && typeof updates.schedule_model === 'object') {
+    if (!factFieldsCeded && updates.schedule_model && typeof updates.schedule_model === 'object') {
       if (!profile.schedule_model) {
         profile.schedule_model = { routine_blocks: [], vulnerability_windows: [], life_change_watch: [] };
       }
