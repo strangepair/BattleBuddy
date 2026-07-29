@@ -81,6 +81,42 @@ def get_voice():
         return DEFAULT_VOICE
 
 
+def merge_agent_config(dispatch_meta, config):
+    """Server-fetched session config wins over the compact dispatch metadata.
+
+    LiveKit caps dispatch metadata at 64 KiB and the rendered system prompt is
+    far bigger, so /livekit/token sends only small fields plus a one-time
+    configToken; the full config (systemPrompt, greeting, ...) is fetched from
+    the server. None values in the fetched config never clobber metadata.
+    """
+    if not config:
+        return dispatch_meta
+    return {**dispatch_meta, **{k: v for k, v in config.items() if v is not None}}
+
+
+async def fetch_agent_config(room_name, config_token):
+    """Trade the dispatch nonce for the full session config. Returns None on
+    failure — callers fall back to dispatch metadata / FALLBACK_PROMPT so a
+    server hiccup degrades the greeting, never the whole session."""
+    if not room_name or not config_token:
+        return None
+    for attempt in range(3):
+        try:
+            async with aiohttp.ClientSession() as http:
+                resp = await http.post(
+                    f"{SERVER_URL}/livekit/agent-config",
+                    json={"room": room_name, "token": config_token},
+                    timeout=aiohttp.ClientTimeout(total=5),
+                )
+                if resp.status == 200:
+                    return await resp.json()
+                print(f"[Agent] agent-config fetch got {resp.status} (attempt {attempt + 1})")
+        except Exception as e:
+            print(f"[Agent] agent-config fetch failed (attempt {attempt + 1}): {e}")
+        await asyncio.sleep(1)
+    return None
+
+
 async def send_to_context_agent(user_id, messages, session_id=None, is_session_end=False, timezone="America/Chicago"):
     try:
         async with aiohttp.ClientSession() as http:
@@ -106,6 +142,18 @@ async def battlebuddy_session(ctx: agents.JobContext):
             dispatch_meta = json.loads(raw)
     except Exception:
         pass
+
+    # The full config (system prompt + greeting) is too big for dispatch
+    # metadata — trade the nonce for it. On failure the fallbacks below keep
+    # the session speaking with the generic prompt rather than going silent.
+    config_token = dispatch_meta.get("configToken")
+    if config_token:
+        room_name = dispatch_meta.get("room") or getattr(ctx.room, "name", None)
+        fetched = await fetch_agent_config(room_name, config_token)
+        if fetched:
+            dispatch_meta = merge_agent_config(dispatch_meta, fetched)
+        else:
+            print(f"[Agent] agent-config unavailable for {room_name} — using fallback prompt")
 
     system_prompt = dispatch_meta.get("systemPrompt") or FALLBACK_PROMPT
     if dispatch_meta.get("devMode", False):

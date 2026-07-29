@@ -105,10 +105,13 @@ test('devMode is forwarded in the /livekit/token route and included in agent dis
     'the voice path must pass devMode to buildSystemPrompt'
   );
 
-  const dispatchStart = indexSource.indexOf('agentDispatch.createDispatch(');
-  const dispatchArgs = indexSource.slice(dispatchStart, indexSource.indexOf('})', dispatchStart) + 2);
+  // devMode now rides in the compact dispatch metadata (the full prompt moved
+  // to the voiceAgentConfig store — see voiceDispatch.test.js for why).
+  const metaStart = indexSource.indexOf('const dispatchMetadata = JSON.stringify({');
+  assert.ok(metaStart !== -1, 'the voice route must build compact dispatch metadata');
+  const metaArgs = indexSource.slice(metaStart, indexSource.indexOf('})', metaStart) + 2);
   assert.ok(
-    dispatchArgs.includes('devMode'),
+    metaArgs.includes('devMode'),
     'the agent dispatch metadata must include the devMode field'
   );
 });

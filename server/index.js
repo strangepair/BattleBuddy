@@ -10,7 +10,7 @@ import { createServer } from 'node:http';
 import { readFileSync, writeFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual, randomUUID } from 'node:crypto';
 import Anthropic from '@anthropic-ai/sdk';
 import { createClient } from '@supabase/supabase-js';
 import WebSocket from 'ws';
@@ -29,6 +29,7 @@ import { proposalsFromExtraction } from './factExtraction.js';
 import { runFactConsolidation, readConsolidationReport } from './factConsolidation.js';
 import { runPromotionSweep } from './promotionJob.js';
 import { buildVoiceGreeting, sessionGapPhrase } from './greeting.js';
+import { storeVoiceAgentConfig, takeVoiceAgentConfig } from './voiceAgentConfig.js';
 import {
   insertCommitments, getOpenCommitmentKeys, getDueCommitment, markCommitmentDelivered,
 } from './vectorStore.js';
@@ -1491,24 +1492,41 @@ const server = createServer(async (req, res) => {
         checkIn,
       });
 
-      // Dispatch the agent with the prompt and greeting baked in
+      // Dispatch the agent. The prompt does NOT ride in the dispatch metadata:
+      // LiveKit caps metadata at 64 KiB and the rendered system prompt is
+      // ~150 KB — oversized metadata makes createDispatch fail, no agent ever
+      // joins, and the session sits in silence (the exact "connected but BB
+      // never speaks" failure). The full config waits in voiceAgentConfig.js
+      // behind a one-time nonce; the agent fetches it via /livekit/agent-config.
       const { RoomServiceClient, AgentDispatchClient } = await import('livekit-server-sdk');
       const lkUrl = process.env.LIVEKIT_URL;
+      const configToken = randomUUID();
+      storeVoiceAgentConfig(roomName, configToken, {
+        systemPrompt: voiceSystemPrompt,
+        greeting,
+        userId: effectiveUserId,
+        timezone: effectiveTimezone,
+        last_session_at: agentProfile?.last_session_at || null,
+        devMode: devMode === true,
+      });
       try {
         const agentDispatch = new AgentDispatchClient(lkUrl, apiKey, apiSecret);
-        await agentDispatch.createDispatch(roomName, 'battlebuddy', {
-          metadata: JSON.stringify({
-            systemPrompt: voiceSystemPrompt,
-            greeting,
-            userId: effectiveUserId,
-            timezone: effectiveTimezone,
-            last_session_at: agentProfile?.last_session_at || null,
-            devMode: devMode === true,
-          }),
+        const dispatchMetadata = JSON.stringify({
+          configToken,
+          room: roomName,
+          userId: effectiveUserId,
+          timezone: effectiveTimezone,
+          last_session_at: agentProfile?.last_session_at || null,
+          devMode: devMode === true,
         });
-        console.log(`Dispatched agent to room: ${roomName} (user: ${userName})`);
+        await agentDispatch.createDispatch(roomName, 'battlebuddy', {
+          metadata: dispatchMetadata,
+        });
+        console.log(`Dispatched agent to room: ${roomName} (user: ${userName}, metadata ${dispatchMetadata.length} bytes)`);
       } catch (dispatchErr) {
-        console.log('Agent dispatch (may already exist):', dispatchErr.message);
+        // A failed dispatch means NO agent joins this room — the user hears
+        // nothing. Never bury this as info-level "may already exist".
+        console.error(`[Voice] Agent dispatch FAILED for ${roomName} — no agent will join:`, dispatchErr.message);
       }
 
       res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
@@ -1522,6 +1540,29 @@ const server = createServer(async (req, res) => {
       res.end(JSON.stringify({ error: err.message }));
     }
     return;
+  }
+
+  // ─── Voice-agent config pickup ──────────────────────────────────────────────
+  // The LiveKit agent trades its dispatch nonce for the full session config
+  // (system prompt + greeting) that no longer fits in dispatch metadata.
+  // Auth: possession of the single-dispatch nonce minted by /livekit/token —
+  // same server-to-server posture as /context/facts/tool.
+  if (req.method === 'POST' && req.url === '/livekit/agent-config') {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const { room, token } = JSON.parse(body || '{}');
+      const config = takeVoiceAgentConfig(room, token);
+      if (!config) {
+        res.writeHead(404, { ...CORS, 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'no config for room' }));
+      }
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(config));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
   }
 
   // ─── Push token registration ────────────────────────────────────────────────
