@@ -18,12 +18,33 @@ import asyncio
 
 
 def local_now(timezone):
+    """The user's current wall clock, or None if the zone can't be resolved.
+
+    Never falls back to datetime.now(): the container clock is UTC, and a UTC
+    time formatted without a zone and injected as "the current local time"
+    is exactly the fabricated-timestamp bug — a confidently wrong clock. If we
+    don't know the user's real local time, the model must be told it's
+    unavailable, not handed a lie (requirements.txt pins tzdata so resolution
+    only fails on a genuinely bogus timezone string).
+    """
     try:
         return datetime.now(ZoneInfo(timezone)).strftime("%-I:%M %p on %A, %B %-d, %Y")
     except Exception:
-        return datetime.now().strftime("%-I:%M %p on %A, %B %-d, %Y")
+        try:
+            return datetime.now(ZoneInfo("America/Chicago")).strftime("%-I:%M %p on %A, %B %-d, %Y")
+        except Exception:
+            return None
 
 load_dotenv(Path(__file__).parent / ".env")
+
+# Fail loudly at boot if the tz database is missing (python:*-slim has no OS
+# tzdata; the pip tzdata package in requirements.txt provides it). Every
+# per-turn time injection depends on this.
+try:
+    ZoneInfo("America/Chicago")
+    print("[Agent] tzdata OK — per-turn local-time injection active")
+except Exception as _tz_err:
+    print(f"[Agent] FATAL-ISH: tzdata unavailable ({_tz_err}) — local time injection will be disabled, BB will say it doesn't have the clock")
 
 # Support both local dev layout (agent/ is sibling to server/) and container layout (/app/)
 _base = Path(os.environ.get("APP_BASE", Path(__file__).parent.parent))
@@ -224,11 +245,12 @@ async def battlebuddy_session(ctx: agents.JobContext):
 
         @function_tool()
         async def log_event(self, event_type: str, occurred_at: str = "", notes: str = ""):
-            """Log a smoking or urge event the user just told you about. event_type is one of: cigarette, urge_resisted, urge_gave_in, milestone. occurred_at is an ISO 8601 timestamp — leave empty for 'right now'. For slips, always confirm with the user before logging. Confirm back what you logged in one short line."""
+            """Log a smoking or urge event the user just told you about. event_type is one of: cigarette, urge_resisted, urge_gave_in, milestone. ALWAYS leave occurred_at empty for 'right now' — the server stamps the authoritative current time; never compute 'now' yourself. Only pass occurred_at when back-dating, as the user's LOCAL wall-clock time exactly as they said it (e.g. '2026-07-29T16:43:00') — no timezone conversion, no UTC offset. For slips, always confirm with the user before logging. Confirm back what you logged in one short line."""
             try:
                 payload = {
                     "userId": user_id,
                     "eventType": event_type,
+                    "timezone": timezone,
                     "metadata": {"source": "voice", "notes": notes or None},
                 }
                 if occurred_at:
@@ -248,9 +270,9 @@ async def battlebuddy_session(ctx: agents.JobContext):
 
         @function_tool()
         async def update_event(self, event_id: str, action: str, event_type: str = "", occurred_at: str = "", notes: str = ""):
-            """Correct or delete a mislogged event. action is 'update' or 'delete'. Get the event_id from get_usage_stats first. Tell the user what changed."""
+            """Correct or delete a mislogged event. action is 'update' or 'delete'. Get the event_id from get_usage_stats first. If correcting the time, pass occurred_at as the user's LOCAL wall-clock time exactly as they said it (e.g. '2026-07-29T16:43:00') — no timezone conversion, no UTC offset. Tell the user what changed."""
             try:
-                payload = {"userId": user_id, "eventId": event_id, "action": action}
+                payload = {"userId": user_id, "eventId": event_id, "action": action, "timezone": timezone}
                 if event_type:
                     payload["eventType"] = event_type
                 if occurred_at:
@@ -271,13 +293,29 @@ async def battlebuddy_session(ctx: agents.JobContext):
                 return json.dumps({"error": str(e)})
 
         async def on_user_turn_completed(self, turn_ctx, new_message):
-            # Inject the current local time before every response
+            # Inject the current local time before every response. This message
+            # is the single source of "now" — it supersedes the (session-start,
+            # by now stale) time in the system prompt and anything said earlier.
             try:
                 now = local_now(timezone)
-                turn_ctx.add_message(
-                    role="system",
-                    content=f"[The current local time for the user is {now}. Use this as 'now' when referencing time.]",
-                )
+                if now:
+                    turn_ctx.add_message(
+                        role="system",
+                        content=(
+                            f"[The current local time for the user is {now} ({timezone}). "
+                            "This is already local — never convert it or apply a UTC offset. "
+                            "It supersedes any time stated earlier in this conversation or in your instructions. "
+                            "Use it as 'now'; never compute or carry over a different time.]"
+                        ),
+                    )
+                else:
+                    turn_ctx.add_message(
+                        role="system",
+                        content=(
+                            "[The current local time is UNAVAILABLE this turn. If you need the time, "
+                            "say you don't have the clock right now — never estimate or invent one.]"
+                        ),
+                    )
             except Exception:
                 pass
 
