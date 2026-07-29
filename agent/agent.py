@@ -208,6 +208,35 @@ async def battlebuddy_session(ctx: agents.JobContext):
     # Bug I: 30-second repeat buffer — track last question asked
     last_question = {"text": "", "time": 0.0}
 
+    # Last successfully fetched usage-facts line — the fallback when the
+    # per-turn fetch times out, so a server hiccup degrades to slightly stale
+    # ground truth instead of no ground truth (which is when BB improvises).
+    facts_cache = {"line": ""}
+
+    async def fetch_usage_facts_line():
+        """Ground-truth cigarette facts for the per-turn injection.
+
+        Deterministic and server-computed (bb_events, user's timezone) — the
+        voice model must never count or time-stamp cigarettes itself; it got
+        'one today' past five logged rows doing that (2026-07-29). Tight
+        timeout: this sits ahead of first-token on every turn.
+        """
+        try:
+            async with aiohttp.ClientSession() as http:
+                resp = await http.get(
+                    f"{SERVER_URL}/context/factsline/{user_id}?timezone={timezone}",
+                    timeout=aiohttp.ClientTimeout(total=1.5),
+                )
+                if resp.status == 200:
+                    data = await resp.json()
+                    line = data.get("line") or ""
+                    if line:
+                        facts_cache["line"] = line
+                        return line
+        except Exception as e:
+            print(f"[Agent] factsline fetch failed: {e}")
+        return facts_cache["line"]
+
     class SessionAgent(Agent):
         def __init__(self):
             super().__init__(instructions=system_prompt)
@@ -378,6 +407,26 @@ async def battlebuddy_session(ctx: agents.JobContext):
                         content=(
                             "[The current local time is UNAVAILABLE this turn. If you need the time, "
                             "say you don't have the clock right now — never estimate or invent one.]"
+                        ),
+                    )
+            except Exception:
+                pass
+
+            # Inject the server-computed cigarette facts before every response
+            # — counts, last-cigarette time, and gaps come ONLY from here (or a
+            # fresh get_usage_stats call), never from the model's own memory.
+            try:
+                facts_line = await fetch_usage_facts_line()
+                if facts_line:
+                    turn_ctx.add_message(role="system", content=f"[{facts_line}]")
+                else:
+                    turn_ctx.add_message(
+                        role="system",
+                        content=(
+                            "[LOGGED CIGARETTE FACTS are UNAVAILABLE this turn. For any count, "
+                            "time, or gap question, call get_usage_stats and report only what it "
+                            "returns — if that also fails, say you can't pull the log right now. "
+                            "Never estimate or reconstruct numbers from conversation memory.]"
                         ),
                     )
             except Exception:
