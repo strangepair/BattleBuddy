@@ -72,4 +72,19 @@ describe('chat-screen developer-mode toggle', () => {
     // conversation, not of the mounted screen.
     expect(useSettingsStore.getState().developerMode).toBe(true);
   });
+
+  it('voice path reads the same flag at connect time (build-55 regression)', () => {
+    // Build 55 field failure: VoiceSession requested /livekit/token without
+    // devMode, so voice sessions never knew the toggle state — the voice
+    // agent's prompt documented check_dev_mode while its tool list and state
+    // knew nothing. The token request body must read the flag from the same
+    // store the text path reads at send time.
+    // Node built-ins, untyped in the RN tsconfig — jest runs in Node, where
+    // they exist. cwd is the mobile root (jest rootDir).
+    const { readFileSync } = require('fs') as { readFileSync: (p: string, enc: string) => string };
+    const { join } = require('path') as { join: (...parts: string[]) => string };
+    const cwd = (process as unknown as { cwd(): string }).cwd();
+    const source = readFileSync(join(cwd, 'src/components/session/VoiceSession.tsx'), 'utf-8');
+    expect(source).toContain('devMode: useSettingsStore.getState().developerMode');
+  });
 });

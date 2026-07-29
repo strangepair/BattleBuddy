@@ -128,6 +128,24 @@ async def battlebuddy_session(ctx: agents.JobContext):
             super().__init__(instructions=system_prompt)
 
         @function_tool()
+        async def check_dev_mode(self):
+            """Report whether this conversation is in developer mode (the DEV toggle on the chat screen). Always call this whenever the user mentions dev mode / developer mode or asks to create a PR, file a build request, or ship a product change — verify the real state instead of assuming it."""
+            # The toggle state rides on the /livekit/token request and reaches us
+            # via dispatch metadata, so it is fixed for this voice connection —
+            # flipping the toggle takes effect on the next connect (text turns
+            # pick it up immediately).
+            on = dispatch_meta.get("devMode", False) is True
+            print(f"[Agent] check_dev_mode for {user_id}: {on}")
+            return json.dumps({
+                "dev_mode": on,
+                "meaning": (
+                    "Developer mode is ON: this conversation is a developer session. It is being captured into the dev pipeline as product requests; feature/PR/build asks are pipeline input."
+                    if on else
+                    "Developer mode is OFF: this is a normal BattleBuddy companion conversation. If the user wants to create a PR or file a build request, tell them to flip the DEV toggle on the chat screen first — nothing is captured while it is off."
+                ),
+            })
+
+        @function_tool()
         async def get_usage_stats(self):
             """Get the user's deterministic cigarette/usage counts, gaps between cigarettes, and averages. Always call this for any numeric usage question instead of counting manually."""
             try:

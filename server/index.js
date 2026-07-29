@@ -30,6 +30,7 @@ import {
   COMMITMENT_EXTRACTION_PROMPT, AUTO_DELIVER_MIN_CONFIDENCE,
 } from './commitments.js';
 import { toCachedSystemBlocks } from './promptCache.js';
+import { checkDevModeToolResult, devModeStatusBlock } from './devMode.js';
 import { handleDevPipeline, runDevBuildWorker } from './devPipeline.js';
 import { jsonrepair } from 'jsonrepair';
 
@@ -248,6 +249,10 @@ function buildSystemPrompt({
   if (devMode) {
     prompt = prompt + '\n\n## Developer Session\nYou are currently speaking with the BattleBuddy developer. This is not a live user coaching session. When the developer shares product feedback, feature ideas, or bug observations, acknowledge them naturally and conversationally (e.g. "Good callout, I\'ll note that.") rather than treating them as personal habit-coaching topics. This conversation is being captured into the dev pipeline as product requests. If asked whether dev mode is on, confirm with the check_dev_mode tool rather than from memory. All safety protocols and hard limits remain fully in effect.';
   }
+  // Stated in BOTH states — OFF-by-absence let stale conversation history keep
+  // the model believing dev mode was on after the toggle flipped off. Appended
+  // below "## Runtime context", so it lives in the uncached half (promptCache).
+  prompt = prompt + devModeStatusBlock(devMode);
 
   // Admin-console injections (read fresh per turn, same hot-reload contract
   // as the prompt file): directives above the persona, resources at the end.
@@ -799,17 +804,7 @@ async function executeToolUse(toolUse, userId, timezone = DEFAULT_TZ, requestCon
   if (toolUse.name === 'check_dev_mode') {
     // Reports the devMode flag the client sent with THIS request — the state
     // of the chat screen's DEV toggle, not anything persisted server-side.
-    const on = requestContext.devMode === true;
-    return {
-      type: 'tool_result',
-      tool_use_id: toolUse.id,
-      content: JSON.stringify({
-        dev_mode: on,
-        meaning: on
-          ? 'Developer mode is ON: this conversation is a developer session. It is being captured into the dev pipeline as product requests; feature/PR/build asks are pipeline input.'
-          : 'Developer mode is OFF: this is a normal BattleBuddy companion conversation. If the user wants to create a PR or file a build request, tell them to flip the DEV toggle on the chat screen first — nothing is captured while it is off.',
-      }),
-    };
+    return checkDevModeToolResult(toolUse.id, requestContext);
   }
 
   if (toolUse.name === 'recall_conversation') {
