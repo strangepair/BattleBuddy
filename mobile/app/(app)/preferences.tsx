@@ -86,17 +86,18 @@ export default function PreferencesScreen() {
               </View>
               <Text style={styles.rowValue}>{developerMode ? 'ON' : 'OFF'}</Text>
             </View>
-            {developerMode && (
-              <TouchableOpacity
-                style={styles.row}
-                onPress={() => router.push('/dev')}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.rowIcon}>📦</Text>
-                <Text style={styles.rowLabel}>Build pipeline (Dev)</Text>
-                <Text style={styles.rowChevron}>›</Text>
-              </TouchableOpacity>
-            )}
+            {/* Always reachable: the dashboard is a read-only view of recorded
+                build requests — the toggle only switches the conversation mode,
+                so verification must not depend on it. */}
+            <TouchableOpacity
+              style={styles.row}
+              onPress={() => router.push('/dev')}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.rowIcon}>📦</Text>
+              <Text style={styles.rowLabel}>Build pipeline (Dev)</Text>
+              <Text style={styles.rowChevron}>›</Text>
+            </TouchableOpacity>
           </>
         )}
 
