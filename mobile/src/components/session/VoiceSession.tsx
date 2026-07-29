@@ -10,6 +10,7 @@ import { RoomEvent, type TranscriptionSegment, type Participant } from 'livekit-
 import { ApiConfig } from '../../config';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useAuthStore } from '../../stores/authStore';
+import { useSettingsStore } from '../../stores/settingsStore';
 
 // The invisible half of the unified dock's audio toggle: mounting this
 // component connects full-duplex LiveKit voice into the SAME session store
@@ -74,6 +75,9 @@ export default function VoiceSession({ muted, onAudioLevel, onError }: VoiceSess
             timezone: (() => {
               try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return 'America/Chicago'; }
             })(),
+            // Read at connect time, same as the text path reads it at send
+            // time — the voice agent holds it for the life of this connection.
+            devMode: useSettingsStore.getState().developerMode,
           }),
         });
         if (!res.ok) throw new Error(`Token request failed: ${res.status}`);
