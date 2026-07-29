@@ -29,6 +29,7 @@ import VoiceBand from '../../src/components/session/VoiceBand';
 import { useSessionStore } from '../../src/stores/sessionStore';
 import { useSettingsStore } from '../../src/stores/settingsStore';
 import { useAuthStore } from '../../src/stores/authStore';
+import { FeatureFlags } from '../../src/config';
 import { useSessionChat } from '../../src/hooks/useSessionChat';
 import { useEngagementEngine } from '../../src/services/engagementEngine';
 import { fetchUserProfile } from '../../src/services/profileBuilder';
@@ -56,8 +57,10 @@ const JOURNEY_RE = /(how am i doing|journey|progress|show me|reflect)/i;
 
 // Tab order for the horizontal swipe (Phase 1a): left/right moves one view.
 // Deliberately static: builds 50–53 crashed while developer mode could add a
-// fourth page to this pager at runtime. Dev UI lives on the /dev screen now;
-// nothing on this screen may vary with developerMode.
+// fourth page to this pager at runtime. The dock's DEV toggle may only vary
+// PROPS (icon glyph, style, placeholder) with developerMode — never this
+// pager's children, the SegBar segments, or anything inside SessionHeader.
+// CI's launch gate (src/__tests__/launch-gate.test.tsx) enforces this.
 const VIEW_ORDER: SessionView[] = ['home', 'chat', 'content'];
 
 // The One Conversation surface: one screen, one stream, three views over it.
@@ -245,6 +248,20 @@ export default function SessionScreen() {
   const hand = useSettingsStore((s) => s.hand);
   const switchMode = useSessionStore((s) => s.switchMode);
 
+  // Developer mode: flips the CONVERSATION into a dev session (the devMode
+  // flag rides on every chat turn — the agent switches persona server-side
+  // and the transcript is captured into the build pipeline) and back to
+  // companion mode when off. A plain, non-animated dock button on purpose:
+  // it changes only its own icon/style/placeholder, never the screen's
+  // structure — the two launch-crash triggers from builds 50–53 were a
+  // control inside the animated header and a dev-dependent pager child.
+  const developerMode = useSettingsStore((s) => s.developerMode);
+  const setDeveloperMode = useSettingsStore((s) => s.setDeveloperMode);
+  const toggleDevMode = useCallback(() => {
+    Haptics.selectionAsync().catch(() => {});
+    setDeveloperMode(!developerMode);
+  }, [developerMode, setDeveloperMode]);
+
   // Phase 1a: horizontal swipe between views — a native PagerView, which is
   // built to page horizontally over vertically-scrolling children (a raw
   // Pan gesture loses the touch to the panes' own scroll recognizers).
@@ -331,6 +348,27 @@ export default function SessionScreen() {
           <Ionicons name={muted ? 'mic-off' : 'mic-outline'} size={19} color={Colors.textPrimary} />
         </TouchableOpacity>
       )}
+      {/* developerModeAvailable is a build-time constant, so this render is
+          runtime-invariant; toggling only swaps the icon glyph and style. */}
+      {FeatureFlags.developerModeAvailable && (
+        <TouchableOpacity
+          style={[styles.dockBtn, developerMode && styles.devOnBtn]}
+          onPress={toggleDevMode}
+          activeOpacity={0.7}
+          accessibilityLabel={
+            developerMode
+              ? 'Developer mode on — switch back to companion mode'
+              : 'Developer mode off — switch to developer mode'
+          }
+          accessibilityState={{ selected: developerMode }}
+        >
+          <Ionicons
+            name={developerMode ? 'construct' : 'construct-outline'}
+            size={19}
+            color={Colors.textPrimary}
+          />
+        </TouchableOpacity>
+      )}
     </>
   );
 
@@ -394,7 +432,7 @@ export default function SessionScreen() {
             <TextInput
               ref={inputRef}
               style={styles.input}
-              placeholder="Talk to Buddy…"
+              placeholder={developerMode ? 'DEV MODE — tell Buddy what to build…' : 'Talk to Buddy…'}
               placeholderTextColor={Colors.textTertiary}
               value={input}
               onChangeText={setInput}
@@ -467,6 +505,9 @@ const styles = StyleSheet.create({
   },
   audioOnBtn: {
     backgroundColor: Colors.stateIdle,
+  },
+  devOnBtn: {
+    backgroundColor: Colors.coral,
   },
   mutedBtn: {
     backgroundColor: Colors.error,

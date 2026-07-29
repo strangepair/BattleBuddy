@@ -1,4 +1,4 @@
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Switch } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
 import { useAuthStore } from '../../src/stores/authStore';
@@ -10,7 +10,6 @@ export default function PreferencesScreen() {
   const user = useAuthStore((s) => s.user);
   const signOut = useAuthStore((s) => s.signOut);
   const developerMode = useSettingsStore((s) => s.developerMode);
-  const setDeveloperMode = useSettingsStore((s) => s.setDeveloperMode);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -66,11 +65,13 @@ export default function PreferencesScreen() {
           <Text style={[styles.rowLabel, styles.destructive]}>Sign out</Text>
         </TouchableOpacity>
 
-        {/* The dev toggle lives HERE, on a plain ScrollView screen, on purpose.
-            Builds 50–53 all crashed at launch while a dev control sat inside
-            SessionHeader / the session screen's PagerView — the one surface
-            that mixes an infinite reanimated loop with screen snapshotting.
-            This screen has neither. Don't move the toggle back there. */}
+        {/* The dev-mode TOGGLE lives on the chat screen's dock (session.tsx)
+            per product direction — as a plain non-animated dock button that
+            varies only its own props, which the CI launch gate
+            (src/__tests__/launch-gate.test.tsx) enforces. The builds 50–53
+            lesson still stands: no control may enter SessionHeader's animated
+            subtree, and the session screen's STRUCTURE must stay
+            dev-invariant. This screen keeps the pipeline dashboard entry. */}
         {FeatureFlags.developerModeAvailable && (
           <>
             <Text style={[styles.sectionHeader, styles.sectionGap]}>DEVELOPER</Text>
@@ -79,16 +80,11 @@ export default function PreferencesScreen() {
               <View style={styles.rowTextCol}>
                 <Text style={styles.rowLabel}>Developer mode</Text>
                 <Text style={styles.rowHint}>
-                  Records this conversation and turns it into build requests that
-                  ship automatically.
+                  Toggle with the wrench button on the chat screen. When on, the
+                  conversation becomes build-pipeline input.
                 </Text>
               </View>
-              <Switch
-                value={developerMode}
-                onValueChange={setDeveloperMode}
-                accessibilityLabel="Developer mode"
-                trackColor={{ false: Colors.surfaceBorder, true: Colors.coral }}
-              />
+              <Text style={styles.rowValue}>{developerMode ? 'ON' : 'OFF'}</Text>
             </View>
             {developerMode && (
               <TouchableOpacity

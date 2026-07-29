@@ -112,3 +112,38 @@ test('devMode is forwarded in the /livekit/token route and included in agent dis
     'the agent dispatch metadata must include the devMode field'
   );
 });
+
+test('check_dev_mode tool is wired end to end', () => {
+  // The agent is instructed (in the prompt) to verify dev-mode state via the
+  // tool whenever the user mentions dev mode + creating a PR. That only works
+  // if all four layers agree: tool declared, executor handles it, the turn
+  // loop threads the request's devMode down, and the prompt documents it.
+  assert.ok(
+    indexSource.includes("name: 'check_dev_mode'"),
+    'AGENT_TOOLS must declare check_dev_mode'
+  );
+  assert.ok(
+    indexSource.includes("toolUse.name === 'check_dev_mode'"),
+    'executeToolUse must handle check_dev_mode'
+  );
+  assert.ok(
+    indexSource.includes('executeToolUse(toolUse, effectiveUserId, timezone, requestContext)'),
+    'the tool loop must pass the request context (devMode) to executeToolUse'
+  );
+  const turnRouteStart = indexSource.indexOf("req.url === '/session/turn'");
+  const turnRouteEnd = indexSource.indexOf("req.url === '/livekit/token'");
+  const turnSource = indexSource.slice(turnRouteStart, turnRouteEnd);
+  assert.ok(
+    turnSource.includes('{ devMode: devMode === true }'),
+    '/session/turn must hand the request devMode to streamTextTurn'
+  );
+  assert.ok(
+    template.includes('`check_dev_mode()`'),
+    'the prompt tools section must document check_dev_mode'
+  );
+  assert.ok(
+    /check_dev_mode\(\)`[^\n]*(dev mode|developer mode)/i.test(template) &&
+      /check_dev_mode\(\)`[^\n]*PR/.test(template),
+    'the prompt must instruct checking the tool when the user mentions dev mode / creating a PR'
+  );
+});
