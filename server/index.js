@@ -20,7 +20,7 @@ import { analyzeAndUpdate, buildProfileSummary, buildLifeArchitectureSummary, bu
 import { handleAdminConsole } from './admin-api.js';
 import { runDesignLoop } from './agentDesignLoop.js';
 import { embedAndStore, retrieveRelevant, getPromotedMemories, recordRecalls, isConfigured as isVectorConfigured } from './vectorStore.js';
-import { getActiveFacts, getFactsByStatus, insertFact, activateFact, rejectFact, listKeys as listFactKeys, warmFactCache } from './factStore.js';
+import { getActiveFacts, getFactsByStatus, insertFact, activateFact, rejectFact, listKeys as listFactKeys, warmFactCache, getActiveFactsCached, lookupFact } from './factStore.js';
 import { renderMemoryDoc } from './memoryDoc.js';
 import { deriveFactsFromProfile, buildSonnetBackfillPrompt, groundSonnetProposals } from './factBackfill.js';
 import { runGateCycle, readGateLog } from './factGate.js';
@@ -79,6 +79,25 @@ const client = new Anthropic();
 // true) once the Phase-0 backfill audit has landed, so the shadow period
 // starts against an audited baseline rather than an empty store.
 const FACTS_SHADOW_WRITE = process.env.FACTS_SHADOW_WRITE === 'true';
+
+// ─── Phase 2 read cutover (docs/12 PR 3) ────────────────────────────────────
+// When ON, the canonical memory document fills {{profile}} (and replaces the
+// promoted-memories tier) on both the text and voice paths. OFF by default —
+// gated on Mike approving his Phase-0 audit document. Rollback = unset flag.
+const MEMORY_FACTS_ENABLED = process.env.MEMORY_FACTS_ENABLED === 'true';
+
+/**
+ * The memory document for injection, or null to fall back to the profile
+ * blob (flag off, or no active facts yet — a new user's empty doc must not
+ * shadow a legit client-provided profile while both systems dual-run).
+ * Sync read off the warmed cache: same latency shape as the blob render.
+ */
+function buildFactsProfile(rawUserId, name) {
+  if (!MEMORY_FACTS_ENABLED) return null;
+  const facts = getActiveFactsCached(rawUserId);
+  if (!facts.length) return null;
+  return renderMemoryDoc(facts, { name: name || 'this person' });
+}
 
 function maybeShadowWriteFacts(rawUserId, updates, messages, sessionId = null) {
   if (!FACTS_SHADOW_WRITE || !updates) return;
@@ -1243,6 +1262,14 @@ const server = createServer(async (req, res) => {
     const userId = remainder.slice(0, slashIdx);
     const field = remainder.slice(slashIdx + 1);
     try {
+      // Canonical facts answer first (key, category, or slug fragment) once
+      // the read flag is on; the profile blob remains the fallback while the
+      // two systems dual-run.
+      const factHit = MEMORY_FACTS_ENABLED ? lookupFact(userId, field) : null;
+      if (factHit) {
+        res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ field, value: factHit.facts, source: 'facts', match: factHit.match }));
+      }
       const value = lookupProfileField(userId, field);
       res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ field, value }));
@@ -1274,6 +1301,10 @@ const server = createServer(async (req, res) => {
       const agentProfile = loadProfile(effectiveUserId);
       const sessionContext = buildSessionContext(agentProfile);
 
+      // Phase 2 read cutover: the canonical memory document replaces both the
+      // blob-rendered profile AND the promoted tier when the flag is on.
+      const factsProfile = buildFactsProfile(effectiveUserId, agentProfile?.name);
+
       // Pull memories relevant to what the user just said (bounded at 800ms
       // so retrieval can never delay the first token past budget).
       const lastUserMessage = [...(messages || [])].reverse().find(m => m.role === 'user')?.content || '';
@@ -1281,7 +1312,7 @@ const server = createServer(async (req, res) => {
       // independent, so running them in series would double the worst case.
       const [relevantMemories, promotedMemories] = await Promise.all([
         fetchRelevantMemories(resolveUserId(effectiveUserId), lastUserMessage, timezone),
-        fetchPromotedMemories(effectiveUserId),
+        factsProfile ? Promise.resolve(null) : fetchPromotedMemories(effectiveUserId),
       ]);
       const lastEventAwareness = await buildLastEventAwareness(effectiveUserId, timezone);
 
@@ -1290,7 +1321,7 @@ const server = createServer(async (req, res) => {
       const sessionMemory = sessionId ? midSessionSummaries.get(sessionId)?.summary : null;
 
       const systemPrompt = buildSystemPrompt({
-        profile: finalProfile,
+        profile: factsProfile || finalProfile,
         triggerContext: [trigger_context ? JSON.stringify(trigger_context) : null, lastEventAwareness].filter(Boolean).join(' ') || undefined,
         recentHistory: recent_history || messages?.slice(-6).map(m => `${m.role}: ${m.content}`).join('\n'),
         timezone,
@@ -1383,15 +1414,20 @@ const server = createServer(async (req, res) => {
       const sessionContext = buildSessionContext(agentProfile);
       const lastEventAwareness = await buildLastEventAwareness(effectiveUserId, timezone);
 
+      // Phase 2: with the flag on, voice finally gets full canonical memory
+      // at greeting time — the document needs no query, which is exactly what
+      // the greeting lacked. Falls back to the promoted tier otherwise.
+      const factsProfile = buildFactsProfile(effectiveUserId, agentProfile?.name);
+
       // The promoted tier is the only memory this path has. Voice is where the
       // greeting happens, and a greeting has no user message to retrieve
       // against — which is exactly why it read as though BB had never met the
       // person. relevantMemories and sessionMemory stay omitted here on
       // purpose: both need a conversation that hasn't started yet.
-      const promotedMemories = await fetchPromotedMemories(effectiveUserId);
+      const promotedMemories = factsProfile ? null : await fetchPromotedMemories(effectiveUserId);
 
       const voiceSystemPrompt = buildSystemPrompt({
-        profile: finalProfile,
+        profile: factsProfile || finalProfile,
         triggerContext: [triggerContext ? JSON.stringify(triggerContext) : null, lastEventAwareness].filter(Boolean).join(' ') || undefined,
         recentHistory: priorMessages || recentHistory || undefined,
         timezone,
@@ -1420,7 +1456,11 @@ const server = createServer(async (req, res) => {
       // to anchor on, stripped of its "- [type] " prefix.
       const promotedFact = promotedMemories
         ? promotedMemories.split('\n')[0].replace(/^-\s*(\[[^\]]*\]\s*)?/, '').trim() || null
-        : null;
+        // Facts mode: anchor the greeting on a durable motivation fact — the
+        // user's own why is the strongest thing to walk in carrying.
+        : (factsProfile
+          ? (getActiveFactsCached(effectiveUserId).find(f => f.category === 'motivation')?.value || null)
+          : null);
       const hints = agentProfile?.next_session_hints || [];
 
       // A due inferred commitment (Phase 4, off unless COMMITMENTS_ENABLED)
@@ -2460,9 +2500,11 @@ Return ONLY the JSON object, no markdown, no explanation.`;
         proposed,
         rendered: {
           active_doc: renderMemoryDoc(active, { name: profile.name || 'this person' }),
+          // Unbudgeted on purpose: an accuracy audit must show every fact.
+          // Only the prompt injection path pays the 12K budget.
           audit_preview: renderMemoryDoc(
             [...active, ...proposed.map(f => ({ ...f, status: 'active' }))],
-            { name: profile.name || 'this person' }
+            { name: profile.name || 'this person', budget: Infinity }
           ),
         },
       }));
