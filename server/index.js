@@ -35,6 +35,7 @@ import {
 import { toCachedSystemBlocks } from './promptCache.js';
 import { checkDevModeToolResult, devModeStatusBlock } from './devMode.js';
 import { handleDevPipeline, runDevBuildWorker } from './devPipeline.js';
+import { recordTextTurn, recordVoiceSessionStart, recordVoiceTranscript, sweepIdleSegments } from './devCapture.js';
 import { jsonrepair } from 'jsonrepair';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1238,6 +1239,13 @@ const server = createServer(async (req, res) => {
       // profile (resolveUserId), which would hand his history to any client
       // that omits userId (e.g. a fresh install before auth hydration).
       const effectiveUserId = userId || `anon-${Date.now()}`;
+
+      // Server-side dev-mode capture: accumulate dev turns / flush on the
+      // toggle's ON→OFF transition. Fire-and-forget, never delays the turn.
+      recordTextTurn({ anthropic: client, supabase, resolveUserId }, {
+        userId: effectiveUserId, sessionId, messages, devMode: devMode === true,
+      });
+
       const contextProfile = buildProfileSummary(effectiveUserId);
       const finalProfile = (contextProfile && !contextProfile.includes('New user'))
         ? contextProfile
@@ -1340,6 +1348,13 @@ const server = createServer(async (req, res) => {
       // Anonymous fallback must not inherit the founder's profile via the
       // 'default' alias (see /session/turn note).
       const effectiveUserId = identity || `anon-${Date.now()}`;
+
+      // Server-side dev-mode capture: a dev-mode voice session opens a segment
+      // here; the agent's /context/analyze posts fill it (see devCapture.js).
+      recordVoiceSessionStart({ anthropic: client, supabase, resolveUserId }, {
+        userId: effectiveUserId, devMode: devMode === true,
+      });
+
       const contextProfile = buildProfileSummary(effectiveUserId);
       const finalProfile = (contextProfile && !contextProfile.includes('New user'))
         ? contextProfile
@@ -1973,6 +1988,13 @@ Return ONLY the JSON object, no markdown, no explanation.`;
       // this must survive even if Sonnet analysis below fails.
       try { saveRawTranscript(userId || 'default', sessionId, messages, isSessionEnd, timezone || 'America/Chicago'); }
       catch (e) { console.error('Save raw transcript error:', e.message); }
+
+      // Server-side dev-mode capture (voice): the LiveKit agent posts full
+      // transcripts here; only users with an open voice dev segment are
+      // captured. The agent's close-time post (isSessionEnd) flushes it.
+      recordVoiceTranscript({ anthropic: client, supabase, resolveUserId }, {
+        userId: userId || 'default', sessionId, messages, isSessionEnd: isSessionEnd === true,
+      });
 
       // Infer follow-up commitments from a finished session (no-op unless
       // COMMITMENTS_ENABLED). Independent of the analysis below and its own
@@ -3017,6 +3039,13 @@ setInterval(() => { runScheduledPromotion().catch(() => {}); }, PROMOTION_CHECK_
 const DEV_BUILD_CHECK_MS = 60 * 1000;
 setInterval(() => {
   runDevBuildWorker({ supabase }).catch((err) => console.error('[devPipeline] worker:', err.message));
+}, DEV_BUILD_CHECK_MS);
+
+// Dev-mode capture idle sweep: flushes dev-mode conversation segments that
+// went quiet without a toggle-off or voice session end (see devCapture.js).
+setInterval(() => {
+  const p = sweepIdleSegments({ anthropic: client, supabase, resolveUserId });
+  if (p) p.catch((err) => console.error('[devCapture] sweep:', err.message));
 }, DEV_BUILD_CHECK_MS);
 
 const PORT = process.env.PORT || 3333;
