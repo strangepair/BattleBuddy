@@ -128,3 +128,6 @@ export function normalizeOccurredAt(input, timezone = DEFAULT_TZ, now = new Date
   if (d.getTime() > now.getTime() + 2 * 60 * 1000) return nowIso;
   return d.toISOString();
 }
+
+// Deploy nudge 2026-07-29: GitHub dropped the push event for merge 4119eb7
+// (PR #27); this line exists only to re-fire the path-filtered deploy.
