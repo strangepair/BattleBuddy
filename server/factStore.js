@@ -252,6 +252,50 @@ export async function listKeys(rawUserId) {
   }
 }
 
+/**
+ * Long-tail lookup for the agent: exact key match first, then all active
+ * facts in a category. Reads the warmed cache (sync, prompt-path safe).
+ * Returns null when nothing matches so callers can fall back to the profile
+ * blob while both systems dual-run.
+ */
+export function lookupFact(rawUserId, keyOrCategory) {
+  const facts = getActiveFactsCached(rawUserId);
+  if (!facts.length || !keyOrCategory) return null;
+  const q = String(keyOrCategory).trim().toLowerCase();
+
+  const exact = facts.find(f => f.key === q);
+  if (exact) return { match: 'key', facts: [publicFact(exact)] };
+
+  if (FACT_CATEGORIES.includes(q)) {
+    const inCategory = facts.filter(f => f.category === q);
+    return inCategory.length ? { match: 'category', facts: inCategory.map(publicFact) } : null;
+  }
+
+  // Loose contains-match on key slugs ('coffee' → trigger.morning-coffee).
+  const partial = facts.filter(f => f.key.includes(q));
+  return partial.length ? { match: 'partial', facts: partial.map(publicFact) } : null;
+}
+
+function publicFact(f) {
+  return { key: f.key, value: f.value, confidence: f.confidence, detail: f.detail || undefined };
+}
+
+/** Distinct user ids holding any active facts (consolidation sweep scope). */
+export async function listFactUsers() {
+  init();
+  if (!supabase) return [];
+  try {
+    const { data, error } = await supabase
+      .from('user_facts')
+      .select('user_id')
+      .eq('status', 'active');
+    if (error) return [];
+    return [...new Set((data || []).map(r => r.user_id))];
+  } catch {
+    return [];
+  }
+}
+
 // ─── Writes ─────────────────────────────────────────────────────────────────
 
 /**
