@@ -276,6 +276,43 @@ export async function markPromoted(ids) {
   }
 }
 
+/**
+ * Tombstone episodic memories matching a phrase (the forget pipeline and,
+ * later, consolidation). Sets superseded=true — rows are kept, retrieval
+ * skips them (match_user_memories' guard, migration 013). Reversible by
+ * design: clearing the flag restores them, unlike an actual removal.
+ *
+ * @returns {number} rows tombstoned
+ */
+export async function tombstoneMemories(userId, phrase, supersedingFactId = null) {
+  init();
+  if (!supabase || !phrase || String(phrase).trim().length < 4) return 0;
+  const canonicalUserId = resolveUserId(userId);
+  try {
+    const { data, error } = await supabase
+      .from('user_memories')
+      .update({ superseded: true, superseding_fact: supersedingFactId })
+      .eq('user_id', canonicalUserId)
+      .eq('superseded', false)
+      .ilike('content', `%${String(phrase).replace(/[%_]/g, '')}%`)
+      .select('id');
+    if (error) {
+      if (error.message.includes('superseded')) {
+        console.log('[VectorStore] superseded column absent (migration 013 not applied) — skipping tombstone');
+        return 0;
+      }
+      console.error('[VectorStore] Tombstone failed:', error.message);
+      return 0;
+    }
+    const n = (data || []).length;
+    if (n) console.log(`[VectorStore] Tombstoned ${n} memories for ${canonicalUserId} (phrase: "${phrase}")`);
+    return n;
+  } catch (err) {
+    console.error('[VectorStore] Tombstone failed:', err.message);
+    return 0;
+  }
+}
+
 // ─── Commitments (Phase 4, gated behind COMMITMENTS_ENABLED) ────────────────
 
 /**

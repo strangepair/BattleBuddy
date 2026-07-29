@@ -161,9 +161,51 @@ async def battlebuddy_session(ctx: agents.JobContext):
                 print(f"[Agent] get_usage_stats failed: {e}")
                 return json.dumps({"error": str(e)})
 
+        async def _fact_tool(self, name, tool_input):
+            """Shared transport for the canonical-memory tools — one server
+            executor (factTools.js) serves text and voice so they can't drift."""
+            try:
+                async with aiohttp.ClientSession() as http:
+                    resp = await http.post(
+                        f"{SERVER_URL}/context/facts/tool",
+                        json={"userId": user_id, "name": name, "input": tool_input, "sessionId": session_id},
+                        timeout=aiohttp.ClientTimeout(total=10),
+                    )
+                    data = await resp.json()
+                    print(f"[Agent] {name} for {user_id}: {data}")
+                    return json.dumps(data)
+            except Exception as e:
+                print(f"[Agent] {name} failed: {e}")
+                return json.dumps({"error": str(e)})
+
         @function_tool()
-        async def recall_conversation(self, query: str, date: str = ""):
-            """Search past conversations with this user — full transcript history plus distilled memory entries, all dated. Use whenever the user references something discussed before ('remember when...', 'what did we talk about', 'you said...'), on any memory probe, or when past context would materially improve the response. Cite dates conservatively from what it returns. query: keywords/topics/names. date: optional YYYY-MM-DD filter."""
+        async def remember(self, category: str, statement: str, user_words: str):
+            """Save a durable fact the user just stated about themselves — situation, people, triggers, what works, reasons, preferences. category is one of: identity, quit, trigger, window, routine, coping, motivation, person, preference, watch. statement: the fact as one plain sentence. user_words: REQUIRED verbatim quote of what the user said — a fact you cannot quote is a fact you may not save. Acknowledge naturally ('noted'), never read the mechanics aloud. Not for countable events (log_event) or your own inferences."""
+            return await self._fact_tool("remember", {"category": category, "statement": statement, "user_words": user_words})
+
+        @function_tool()
+        async def correct_memory(self, key: str, new_statement: str = "", retire: bool = False):
+            """The user corrected something you know about them. Applies immediately. key: the fact's key from your memory document or lookup_fact (e.g. 'trigger.morning-coffee'). Pass new_statement with the corrected fact, or retire=true if it's simply no longer true. Acknowledge the fix in the same turn."""
+            payload = {"key": key}
+            if new_statement:
+                payload["new_statement"] = new_statement
+            if retire:
+                payload["retire"] = True
+            return await self._fact_tool("correct_memory", payload)
+
+        @function_tool()
+        async def forget(self, key_or_topic: str):
+            """The user explicitly asked you to forget something about them. Retires the fact and suppresses related past-session memories. Confirm back what was forgotten. For corrections use correct_memory instead."""
+            return await self._fact_tool("forget", {"key_or_topic": key_or_topic})
+
+        @function_tool()
+        async def lookup_fact(self, key_or_category: str):
+            """Look up stored facts about the user beyond your injected memory document — by key ('quit.reason'), category ('coping'), or fragment ('coffee'). If it returns nothing, you don't know it: say so and ask, never guess."""
+            return await self._fact_tool("lookup_fact", {"key_or_category": key_or_category})
+
+        @function_tool()
+        async def recall_episodes(self, query: str, date: str = ""):
+            """Search past conversations with this user — full transcript history plus distilled memory entries, all dated. Use whenever the user references something discussed before ('remember when...', 'what did we talk about', 'you said...'), on any memory probe, or when past context would materially improve the response. Cite dates conservatively from what it returns. For durable FACTS use your memory document or lookup_fact — this tool is for episodes and moments. query: keywords/topics/names. date: optional YYYY-MM-DD filter."""
             try:
                 params = f"userId={user_id}&query={query}"
                 if date:
@@ -174,10 +216,10 @@ async def battlebuddy_session(ctx: agents.JobContext):
                         timeout=aiohttp.ClientTimeout(total=10),
                     )
                     data = await resp.json()
-                    print(f"[Agent] recall_conversation '{query}' for {user_id}: {len(data.get('memory_entries', []))} memories, {len(data.get('transcript_excerpts', []))} excerpts")
+                    print(f"[Agent] recall_episodes '{query}' for {user_id}: {len(data.get('memory_entries', []))} memories, {len(data.get('transcript_excerpts', []))} excerpts")
                     return json.dumps(data)
             except Exception as e:
-                print(f"[Agent] recall_conversation failed: {e}")
+                print(f"[Agent] recall_episodes failed: {e}")
                 return json.dumps({"error": str(e)})
 
         @function_tool()
@@ -226,22 +268,6 @@ async def battlebuddy_session(ctx: agents.JobContext):
                     return json.dumps(data)
             except Exception as e:
                 print(f"[Agent] update_event failed: {e}")
-                return json.dumps({"error": str(e)})
-
-        @function_tool()
-        async def lookup_profile_field(self, field: str):
-            """Look up a stored fact about the user. Use before answering factual questions about their history, location, routine, triggers, quit date, family, or any profile field. If the result is empty, say 'I don't have that recorded yet' — never guess."""
-            try:
-                async with aiohttp.ClientSession() as http:
-                    resp = await http.get(
-                        f"{SERVER_URL}/context/field/{user_id}/{field}",
-                        timeout=aiohttp.ClientTimeout(total=10),
-                    )
-                    data = await resp.json()
-                    print(f"[Agent] Profile field '{field}' for {user_id}: {data}")
-                    return json.dumps(data)
-            except Exception as e:
-                print(f"[Agent] lookup_profile_field failed: {e}")
                 return json.dumps({"error": str(e)})
 
         async def on_user_turn_completed(self, turn_ctx, new_message):

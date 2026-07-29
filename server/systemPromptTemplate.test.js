@@ -134,8 +134,8 @@ test('check_dev_mode tool is wired end to end', () => {
   const turnRouteEnd = indexSource.indexOf("req.url === '/livekit/token'");
   const turnSource = indexSource.slice(turnRouteStart, turnRouteEnd);
   assert.ok(
-    turnSource.includes('{ devMode: devMode === true }'),
-    '/session/turn must hand the request devMode to streamTextTurn'
+    turnSource.includes('{ devMode: devMode === true, sessionId }'),
+    '/session/turn must hand the request devMode (and sessionId, for fact-tool evidence) to streamTextTurn'
   );
   assert.ok(
     template.includes('`check_dev_mode()`'),
