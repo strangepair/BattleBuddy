@@ -5,3 +5,8 @@ livekit-plugins-silero==1.6.2
 livekit-plugins-turn-detector==1.6.2
 python-dotenv==1.2.2
 aiohttp==3.11.18
+# IANA timezone database. python:3.11-slim ships NO OS tzdata, so without this
+# ZoneInfo("America/Chicago") raises and local_now() has no real zone to use —
+# which is how the per-turn "current local time" injection became the
+# container's UTC clock stated to users as their local time.
+tzdata==2025.2

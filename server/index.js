@@ -37,6 +37,7 @@ import {
   COMMITMENT_EXTRACTION_PROMPT, AUTO_DELIVER_MIN_CONFIDENCE,
 } from './commitments.js';
 import { toCachedSystemBlocks } from './promptCache.js';
+import { DEFAULT_TZ, tzOffsetString, formatLocalTime, buildSessionContext as buildSessionContextLine, normalizeOccurredAt } from './timeContext.js';
 import { checkDevModeToolResult, devModeStatusBlock } from './devMode.js';
 import { handleDevPipeline, runDevBuildWorker } from './devPipeline.js';
 import { recordTextTurn, recordVoiceSessionStart, recordVoiceTranscript, sweepIdleSegments } from './devCapture.js';
@@ -132,12 +133,11 @@ const supabase = (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_KEY)
 // updates go live without a redeploy)
 const systemPromptPath = resolve(__dirname, 'prompts', 'system.battlebuddy.md');
 
-const DEFAULT_TZ = 'America/Chicago';
-
 // ─── Timezone helpers ────────────────────────────────────────────────────────
 // bb_events stores UTC instants; "today" must be computed in the *user's* day,
 // not the server's (Railway runs in UTC — a 7 PM Central cigarette is
-// tomorrow's date in UTC).
+// tomorrow's date in UTC). DEFAULT_TZ / tzOffsetString / formatLocalTime /
+// normalizeOccurredAt live in timeContext.js so they are testable under TZ=UTC.
 
 function localDateInTz(timezone = DEFAULT_TZ, at = new Date()) {
   try {
@@ -146,18 +146,6 @@ function localDateInTz(timezone = DEFAULT_TZ, at = new Date()) {
     }).format(at);
   } catch {
     return at.toISOString().slice(0, 10);
-  }
-}
-
-function tzOffsetString(timezone = DEFAULT_TZ, at = new Date()) {
-  try {
-    const name = new Intl.DateTimeFormat('en-US', { timeZone: timezone, timeZoneName: 'longOffset' })
-      .formatToParts(at).find(p => p.type === 'timeZoneName')?.value || 'GMT+00:00';
-    const m = name.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/);
-    if (!m) return '+00:00';
-    return `${m[1]}${m[2].padStart(2, '0')}:${m[3] || '00'}`;
-  } catch {
-    return '+00:00';
   }
 }
 
@@ -183,28 +171,6 @@ function localTimeToIso(dateStr, timeStr, timezone = DEFAULT_TZ) {
   return isNaN(d.getTime()) ? null : d.toISOString();
 }
 
-function formatLocalTime(timezone) {
-  try {
-    const now = new Date();
-    const formatter = new Intl.DateTimeFormat('en-US', {
-      timeZone: timezone || 'America/Chicago',
-      weekday: 'long',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    });
-    const dateFormatter = new Intl.DateTimeFormat('en-US', {
-      timeZone: timezone || 'America/Chicago',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    });
-    return `${formatter.format(now)}, ${dateFormatter.format(now)}`;
-  } catch {
-    return new Date().toLocaleString();
-  }
-}
-
 // Render a stored UTC instant as a human-readable time IN THE USER'S TIMEZONE.
 // Everything in bb_events is UTC; the model must never see a bare `...Z` string
 // or it reports UTC clock times back to the user. Attach this alongside every
@@ -225,37 +191,13 @@ function formatEventTimeLocal(iso, timezone = DEFAULT_TZ) {
 /**
  * Build the session context string for the {{session_context}} placeholder.
  * Tells the agent how long since last session and whether to skip greeting.
+ * Lives in timeContext.js (testable under TZ=UTC); the gap phrasing is shared
+ * with the voice greeting so the two never drift. The timezone matters: the
+ * old inline formatter omitted it and rendered the server's UTC clock, which
+ * the model repeated to the user as a remembered local time.
  */
-function buildSessionContext(profile) {
-  if (!profile || !profile.last_session_at) {
-    return 'This is the first session with this user.';
-  }
-
-  const lastAt = new Date(profile.last_session_at).getTime();
-  const now = Date.now();
-  const gapMinutes = Math.floor((now - lastAt) / 60000);
-  const gapDays = Math.floor(gapMinutes / 1440);
-
-  // Shared with the voice greeting so the two phrasings never drift.
-  const gapStr = sessionGapPhrase(lastAt, now);
-
-  // Format last session time
-  let lastTimeStr = '';
-  try {
-    lastTimeStr = new Intl.DateTimeFormat('en-US', {
-      hour: 'numeric', minute: '2-digit', hour12: true,
-    }).format(new Date(profile.last_session_at));
-  } catch {}
-
-  let context = `Last session: ${gapStr}`;
-  if (lastTimeStr && gapDays >= 1) context += ` (at ${lastTimeStr})`;
-  context += '.';
-
-  if (gapMinutes < 30) {
-    context += ' This is a continuation of the same conversation — skip the greeting and pick up where you left off.';
-  }
-
-  return context;
+function buildSessionContext(profile, timezone) {
+  return buildSessionContextLine(profile, timezone, Date.now(), sessionGapPhrase);
 }
 
 /**
@@ -282,7 +224,8 @@ function buildSystemPrompt({
   devMode = false,
 }) {
   const localTime = formatLocalTime(timezone);
-  const timeContext = `User's local time: ${localTime}.` +
+  const timeContext = `Current local time for the user: ${localTime} (timezone: ${timezone || DEFAULT_TZ}). ` +
+    'This is the ONLY source of the current time. It is already the user\'s local clock — never convert it, never apply a UTC offset, and never reuse a time stated earlier in this conversation or a past session.' +
     (triggerContext ? ` ${triggerContext}` : '');
   const systemPromptTemplate = readFileSync(systemPromptPath, 'utf-8');
   let prompt = systemPromptTemplate
@@ -504,7 +447,7 @@ const AGENT_TOOLS = [
         },
         occurred_at: {
           type: 'string',
-          description: "ISO 8601 timestamp when the event actually occurred (not when you're logging it). Use current time if not specified by the user. If user says 'an hour ago' or 'last night', calculate the correct timestamp.",
+          description: "OMIT THIS ENTIRELY for events happening right now — the server stamps the authoritative current time; never compute 'now' yourself. Only pass it for back-dated events ('an hour ago', 'last night'), as the user's LOCAL wall-clock time, e.g. '2026-07-29T16:43:00' — no timezone conversion, no UTC offset; the server interprets it in the user's timezone.",
         },
         notes: {
           type: 'string',
@@ -538,7 +481,7 @@ const AGENT_TOOLS = [
           description: "How this event is being logged. Default 'conversation' for a normal live exchange; use 'retroactive' when the user is describing something from well in the past (back-dating).",
         },
       },
-      required: ['event_type', 'occurred_at'],
+      required: ['event_type'],
     },
   },
   {
@@ -563,7 +506,7 @@ const AGENT_TOOLS = [
         },
         occurred_at: {
           type: 'string',
-          description: 'Corrected ISO 8601 timestamp (for update only)',
+          description: "Corrected timestamp (for update only), as the user's LOCAL wall-clock time, e.g. '2026-07-29T16:43:00' — no timezone conversion, no UTC offset; the server interprets it in the user's timezone.",
         },
         notes: {
           type: 'string',
@@ -819,7 +762,7 @@ async function recallConversation(rawUserId, query, date, timezone = DEFAULT_TZ)
 }
 
 /** Shared correct/delete logic for the text tool and the voice /events/update endpoint. */
-async function updateEvent(userId, { event_id, action, event_type, occurred_at, notes, trigger, source } = {}) {
+async function updateEvent(userId, { event_id, action, event_type, occurred_at, notes, trigger, source, timezone } = {}) {
   if (!supabase) return { error: 'Event store unavailable' };
   if (!event_id || !action) return { error: 'event_id and action required' };
 
@@ -830,7 +773,9 @@ async function updateEvent(userId, { event_id, action, event_type, occurred_at, 
 
   const updates = {};
   if (event_type) updates.event_type = event_type;
-  if (occurred_at) updates.occurred_at = occurred_at;
+  // Model-authored corrections arrive as local wall-clock strings; normalize
+  // in the user's timezone so the stored instant matches what they meant.
+  if (occurred_at) updates.occurred_at = normalizeOccurredAt(occurred_at, timezone);
 
   // Metadata fields are merged, not replaced — overwriting the whole object
   // here would silently wipe a previously-set trigger/source whenever the
@@ -921,7 +866,10 @@ async function executeToolUse(toolUse, userId, timezone = DEFAULT_TZ, requestCon
       .insert({
         user_id: userId,
         event_type,
-        occurred_at,
+        // Live events get the server's clock; back-dated ones arrive as local
+        // wall-clock strings and are normalized in the user's timezone. The
+        // model never authors "now" — that's the fabrication vector.
+        occurred_at: normalizeOccurredAt(occurred_at, timezone),
         metadata,
       })
       .select('id, occurred_at')
@@ -933,13 +881,15 @@ async function executeToolUse(toolUse, userId, timezone = DEFAULT_TZ, requestCon
     return {
       type: 'tool_result',
       tool_use_id: toolUse.id,
-      content: JSON.stringify({ ok: true, id: data.id, occurred_at: data.occurred_at, event_type }),
+      // local_time is what the model may read back to the user; occurred_at
+      // stays raw UTC for reference only (same contract as get_usage_stats).
+      content: JSON.stringify({ ok: true, id: data.id, occurred_at: data.occurred_at, local_time: formatEventTimeLocal(data.occurred_at, timezone), event_type }),
     };
   }
 
   if (toolUse.name === 'update_event') {
     const { event_id, action, event_type, occurred_at, notes, trigger } = toolUse.input || {};
-    const result = await updateEvent(userId, { event_id, action, event_type, occurred_at, notes, trigger });
+    const result = await updateEvent(userId, { event_id, action, event_type, occurred_at, notes, trigger, timezone });
     return {
       type: 'tool_result',
       tool_use_id: toolUse.id,
@@ -1312,6 +1262,12 @@ const server = createServer(async (req, res) => {
       // that omits userId (e.g. a fresh install before auth hydration).
       const effectiveUserId = userId || `anon-${Date.now()}`;
 
+      // The client sends its IANA timezone with every turn; fall back to the
+      // last one persisted on the profile, then Central — never the server's
+      // own zone (Railway runs UTC, and a UTC clock stated as local is the
+      // fabricated-timestamp bug).
+      const effectiveTimezone = timezone || loadProfile(effectiveUserId)?.timezone || DEFAULT_TZ;
+
       // Server-side dev-mode capture: accumulate dev turns / flush on the
       // toggle's ON→OFF transition. Fire-and-forget, never delays the turn.
       recordTextTurn({ anthropic: client, supabase, resolveUserId }, {
@@ -1326,7 +1282,7 @@ const server = createServer(async (req, res) => {
       const lifeArchitecture = buildLifeArchitectureSummary(effectiveUserId);
       const currentGoal = buildCurrentGoal(effectiveUserId);
       const agentProfile = loadProfile(effectiveUserId);
-      const sessionContext = buildSessionContext(agentProfile);
+      const sessionContext = buildSessionContext(agentProfile, effectiveTimezone);
 
       // Phase 2 read cutover: the canonical memory document replaces both the
       // blob-rendered profile AND the promoted tier when the flag is on.
@@ -1338,10 +1294,10 @@ const server = createServer(async (req, res) => {
       // Concurrent, not sequential — both are bounded at 800ms and they are
       // independent, so running them in series would double the worst case.
       const [relevantMemories, promotedMemories] = await Promise.all([
-        fetchRelevantMemories(resolveUserId(effectiveUserId), lastUserMessage, timezone),
+        fetchRelevantMemories(resolveUserId(effectiveUserId), lastUserMessage, effectiveTimezone),
         factsProfile ? Promise.resolve(null) : fetchPromotedMemories(effectiveUserId),
       ]);
-      const lastEventAwareness = await buildLastEventAwareness(effectiveUserId, timezone);
+      const lastEventAwareness = await buildLastEventAwareness(effectiveUserId, effectiveTimezone);
 
       // Fire-and-forget — never let summarization delay this turn's first token.
       maybeSummarizeMidSession(sessionId, messages);
@@ -1351,7 +1307,7 @@ const server = createServer(async (req, res) => {
         profile: factsProfile || finalProfile,
         triggerContext: [trigger_context ? JSON.stringify(trigger_context) : null, lastEventAwareness].filter(Boolean).join(' ') || undefined,
         recentHistory: recent_history || messages?.slice(-6).map(m => `${m.role}: ${m.content}`).join('\n'),
-        timezone,
+        timezone: effectiveTimezone,
         lifeArchitecture,
         sessionContext,
         currentGoal,
@@ -1368,10 +1324,10 @@ const server = createServer(async (req, res) => {
       // % 6 === 1 fires at 7, 13, 19… slice(-20) inside analyzeAndUpdate
       // still covers everything between throttle points.
       if (messages?.length >= 7 && messages.length % 6 === 1) {
-        analyzeAndUpdate(effectiveUserId, messages, false, timezone)
+        analyzeAndUpdate(effectiveUserId, messages, false, effectiveTimezone)
           .then(updates => {
             maybeShadowWriteFacts(effectiveUserId, updates, messages, sessionId);
-            return mirrorActivityToEvents(effectiveUserId, updates, timezone);
+            return mirrorActivityToEvents(effectiveUserId, updates, effectiveTimezone);
           })
           .catch(() => {});
       }
@@ -1379,7 +1335,7 @@ const server = createServer(async (req, res) => {
       await streamTextTurn(res, systemPrompt, messages.map(m => ({
         role: m.role,
         content: m.content,
-      })), resolveUserId(effectiveUserId), timezone, { devMode: devMode === true, sessionId });
+      })), resolveUserId(effectiveUserId), effectiveTimezone, { devMode: devMode === true, sessionId });
     } catch (err) {
       console.error('Error:', err.message);
       if (!res.headersSent) {
@@ -1434,6 +1390,10 @@ const server = createServer(async (req, res) => {
         userId: effectiveUserId, devMode: devMode === true,
       });
 
+      // Same fallback chain as /session/turn: client-sent zone, then the
+      // profile's persisted zone, then Central — never the server's UTC zone.
+      const effectiveTimezone = timezone || loadProfile(effectiveUserId)?.timezone || DEFAULT_TZ;
+
       const contextProfile = buildProfileSummary(effectiveUserId);
       const finalProfile = (contextProfile && !contextProfile.includes('New user'))
         ? contextProfile
@@ -1445,8 +1405,8 @@ const server = createServer(async (req, res) => {
       const lifeArchitecture = buildLifeArchitectureSummary(effectiveUserId);
       const currentGoal = buildCurrentGoal(effectiveUserId);
       const agentProfile = loadProfile(effectiveUserId);
-      const sessionContext = buildSessionContext(agentProfile);
-      const lastEventAwareness = await buildLastEventAwareness(effectiveUserId, timezone);
+      const sessionContext = buildSessionContext(agentProfile, effectiveTimezone);
+      const lastEventAwareness = await buildLastEventAwareness(effectiveUserId, effectiveTimezone);
 
       // Phase 2: with the flag on, voice finally gets full canonical memory
       // at greeting time — the document needs no query, which is exactly what
@@ -1464,7 +1424,7 @@ const server = createServer(async (req, res) => {
         profile: factsProfile || finalProfile,
         triggerContext: [triggerContext ? JSON.stringify(triggerContext) : null, lastEventAwareness].filter(Boolean).join(' ') || undefined,
         recentHistory: priorMessages || recentHistory || undefined,
-        timezone,
+        timezone: effectiveTimezone,
         lifeArchitecture,
         sessionContext,
         currentGoal,
@@ -1541,7 +1501,7 @@ const server = createServer(async (req, res) => {
             systemPrompt: voiceSystemPrompt,
             greeting,
             userId: effectiveUserId,
-            timezone: timezone || 'America/Chicago',
+            timezone: effectiveTimezone,
             last_session_at: agentProfile?.last_session_at || null,
             devMode: devMode === true,
           }),
@@ -2234,7 +2194,7 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     let body = '';
     for await (const chunk of req) body += chunk;
     try {
-      const { userId, eventType, occurredAt, metadata } = JSON.parse(body);
+      const { userId, eventType, occurredAt, metadata, timezone } = JSON.parse(body);
       if (!userId || !eventType) {
         res.writeHead(400, { ...CORS, 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: 'userId and eventType required' }));
@@ -2244,12 +2204,16 @@ Return ONLY the JSON object, no markdown, no explanation.`;
         return res.end(JSON.stringify({ error: 'Event store not configured' }));
       }
 
+      // Mobile quick-log sends full ISO instants (passes through unchanged);
+      // the voice agent's model-authored back-dates arrive as local wall-clock
+      // strings and are normalized in the user's timezone.
+      const eventTz = timezone || loadProfile(resolveUserId(userId))?.timezone || DEFAULT_TZ;
       const { data, error } = await supabase
         .from('bb_events')
         .insert({
           user_id: resolveUserId(userId),
           event_type: eventType,
-          occurred_at: occurredAt || new Date().toISOString(),
+          occurred_at: normalizeOccurredAt(occurredAt, eventTz),
           metadata: metadata || {},
         })
         .select('id, occurred_at')
@@ -2302,9 +2266,11 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     let body = '';
     for await (const chunk of req) body += chunk;
     try {
-      const { userId, eventId, action, eventType, occurredAt, notes } = JSON.parse(body);
-      const result = await updateEvent(resolveUserId(userId || 'default'), {
+      const { userId, eventId, action, eventType, occurredAt, notes, timezone } = JSON.parse(body);
+      const resolvedId = resolveUserId(userId || 'default');
+      const result = await updateEvent(resolvedId, {
         event_id: eventId, action, event_type: eventType, occurred_at: occurredAt, notes,
+        timezone: timezone || loadProfile(resolvedId)?.timezone || DEFAULT_TZ,
       });
       res.writeHead(result.error ? 500 : 200, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify(result));
