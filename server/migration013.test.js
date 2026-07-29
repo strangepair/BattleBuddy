@@ -59,7 +59,11 @@ test('phase-0 surface is wired: backfill + review routes and the boot cache warm
   assert.ok(indexSource.includes("req.url.startsWith('/admin/facts/')"), 'review route missing');
   assert.ok(indexSource.includes("req.url === '/admin/facts/resolve'"), 'resolve route missing');
   assert.ok(indexSource.includes('warmFactCache()'), 'boot warm missing');
-  // Phase 0 is no-behavior-change: nothing on the prompt path reads facts yet.
-  assert.ok(!indexSource.includes('renderMemoryDoc') || !/buildSystemPrompt\([\s\S]{0,400}renderMemoryDoc/.test(indexSource),
-    'renderMemoryDoc must not feed buildSystemPrompt until the Phase 2 flag ships');
+  // Phase 2: prompt-path reads exist but ONLY behind the read-cutover flag,
+  // which must default OFF (gated on Mike approving the Phase-0 audit doc).
+  assert.ok(indexSource.includes("process.env.MEMORY_FACTS_ENABLED === 'true'"),
+    'read cutover must be opt-in via MEMORY_FACTS_ENABLED');
+  const fn = indexSource.slice(indexSource.indexOf('function buildFactsProfile'));
+  assert.ok(fn.slice(0, 400).includes('if (!MEMORY_FACTS_ENABLED) return null'),
+    'buildFactsProfile must bail to the profile blob when the flag is off');
 });

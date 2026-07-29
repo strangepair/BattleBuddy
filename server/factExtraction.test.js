@@ -64,7 +64,18 @@ test('shadow writes are wired into both extraction call sites behind the flag', 
     'shadow writes must be OPT-IN — off until the backfill audit lands');
   const calls = indexSource.match(/maybeShadowWriteFacts\(/g) || [];
   assert.ok(calls.length >= 3, 'expected the definition plus both call sites (/session/turn throttle and /context/analyze)');
-  // Still no prompt-path reads in Phase 1 (the Phase 0 invariant holds).
-  assert.ok(!/buildSystemPrompt\([\s\S]{0,400}renderMemoryDoc/.test(indexSource),
-    'renderMemoryDoc must not feed buildSystemPrompt until the Phase 2 flag ships');
+});
+
+test('read cutover is wired on BOTH paths, flag-gated, with promoted-tier replacement', () => {
+  const here2 = dirname(fileURLToPath(import.meta.url));
+  const indexSource = readFileSync(join(here2, 'index.js'), 'utf-8');
+
+  const factsProfileUses = indexSource.match(/buildFactsProfile\(effectiveUserId/g) || [];
+  assert.equal(factsProfileUses.length, 2, 'text (/session/turn) and voice (/livekit/token) must both build the facts profile');
+  const injections = indexSource.match(/profile: factsProfile \|\| finalProfile/g) || [];
+  assert.equal(injections.length, 2, 'both paths must inject the document with blob fallback');
+  assert.ok(indexSource.includes('factsProfile ? Promise.resolve(null) : fetchPromotedMemories'),
+    'text path must skip the promoted tier when the document is injected');
+  assert.ok(indexSource.includes('factsProfile ? null : await fetchPromotedMemories'),
+    'voice path must skip the promoted tier when the document is injected');
 });
