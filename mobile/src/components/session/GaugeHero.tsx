@@ -11,11 +11,14 @@ import { Colors } from '../../theme';
 // never a streak that shatters. In resistance the same gauge turns coral and
 // reads "holding for" — one skeleton, two phases.
 
-const W = 262;
-const H = 150;
-const R = 107;
+// Hero-scale by request: one large display of time since the last cigarette,
+// front and center — the gauge fills the dashboard width and the timer is the
+// biggest thing on the screen.
+const W = 340;
+const H = 196;
+const R = 140;
 const CX = W / 2;
-const CY = 138;
+const CY = 182;
 // Semicircle arc length ≈ π·R
 const ARC_LEN = Math.PI * R;
 
@@ -80,18 +83,18 @@ export default function GaugeHero({ phase, lastCigaretteAt, bestGapMs }: GaugeHe
           d={`M ${CX - R} ${CY} A ${R} ${R} 0 0 1 ${CX + R} ${CY}`}
           fill="none"
           stroke={Colors.surfaceBorder}
-          strokeWidth={11}
+          strokeWidth={13}
           strokeLinecap="round"
         />
         <Path
           d={`M ${CX - R} ${CY} A ${R} ${R} 0 0 1 ${CX + R} ${CY}`}
           fill="none"
           stroke={accent}
-          strokeWidth={11}
+          strokeWidth={13}
           strokeLinecap="round"
           strokeDasharray={`${ARC_LEN * progress} ${ARC_LEN}`}
         />
-        <Circle cx={mx} cy={my} r={5.5} fill={pastBest ? accent : Colors.success} />
+        <Circle cx={mx} cy={my} r={6.5} fill={pastBest ? accent : Colors.success} />
       </Svg>
       <View style={styles.num} pointerEvents="none">
         <Text style={styles.k}>{label.toUpperCase()}</Text>
@@ -101,6 +104,8 @@ export default function GaugeHero({ phase, lastCigaretteAt, bestGapMs }: GaugeHe
             resistance && { color: Colors.coral },
             gapMs == null && styles.vWaiting,
           ]}
+          numberOfLines={1}
+          adjustsFontSizeToFit
         >
           {gapMs != null ? fmtTimer(gapMs) : '0:00:00'}
         </Text>
@@ -113,38 +118,39 @@ export default function GaugeHero({ phase, lastCigaretteAt, bestGapMs }: GaugeHe
 const styles = StyleSheet.create({
   wrap: {
     width: W,
-    height: H + 14,
+    height: H + 16,
     alignSelf: 'center',
   },
   num: {
     position: 'absolute',
     left: 0,
     right: 0,
-    top: 74,
+    top: 88,
     alignItems: 'center',
   },
   k: {
-    fontSize: 9.5,
-    letterSpacing: 2.2,
+    fontSize: 11,
+    letterSpacing: 2.6,
     color: Colors.textSecondary,
     fontWeight: '700',
   },
   v: {
     fontFamily: 'Menlo',
-    fontSize: 38,
+    fontSize: 56,
     fontWeight: '800',
     color: Colors.textPrimary,
     fontVariant: ['tabular-nums'],
-    letterSpacing: -0.5,
+    letterSpacing: -1,
+    maxWidth: W - 44,
   },
   vWaiting: {
     opacity: 0.35,
   },
   d: {
-    fontSize: 10.5,
+    fontSize: 11.5,
     color: Colors.textSecondary,
-    marginTop: 2,
+    marginTop: 3,
     textAlign: 'center',
-    paddingHorizontal: 8,
+    paddingHorizontal: 10,
   },
 });

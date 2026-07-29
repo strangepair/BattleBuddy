@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
+import { router } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import GaugeHero from './GaugeHero';
 import type { SessionPhase } from './SessionHeader';
@@ -214,6 +215,26 @@ export default function HomeDashboard({
           />
         </View>
       )}
+
+      {/* the day calendar — where the moments cluster, hour by hour */}
+      <TouchableOpacity
+        style={styles.dayLink}
+        activeOpacity={0.85}
+        onPress={() => {
+          Haptics.selectionAsync().catch(() => {});
+          router.push('/day-calendar');
+        }}
+        accessibilityLabel="Open your day, hour by hour"
+      >
+        <Text style={styles.watchIcon}>📅</Text>
+        <View style={styles.watchBody}>
+          <Text style={styles.dayLinkTitle}>Your day, hour by hour</Text>
+          <Text style={styles.dayLinkSub}>
+            Every logged moment on today's clock — see where they cluster.
+          </Text>
+        </View>
+        <Text style={styles.dayLinkArrow}>→</Text>
+      </TouchableOpacity>
 
       {/* watched window (observation) / the wave (resistance) */}
       {!resistance ? (
@@ -609,6 +630,33 @@ const styles = StyleSheet.create({
     color: Colors.textSecondary,
     marginTop: 2,
     lineHeight: 12,
+  },
+  dayLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'rgba(35,35,38,0.92)',
+    borderWidth: 1,
+    borderColor: Colors.surfaceBorder,
+    borderRadius: 13,
+    paddingVertical: 11,
+    paddingHorizontal: 13,
+  },
+  dayLinkTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  dayLinkSub: {
+    fontSize: 10.5,
+    color: Colors.textSecondary,
+    marginTop: 2,
+    lineHeight: 14,
+  },
+  dayLinkArrow: {
+    fontSize: 16,
+    color: Colors.stateIdle,
+    fontWeight: '700',
   },
   watch: {
     flexDirection: 'row',

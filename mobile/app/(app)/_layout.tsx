@@ -188,6 +188,9 @@ export default function AppLayout() {
         <Stack.Screen name="voice-settings" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="insights" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="dev" options={{ animation: 'slide_from_right' }} />
+        {/* The hour-by-hour day calendar — a separate screen by design: the
+            session screen's pager/child structure must stay invariant. */}
+        <Stack.Screen name="day-calendar" options={{ animation: 'slide_from_right' }} />
         {/* Hub destinations animate themselves via EdgeEntrance, sliding in
             from their fixed edge relative to home — native transition is
             disabled here so the two don't stack. */}
