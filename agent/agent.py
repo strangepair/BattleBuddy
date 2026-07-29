@@ -60,6 +60,19 @@ VOICE_CONFIG_PATH = _base / "server" / "voice-config.json"
 DEFAULT_VOICE = "aura-2-arcas-en"
 SERVER_URL = os.environ.get("SERVER_URL", "http://localhost:3333")
 
+# App-identity token for server routes gated by checkClientToken
+# (/context/analyze) — the same shared secret the mobile build sends as
+# `Authorization: Bearer ...`. Must be set on the agent's Railway service
+# (same value as the server's BB_CLIENT_TOKEN) or transcript posts 401.
+BB_CLIENT_TOKEN = os.environ.get("BB_CLIENT_TOKEN", "")
+
+
+def auth_headers():
+    """Authorization header for token-gated server routes. Empty when the
+    token is unset so local dev against an ungated server still works —
+    but production posts will 401 without it (warned at boot)."""
+    return {"Authorization": f"Bearer {BB_CLIENT_TOKEN}"} if BB_CLIENT_TOKEN else {}
+
 # Deploy stamp — bb-agent has no numbered builds (tarball deploys via
 # `railway up`), so log the code's own timestamp at boot to make "what is
 # the voice agent running right now" answerable from the logs.
@@ -68,6 +81,8 @@ try:
 except Exception:
     _DEPLOY_STAMP = "unknown"
 print(f"[Agent] BattleBuddy voice agent — code stamp {_DEPLOY_STAMP}")
+if not BB_CLIENT_TOKEN:
+    print("[Agent] WARNING: BB_CLIENT_TOKEN is not set — /context/analyze posts will be rejected (401) and voice transcripts will not be captured")
 
 END_PHRASES = ["bye bye buddy", "bye-bye buddy", "bye bye, buddy"]
 
@@ -123,6 +138,7 @@ async def send_to_context_agent(user_id, messages, session_id=None, is_session_e
             resp = await http.post(
                 f"{SERVER_URL}/context/analyze",
                 json={"userId": user_id, "sessionId": session_id, "messages": messages, "isSessionEnd": is_session_end, "timezone": timezone},
+                headers=auth_headers(),
                 timeout=aiohttp.ClientTimeout(total=30),
             )
             print(f"[Agent] Context agent responded: {resp.status} (end={is_session_end}, msgs={len(messages)})")
@@ -495,6 +511,7 @@ async def _send_final_transcript(user_id, messages, session_id=None, timezone="A
                 resp = await http.post(
                     f"{SERVER_URL}/context/analyze",
                     json={"userId": user_id, "sessionId": session_id, "messages": messages, "isSessionEnd": True, "timezone": timezone},
+                    headers=auth_headers(),
                     timeout=aiohttp.ClientTimeout(total=30),
                 )
                 print(f"[Agent] Final transcript sent: {resp.status} ({len(messages)} msgs, attempt {attempt + 1})")
