@@ -48,6 +48,13 @@ jobs:
           node-version: 20
       - run: npm ci
       - run: npm test
+      # Prompt size gate: system.battlebuddy.md is injected on every turn and
+      # once ballooned 43 KB → 153 KB via the nightly design loop's unattended
+      # appends (breaking voice at LiveKit's 64 KB dispatch cap). The gate
+      # already runs inside `npm test`; this named step keeps it explicit and
+      # un-losable if test globs ever change. Cap lives in server/promptGuard.js.
+      - name: prompt size gate (system prompt under byte cap)
+        run: node --test promptSize.test.js
 
   # Report the aggregate check result back to the backend so the Dev tab can
   # flip the request to "Under development → checks passed/failed". Only fires

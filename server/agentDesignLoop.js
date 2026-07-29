@@ -22,6 +22,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execSync, execFileSync } from 'node:child_process';
 import Anthropic from '@anthropic-ai/sdk';
 import { persistPromptLive, ADMIN_DATA_ROOT, buildInsightsFeedback, listKnownProfiles } from './contextAgent.js';
+import { checkPromptSize } from './promptGuard.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -517,6 +518,20 @@ export async function runDesignLoop({ email = false, dryRun = false, remote = fa
   if (!changed) {
     console.log('[DesignLoop] No changes to apply — system prompt unchanged');
     return { ok: true, changed: false, proposalPath, users: digest.totalUsers, sessions: digest.totalSessions };
+  }
+
+  // Size fence: the loop runs unattended and once grew this file from ~43 KB
+  // to ~153 KB in ten days by appending near-duplicate bullets. Refuse to
+  // persist a result that exceeds the hard cap or grows more than the per-run
+  // budget — the proposal file survives for manual review either way. This is
+  // the only gate on the production path (volume writes bypass git and CI).
+  const sizeCheck = checkPromptSize(systemPromptAfter, { previous: systemPromptBefore });
+  if (!sizeCheck.ok) {
+    throw new Error(
+      `Refusing to apply prompt changes: ${sizeCheck.violations.join('; ')}. ` +
+      `Proposals kept for manual review at ${proposalPath}. ` +
+      'Fold changes in by tightening or replacing existing content, not appending.'
+    );
   }
 
   const systemPromptVersioned = bumpPromptVersion(systemPromptAfter);
