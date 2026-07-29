@@ -75,10 +75,10 @@ const client = new Anthropic();
 
 // ─── Canonical-fact shadow writes (Phase 1, docs/12 PR 2) ───────────────────
 // Extraction output additionally flows through the merge gate into
-// user_facts. Invisible to users — nothing reads facts on any prompt path
-// until the Phase 2 flag — so this defaults ON to accumulate the shadow
-// period's comparison data. FACTS_SHADOW_WRITE=false kills it.
-const FACTS_SHADOW_WRITE = process.env.FACTS_SHADOW_WRITE !== 'false';
+// user_facts. OFF by default — flipped on deliberately (FACTS_SHADOW_WRITE=
+// true) once the Phase-0 backfill audit has landed, so the shadow period
+// starts against an audited baseline rather than an empty store.
+const FACTS_SHADOW_WRITE = process.env.FACTS_SHADOW_WRITE === 'true';
 
 function maybeShadowWriteFacts(rawUserId, updates, messages, sessionId = null) {
   if (!FACTS_SHADOW_WRITE || !updates) return;

@@ -60,7 +60,8 @@ test('shadow writes are wired into both extraction call sites behind the flag', 
   const here = dirname(fileURLToPath(import.meta.url));
   const indexSource = readFileSync(join(here, 'index.js'), 'utf-8');
 
-  assert.ok(indexSource.includes("process.env.FACTS_SHADOW_WRITE !== 'false'"), 'kill switch missing');
+  assert.ok(indexSource.includes("process.env.FACTS_SHADOW_WRITE === 'true'"),
+    'shadow writes must be OPT-IN — off until the backfill audit lands');
   const calls = indexSource.match(/maybeShadowWriteFacts\(/g) || [];
   assert.ok(calls.length >= 3, 'expected the definition plus both call sites (/session/turn throttle and /context/analyze)');
   // Still no prompt-path reads in Phase 1 (the Phase 0 invariant holds).
