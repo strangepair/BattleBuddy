@@ -16,7 +16,7 @@ import { createClient } from '@supabase/supabase-js';
 import WebSocket from 'ws';
 import { AccessToken } from 'livekit-server-sdk';
 import { sendPush, isQuietHours, pickNudgeMessage } from './notifications.js';
-import { analyzeAndUpdate, buildProfileSummary, buildLifeArchitectureSummary, buildCurrentGoal, computeUsageStats, lookupProfileField, loadProfile, seedProfile, mergeProfiles, resolveUserId, saveRawTranscript, appendTranscriptMessages, replaceProfile, persistProfile, findActiveRiskWindow, computeJourneyPhase, buildAdminInjections, buildInsightsFeedback } from './contextAgent.js';
+import { analyzeAndUpdate, buildProfileSummary, buildLifeArchitectureSummary, buildCurrentGoal, lookupProfileField, loadProfile, seedProfile, mergeProfiles, resolveUserId, saveRawTranscript, appendTranscriptMessages, replaceProfile, persistProfile, findActiveRiskWindow, computeJourneyPhase, buildAdminInjections, buildInsightsFeedback } from './contextAgent.js';
 import { handleAdminConsole } from './admin-api.js';
 import { runDesignLoop } from './agentDesignLoop.js';
 import { embedAndStore, retrieveRelevant, getPromotedMemories, recordRecalls, isConfigured as isVectorConfigured } from './vectorStore.js';
@@ -39,6 +39,7 @@ import {
 } from './commitments.js';
 import { toCachedSystemBlocks } from './promptCache.js';
 import { DEFAULT_TZ, tzOffsetString, formatLocalTime, buildSessionContext as buildSessionContextLine, normalizeOccurredAt } from './timeContext.js';
+import { HABIT_EVENT_TYPES, deriveUsageFacts, renderUsageFactsLine } from './usageFacts.js';
 import { checkDevModeToolResult, devModeStatusBlock } from './devMode.js';
 import { handleDevPipeline, runDevBuildWorker } from './devPipeline.js';
 import { recordTextTurn, recordVoiceSessionStart, recordVoiceTranscript, sweepIdleSegments } from './devCapture.js';
@@ -568,55 +569,82 @@ async function queryEvents(userId, { date, eventTypes, limit = 20, timezone = DE
 }
 
 /**
+ * Fetch the rows that ground-truth usage facts derive from: today's habit
+ * events (bucketed by the USER's calendar day) plus the most recent cigarette
+ * overall, so "last cigarette" is honest right after midnight. Two small
+ * indexed queries, run in parallel — this sits on the per-turn hot path.
+ */
+async function fetchUsageFactRows(userId, timezone = DEFAULT_TZ) {
+  const today = localDateInTz(timezone);
+  const [todayEvents, lastCig] = await Promise.all([
+    queryEvents(userId, { date: today, eventTypes: HABIT_EVENT_TYPES, limit: 100, timezone }),
+    queryEvents(userId, { eventTypes: ['cigarette'], limit: 1, timezone }),
+  ]);
+  // Dedupe: the last cigarette may already be in today's rows.
+  const seen = new Set(todayEvents.map(e => e.id));
+  return todayEvents.concat(lastCig.filter(e => !seen.has(e.id)));
+}
+
+/** Strip an event row to what the model needs — id (for update_event), type,
+ * local time, and short human context. Raw metadata blobs stay server-side:
+ * a session_report-sized payload in a tool result is exactly how the real
+ * numbers got drowned out (2026-07-29). */
+function slimEventForModel(e) {
+  return {
+    id: e.id,
+    event_type: e.event_type,
+    local_time: e.local_time,
+    occurred_at: e.occurred_at,
+    notes: e.metadata?.notes || null,
+    trigger: e.metadata?.trigger?.label || null,
+    source: e.metadata?.source || null,
+  };
+}
+
+/**
  * One merged usage view served to BOTH modes (text tool + voice /context/stats)
- * so they can never disagree: the transactional event log is authoritative for
- * logged events; the profile activity timeline covers conversation-extracted
- * history that predates the log.
+ * so they can never disagree. `ground_truth` comes first deliberately — it is
+ * the answer; `events` exist for follow-ups (which one, what trigger) and
+ * update_event ids. The old shape led with stale profile-blob stats and BB
+ * repeated them to the user over the real log.
  */
 async function buildUsageSummary(userId, timezone = DEFAULT_TZ) {
-  const result = { profile_stats: null, event_log: null };
+  const result = { ground_truth: null, event_log: null };
   try {
-    result.profile_stats = computeUsageStats(userId, timezone);
+    const rows = await fetchUsageFactRows(userId, timezone);
+    result.ground_truth = deriveUsageFacts(rows, timezone);
   } catch (e) {
-    result.profile_stats = { error: e.message };
+    result.ground_truth = { unavailable: true, error: e.message };
   }
   try {
     const today = localDateInTz(timezone);
-    const events = await queryEvents(userId, { date: today, limit: 100, timezone });
-    result.event_log = { date: today, events, summary: summarizeEvents(events, timezone) };
+    const events = await queryEvents(userId, { date: today, eventTypes: HABIT_EVENT_TYPES, limit: 50, timezone });
+    result.event_log = { date: today, events: events.map(slimEventForModel), summary: summarizeEvents(events, timezone) };
   } catch (e) {
     result.event_log = { unavailable: true, error: e.message };
   }
   return result;
 }
 
-const EVENT_LABELS = {
-  cigarette: 'cigarette',
-  urge: 'urge',
-  urge_resisted: 'resisted urge',
-  urge_gave_in: 'cigarette',
-  decision: 'decision to smoke',
-  milestone: 'milestone',
-};
-
 /**
- * Compute the "last-event awareness" line injected into trigger_context:
- * how long since the user's last logged event, plus whether the current
- * moment falls inside a documented risk window. Deterministic, no LLM call —
- * this must stay on the fast path ahead of every generation.
+ * Compute the ground-truth usage line injected into trigger_context every
+ * turn: today's cigarette count, last-cigarette time and gap (user's
+ * timezone), today's log entries, plus whether the current moment falls
+ * inside a documented risk window. Deterministic, no LLM call — this must
+ * stay on the fast path ahead of every generation.
  */
 async function buildLastEventAwareness(rawUserId, timezone = DEFAULT_TZ) {
   const userId = resolveUserId(rawUserId);
   const parts = [];
 
   try {
-    const [lastEvent] = await queryEvents(userId, { limit: 1, timezone });
-    if (lastEvent) {
-      const minutesSince = Math.round((Date.now() - new Date(lastEvent.occurred_at).getTime()) / 60000);
-      const label = EVENT_LABELS[lastEvent.event_type] || lastEvent.event_type;
-      const when = minutesSince < 60 ? `${minutesSince} minutes` : `${Math.round(minutesSince / 60)} hours`;
-      parts.push(`It's been ${when} since his last ${label}.`);
-    }
+    // Full ground-truth facts, not just "time since last event". The old
+    // version queried the single most recent row with NO type filter, so the
+    // "last event" was nearly always a session_report — and BB was left to
+    // improvise counts and gaps from conversation memory.
+    const rows = await fetchUsageFactRows(userId, timezone);
+    const line = renderUsageFactsLine(deriveUsageFacts(rows, timezone));
+    if (line) parts.push(line);
   } catch {}
 
   try {
@@ -835,15 +863,20 @@ async function executeToolUse(toolUse, userId, timezone = DEFAULT_TZ, requestCon
     try {
       const { date, event_types, limit } = toolUse.input || {};
       const queryDate = date === 'today' ? localDateInTz(timezone) : date;
-      const events = await queryEvents(userId, { date: queryDate, eventTypes: event_types, limit, timezone });
-      // Include the profile-derived stats too so text mode sees the same
-      // merged picture the voice agent gets from /context/stats.
-      let profileStats = null;
-      try { profileStats = computeUsageStats(userId, timezone); } catch {}
+      // Habit events only unless the model asked for specific types — bare
+      // queries used to return session_report/transcript_audit machinery
+      // rows, burying the real log under ~100 KB of JSON.
+      const effectiveTypes = (event_types && event_types.length) ? event_types : HABIT_EVENT_TYPES;
+      const events = await queryEvents(userId, { date: queryDate, eventTypes: effectiveTypes, limit, timezone });
+      // ground_truth first: it is derived from the full log (today + last
+      // cigarette overall) and is the only thing BB should quote for counts,
+      // times, and gaps — the same numbers /context/stats hands voice mode.
+      let groundTruth = null;
+      try { groundTruth = deriveUsageFacts(await fetchUsageFactRows(userId, timezone), timezone); } catch {}
       return {
         type: 'tool_result',
         tool_use_id: toolUse.id,
-        content: JSON.stringify({ events, summary: summarizeEvents(events, timezone), profile_stats: profileStats }),
+        content: JSON.stringify({ ground_truth: groundTruth, summary: summarizeEvents(events, timezone), events: events.map(slimEventForModel) }),
       };
     } catch (err) {
       return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: err.message }), is_error: true };
@@ -1215,6 +1248,25 @@ const server = createServer(async (req, res) => {
       const stats = await buildUsageSummary(resolveUserId(userId), tz);
       res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify(stats));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  // ─── Per-turn usage facts line for the voice agent ─────────────────────────
+  // Compact, deterministic, fast (two indexed queries): the voice agent
+  // injects `line` as a system message before every response, the same way
+  // the text path injects it via trigger_context. Same posture as
+  // /context/stats: server-to-server within the private deploy.
+  if (req.method === 'GET' && req.url.match(/^\/context\/factsline\//)) {
+    const parts = req.url.split('/context/factsline/');
+    const userId = decodeURIComponent((parts[1] || '').split('?')[0]);
+    const tz = new URL(req.url, 'http://x').searchParams.get('timezone') || DEFAULT_TZ;
+    try {
+      const facts = deriveUsageFacts(await fetchUsageFactRows(resolveUserId(userId), tz), tz);
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ line: renderUsageFactsLine(facts), facts }));
     } catch (err) {
       res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: err.message }));
