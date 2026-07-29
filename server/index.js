@@ -23,6 +23,9 @@ import { embedAndStore, retrieveRelevant, getPromotedMemories, recordRecalls, is
 import { getActiveFacts, getFactsByStatus, insertFact, activateFact, rejectFact, listKeys as listFactKeys, warmFactCache } from './factStore.js';
 import { renderMemoryDoc } from './memoryDoc.js';
 import { deriveFactsFromProfile, buildSonnetBackfillPrompt, groundSonnetProposals } from './factBackfill.js';
+import { runGateCycle, readGateLog } from './factGate.js';
+import { proposalsFromExtraction } from './factExtraction.js';
+import { runFactConsolidation, readConsolidationReport } from './factConsolidation.js';
 import { runPromotionSweep } from './promotionJob.js';
 import { buildVoiceGreeting, sessionGapPhrase } from './greeting.js';
 import {
@@ -69,6 +72,29 @@ const COMMITMENTS_AUTO_DELIVER_MIN = Number.isFinite(Number(process.env.COMMITME
 const COMMITMENTS_AUTO_DELIVER_CARE = process.env.COMMITMENTS_AUTO_DELIVER_CARE === 'true';
 
 const client = new Anthropic();
+
+// ─── Canonical-fact shadow writes (Phase 1, docs/12 PR 2) ───────────────────
+// Extraction output additionally flows through the merge gate into
+// user_facts. Invisible to users — nothing reads facts on any prompt path
+// until the Phase 2 flag — so this defaults ON to accumulate the shadow
+// period's comparison data. FACTS_SHADOW_WRITE=false kills it.
+const FACTS_SHADOW_WRITE = process.env.FACTS_SHADOW_WRITE !== 'false';
+
+function maybeShadowWriteFacts(rawUserId, updates, messages, sessionId = null) {
+  if (!FACTS_SHADOW_WRITE || !updates) return;
+  try {
+    const proposals = proposalsFromExtraction(updates);
+    if (!proposals.length) return;
+    runGateCycle(resolveUserId(rawUserId), proposals, messages, { client, sessionId })
+      .then(s => console.log(
+        `[FactGate] ${resolveUserId(rawUserId)}: ${s.proposed} proposed → ` +
+        `${JSON.stringify(s.applied)} | ${s.ungrounded} ungrounded, ${s.rejected} rejected`
+      ))
+      .catch(e => console.error('[FactGate] Shadow cycle failed:', e.message));
+  } catch (e) {
+    console.error('[FactGate] Shadow cycle failed:', e.message);
+  }
+}
 
 // Shared Supabase client for the bb_events store (service-role — bypasses RLS,
 // used only from this trusted server process). Node 20 has no native
@@ -1285,7 +1311,10 @@ const server = createServer(async (req, res) => {
       // still covers everything between throttle points.
       if (messages?.length >= 7 && messages.length % 6 === 1) {
         analyzeAndUpdate(effectiveUserId, messages, false, timezone)
-          .then(updates => mirrorActivityToEvents(effectiveUserId, updates, timezone))
+          .then(updates => {
+            maybeShadowWriteFacts(effectiveUserId, updates, messages, sessionId);
+            return mirrorActivityToEvents(effectiveUserId, updates, timezone);
+          })
           .catch(() => {});
       }
 
@@ -1986,6 +2015,8 @@ Return ONLY the JSON object, no markdown, no explanation.`;
         .then(updates => {
           // Mirror extracted smokes/resists into the transactional event log
           mirrorActivityToEvents(userId || 'default', updates, timezone || 'America/Chicago').catch(() => {});
+          // Shadow-write the same extraction through the fact gate (Phase 1)
+          maybeShadowWriteFacts(userId || 'default', updates, messages, sessionId);
           // After analysis, embed observations into vector store
           if (updates && isVectorConfigured()) {
             const effectiveUserId = resolveUserId(userId || 'default');
@@ -2376,6 +2407,33 @@ Return ONLY the JSON object, no markdown, no explanation.`;
 
       res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ ok: true, userId: targetUser, ...result }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  // Gate-verdict log — the shadow period's review surface: what the merge
+  // gate decided each cycle (NEW/DUPLICATE/SUPERSEDES/CONFLICTS/REJECT).
+  if (req.method === 'GET' && req.url.startsWith('/admin/facts/gate-log')) {
+    if (!checkAdminSecret(req)) return send401(res, 401, 'Unauthorized');
+    const limit = parseInt(new URL(req.url, 'http://x').searchParams.get('limit'), 10) || 50;
+    res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ entries: readGateLog(limit) }));
+  }
+
+  // Latest consolidation report (report-only in Phase 1) + on-demand run.
+  if (req.method === 'GET' && req.url === '/admin/facts/consolidation-report') {
+    if (!checkAdminSecret(req)) return send401(res, 401, 'Unauthorized');
+    res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ report: readConsolidationReport() }));
+  }
+  if (req.method === 'POST' && req.url === '/admin/facts/consolidate') {
+    if (!checkAdminSecret(req)) return send401(res, 401, 'Unauthorized');
+    try {
+      const report = await runFactConsolidation({ mode: 'report' });
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, report }));
     } catch (err) {
       res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: err.message }));
@@ -3008,6 +3066,35 @@ async function runScheduledPromotion() {
 }
 
 setInterval(() => { runScheduledPromotion().catch(() => {}); }, PROMOTION_CHECK_MS);
+
+// ─── Fact consolidation sweep (Phase 1: report-only) ────────────────────────
+// Same shape as the promotion sweep above: hourly tick, daily gap, first boot
+// seeds the state file instead of running. Report-only until Phase 3 — the
+// sweep writes a review report to the volume and never touches a fact.
+const FACT_CONSOLIDATION_CHECK_MS = 60 * 60 * 1000;
+const FACT_CONSOLIDATION_MIN_GAP_MS = 23 * 3600 * 1000;
+const factConsolidationStatePath = () => resolve(process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store'), 'fact-consolidation-state.json');
+
+async function runScheduledFactConsolidation() {
+  let state = {};
+  try { state = JSON.parse(readFileSync(factConsolidationStatePath(), 'utf-8')); } catch {}
+  const now = Date.now();
+  if (!state.last_run_at) {
+    writeFileSync(factConsolidationStatePath(), JSON.stringify({ last_run_at: now }));
+    return;
+  }
+  if (now - state.last_run_at < FACT_CONSOLIDATION_MIN_GAP_MS) return;
+
+  writeFileSync(factConsolidationStatePath(), JSON.stringify({ last_run_at: now }));
+  try {
+    const report = await runFactConsolidation({ mode: 'report' });
+    console.log(`[FactConsolidation] Sweep finished across ${Object.keys(report.users).length} user(s)`);
+  } catch (e) {
+    console.error('[FactConsolidation] Sweep failed:', e.message);
+  }
+}
+
+setInterval(() => { runScheduledFactConsolidation().catch(() => {}); }, FACT_CONSOLIDATION_CHECK_MS);
 
 // ─── Dev-mode build worker ─────────────────────────────────────────────────
 // Picks up `pending` build requests and dispatches them to GitHub Actions.

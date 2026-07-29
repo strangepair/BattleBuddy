@@ -252,6 +252,22 @@ export async function listKeys(rawUserId) {
   }
 }
 
+/** Distinct user ids holding any active facts (consolidation sweep scope). */
+export async function listFactUsers() {
+  init();
+  if (!supabase) return [];
+  try {
+    const { data, error } = await supabase
+      .from('user_facts')
+      .select('user_id')
+      .eq('status', 'active');
+    if (error) return [];
+    return [...new Set((data || []).map(r => r.user_id))];
+  } catch {
+    return [];
+  }
+}
+
 // ─── Writes ─────────────────────────────────────────────────────────────────
 
 /**
