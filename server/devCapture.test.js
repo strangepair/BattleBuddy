@@ -7,14 +7,23 @@
 
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   recordTextTurn,
   recordVoiceSessionStart,
   recordVoiceTranscript,
   sweepIdleSegments,
+  flushAllSegments,
   _resetCaptureState,
   _captureSegmentCount,
 } from './devCapture.js';
+
+// Segment mirroring writes under CONTEXT_STORE_DIR — point it at a temp dir
+// so tests never touch a real volume. Read at call time, so setting it here
+// (before any capture call) is enough.
+process.env.CONTEXT_STORE_DIR = mkdtempSync(join(tmpdir(), 'devcapture-test-'));
 
 const TASK = {
   title: 'Add a streak counter to the session header',
@@ -172,4 +181,73 @@ test('devMode=false traffic with no live segments is a no-op', () => {
   const d = deps(fakeAnthropic(), fakeSupabase());
   assert.equal(recordTextTurn(d, { userId: 'mike', sessionId: 's5', messages: MSGS, devMode: false }), null);
   assert.equal(recordVoiceSessionStart(d, { userId: 'mike', devMode: false }), null);
+});
+
+// ─── Durability: redeploys and shutdowns must not lose captures ──────────────
+// (The 2026-07-29 failure: three redeploys mid voice session wiped the
+// in-memory segment, and the agent's isSessionEnd transcript was dropped.)
+
+test('redeploy mid voice session: isSessionEnd still flushes (segment restored from volume)', async () => {
+  const anthropic = fakeAnthropic();
+  const supabase = fakeSupabase();
+  const d = deps(anthropic, supabase);
+
+  recordVoiceSessionStart(d, { userId: 'mike', devMode: true });
+  recordVoiceTranscript(d, { userId: 'mike', sessionId: 'v7', messages: MSGS.slice(0, 2), isSessionEnd: false });
+
+  // Container swap: memory dies, the volume survives.
+  _resetCaptureState({ memoryOnly: true });
+  assert.equal(_captureSegmentCount(), 0);
+
+  // The agent's close-time transcript arrives at the NEW container. Payload is
+  // self-sufficient; the mirrored segment proves it was a dev session.
+  await recordVoiceTranscript(d, { userId: 'mike', sessionId: 'v7', messages: MSGS, isSessionEnd: true });
+
+  assert.equal(anthropic.calls.length, 1);
+  assert.equal(supabase.inserted.length, 1);
+  assert.equal(supabase.inserted[0].session_id, 'v7');
+  assert.equal(supabase.inserted[0].status, 'pending');
+  assert.equal(_captureSegmentCount(), 0, 'segment cleared from memory and volume');
+});
+
+test('redeploy then silence: idle sweep restores mirrored segments and flushes', async () => {
+  const anthropic = fakeAnthropic();
+  const supabase = fakeSupabase();
+  const d = deps(anthropic, supabase);
+  const t0 = 1_000_000;
+
+  recordTextTurn(d, { userId: 'mike', sessionId: 's8', messages: MSGS, devMode: true }, t0);
+  _resetCaptureState({ memoryOnly: true });
+
+  await sweepIdleSegments(d, t0 + 11 * 60 * 1000);
+  assert.equal(supabase.inserted.length, 1);
+  assert.equal(supabase.inserted[0].session_id, 's8');
+});
+
+test('shutdown flush (SIGTERM path) flushes every pending segment', async () => {
+  const anthropic = fakeAnthropic();
+  const supabase = fakeSupabase();
+  const d = deps(anthropic, supabase);
+
+  recordTextTurn(d, { userId: 'mike', sessionId: 's9', messages: MSGS, devMode: true });
+  recordVoiceSessionStart(d, { userId: 'ann', devMode: true });
+  recordVoiceTranscript(d, { userId: 'ann', sessionId: 'v9', messages: MSGS, isSessionEnd: false });
+
+  await flushAllSegments(d, 'shutdown');
+
+  assert.equal(supabase.inserted.length, 2);
+  const sessions = supabase.inserted.map((r) => r.session_id).sort();
+  assert.deepEqual(sessions, ['s9', 'v9']);
+  assert.equal(_captureSegmentCount(), 0);
+  assert.equal(await flushAllSegments(d, 'shutdown'), null, 'nothing left on a second pass');
+});
+
+test('voice isSessionEnd with no segment anywhere (non-dev session) stays ignored', async () => {
+  const anthropic = fakeAnthropic();
+  const supabase = fakeSupabase();
+  const d = deps(anthropic, supabase);
+
+  await recordVoiceTranscript(d, { userId: 'normal-user', sessionId: 'v10', messages: MSGS, isSessionEnd: true });
+  assert.equal(anthropic.calls.length, 0);
+  assert.equal(supabase.inserted.length, 0);
 });

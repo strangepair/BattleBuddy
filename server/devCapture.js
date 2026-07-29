@@ -26,11 +26,22 @@
 //   3. Idle sweep: segments quiet for IDLE_FLUSH_MS flush anyway, covering
 //      "toggled on, talked, killed the app".
 //
-// State is in-memory (same trade-off as devPipeline's PAUSED flag): a redeploy
-// drops unflushed segments. Voice is additionally covered by the agent's final
-// transcript; text loses at most the tail of an in-flight dev session.
+// Hot state is in-memory, but every open segment is mirrored to the volume
+// (CONTEXT_STORE_DIR — the same disk the raw transcripts survive on) and
+// restored lazily after a container swap. Without this, a redeploy mid dev
+// session wiped the segment and the agent's close-time transcript hit "no open
+// segment" and was dropped (lost the 2026-07-29 mission-dashboard session).
+// The analyze payload carries no devMode flag, so the durable segment marker
+// is the ONLY trustworthy signal that a voice session was a dev session —
+// flushing every no-segment isSessionEnd transcript would capture ordinary
+// users. index.js additionally flushes everything on SIGTERM.
 
+import { mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, rmSync } from 'node:fs';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { generateProductRequests, insertRequests } from './devPipeline.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const IDLE_FLUSH_MS = Number(process.env.DEV_CAPTURE_IDLE_MS || 10 * 60 * 1000);
 const MAX_MESSAGES = 100; // per-segment snapshot cap
@@ -38,6 +49,72 @@ const MAX_FLUSH_ATTEMPTS = 2;
 
 // key `${kind}:${uid}` → { kind, uid, sessionId, messages, lastActivity, attempts }
 const segments = new Map();
+
+// ─── Durable segment mirror (survives redeploys) ─────────────────────────────
+
+function persistDir() {
+  const storeDir = process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store');
+  return resolve(storeDir, 'dev-capture-segments');
+}
+
+function persistPath(key) {
+  return resolve(persistDir(), `${key.replace(/[^a-zA-Z0-9._-]/g, '_')}.json`);
+}
+
+// Mirror writes must never break request handling.
+function persistSegment(key, seg) {
+  try {
+    mkdirSync(persistDir(), { recursive: true });
+    writeFileSync(persistPath(key), JSON.stringify({ key, ...seg }));
+  } catch (err) {
+    console.error(`[devCapture] persist ${key} failed: ${err.message}`);
+  }
+}
+
+function removePersisted(key) {
+  try { unlinkSync(persistPath(key)); } catch {}
+}
+
+function dropSegment(key) {
+  segments.delete(key);
+  removePersisted(key);
+}
+
+// Map first; on a miss, restore the segment a previous container mirrored.
+function getSegment(key) {
+  const live = segments.get(key);
+  if (live) return live;
+  try {
+    const raw = JSON.parse(readFileSync(persistPath(key), 'utf-8'));
+    const seg = {
+      kind: raw.kind,
+      uid: raw.uid,
+      sessionId: raw.sessionId || null,
+      messages: Array.isArray(raw.messages) ? raw.messages : [],
+      lastActivity: raw.lastActivity || Date.now(),
+      attempts: 0,
+    };
+    segments.set(key, seg);
+    console.log(`[devCapture] restored ${key} from volume (redeploy recovery)`);
+    return seg;
+  } catch {
+    return null;
+  }
+}
+
+// Pull every mirrored segment into memory (idle sweep + shutdown flush need
+// the full set, not just keys some request already touched).
+function restoreAllFromDisk() {
+  let files = [];
+  try { files = readdirSync(persistDir()); } catch { return; }
+  for (const f of files) {
+    if (!f.endsWith('.json')) continue;
+    try {
+      const raw = JSON.parse(readFileSync(resolve(persistDir(), f), 'utf-8'));
+      if (raw.key && !segments.has(raw.key)) getSegment(raw.key);
+    } catch {}
+  }
+}
 
 function uidOf(deps, userId) {
   const raw = userId || 'default';
@@ -58,10 +135,10 @@ function snapshot(messages) {
 }
 
 async function flushSegment(deps, key, note) {
-  const seg = segments.get(key);
+  const seg = getSegment(key);
   if (!seg) return null;
   if (!meaningful(seg.messages)) {
-    segments.delete(key);
+    dropSegment(key);
     return null;
   }
   try {
@@ -71,13 +148,13 @@ async function flushSegment(deps, key, note) {
       userId: seg.uid,
       sessionId: seg.sessionId,
     }, tasks);
-    segments.delete(key);
+    dropSegment(key);
     console.log(`[devCapture] flushed ${key} (${note}): ${seg.messages.length} msgs → ${rows.length} request(s)`);
     return rows;
   } catch (err) {
     seg.attempts = (seg.attempts || 0) + 1;
     console.error(`[devCapture] flush ${key} failed (attempt ${seg.attempts}): ${err.message}`);
-    if (seg.attempts >= MAX_FLUSH_ATTEMPTS) segments.delete(key);
+    if (seg.attempts >= MAX_FLUSH_ATTEMPTS) dropSegment(key);
     else seg.lastActivity = Date.now(); // retried by a later idle sweep
     return null;
   }
@@ -88,7 +165,7 @@ async function flushSegment(deps, key, note) {
 function flushAllForUser(deps, uid, note) {
   const flushes = [];
   for (const key of ['text', 'voice'].map((k) => `${k}:${uid}`)) {
-    if (segments.has(key)) flushes.push(flushSegment(deps, key, note));
+    if (getSegment(key)) flushes.push(flushSegment(deps, key, note));
   }
   return flushes.length ? Promise.all(flushes) : null;
 }
@@ -103,11 +180,12 @@ export function recordTextTurn(deps, { userId, sessionId, messages, devMode }, n
     const uid = uidOf(deps, userId);
     if (devMode !== true) return flushAllForUser(deps, uid, 'toggle-off');
     const key = `text:${uid}`;
-    const seg = segments.get(key) || { kind: 'text', uid, attempts: 0 };
+    const seg = getSegment(key) || { kind: 'text', uid, attempts: 0 };
     seg.sessionId = sessionId || seg.sessionId || null;
     seg.messages = snapshot(messages);
     seg.lastActivity = now;
     segments.set(key, seg);
+    persistSegment(key, seg);
     return null;
   } catch (err) {
     console.error('[devCapture] recordTextTurn:', err.message);
@@ -124,9 +202,10 @@ export function recordVoiceSessionStart(deps, { userId, devMode }, now = Date.no
     const uid = uidOf(deps, userId);
     if (devMode !== true) return flushAllForUser(deps, uid, 'toggle-off');
     const key = `voice:${uid}`;
-    const seg = segments.get(key) || { kind: 'voice', uid, sessionId: null, messages: [], attempts: 0 };
+    const seg = getSegment(key) || { kind: 'voice', uid, sessionId: null, messages: [], attempts: 0 };
     seg.lastActivity = now;
     segments.set(key, seg);
+    persistSegment(key, seg);
     return null;
   } catch (err) {
     console.error('[devCapture] recordVoiceSessionStart:', err.message);
@@ -144,12 +223,16 @@ export function recordVoiceTranscript(deps, { userId, sessionId, messages, isSes
   try {
     const uid = uidOf(deps, userId);
     const key = `voice:${uid}`;
-    const seg = segments.get(key);
+    // getSegment falls back to the volume mirror, so a segment opened by a
+    // previous container (redeploy mid-session) is still found here instead
+    // of the transcript being silently dropped.
+    const seg = getSegment(key);
     if (!seg) return null;
     seg.sessionId = sessionId || seg.sessionId || null;
     if (Array.isArray(messages) && messages.length) seg.messages = snapshot(messages);
     seg.lastActivity = now;
     if (isSessionEnd) return flushSegment(deps, key, 'voice-session-end');
+    persistSegment(key, seg);
     return null;
   } catch (err) {
     console.error('[devCapture] recordVoiceTranscript:', err.message);
@@ -162,6 +245,10 @@ export function recordVoiceTranscript(deps, { userId, sessionId, messages, isSes
  * past IDLE_FLUSH_MS — the dev session that ended by the user just leaving.
  */
 export function sweepIdleSegments(deps, now = Date.now()) {
+  // Include segments a previous container mirrored to the volume — covers
+  // "redeploy, then the user never came back" (no request ever touches the
+  // segment again, so lazy restore alone would strand it).
+  restoreAllFromDisk();
   const flushes = [];
   for (const [key, seg] of segments) {
     if (now - seg.lastActivity >= IDLE_FLUSH_MS) flushes.push(flushSegment(deps, key, 'idle'));
@@ -169,6 +256,23 @@ export function sweepIdleSegments(deps, now = Date.now()) {
   return flushes.length ? Promise.all(flushes) : null;
 }
 
+/**
+ * SIGTERM path (index.js): Railway redeploys send SIGTERM before swapping the
+ * container — flush everything still open. Anything that doesn't finish inside
+ * the grace period stays mirrored on the volume for the next container.
+ */
+export function flushAllSegments(deps, note = 'shutdown') {
+  restoreAllFromDisk();
+  const flushes = [...segments.keys()].map((key) => flushSegment(deps, key, note));
+  return flushes.length ? Promise.all(flushes) : null;
+}
+
 // ─── test hooks ──────────────────────────────────────────────────────────────
-export function _resetCaptureState() { segments.clear(); }
+// memoryOnly simulates a container swap: the Map dies, the volume survives.
+export function _resetCaptureState({ memoryOnly = false } = {}) {
+  segments.clear();
+  if (!memoryOnly) {
+    try { rmSync(persistDir(), { recursive: true, force: true }); } catch {}
+  }
+}
 export function _captureSegmentCount() { return segments.size; }

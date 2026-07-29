@@ -42,7 +42,7 @@ import { DEFAULT_TZ, tzOffsetString, formatLocalTime, buildSessionContext as bui
 import { HABIT_EVENT_TYPES, deriveUsageFacts, renderUsageFactsLine } from './usageFacts.js';
 import { checkDevModeToolResult, devModeStatusBlock } from './devMode.js';
 import { handleDevPipeline, runDevBuildWorker } from './devPipeline.js';
-import { recordTextTurn, recordVoiceSessionStart, recordVoiceTranscript, sweepIdleSegments } from './devCapture.js';
+import { recordTextTurn, recordVoiceSessionStart, recordVoiceTranscript, sweepIdleSegments, flushAllSegments } from './devCapture.js';
 import { jsonrepair } from 'jsonrepair';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -3283,6 +3283,20 @@ setInterval(() => {
   const p = sweepIdleSegments({ anthropic: client, supabase, resolveUserId });
   if (p) p.catch((err) => console.error('[devCapture] sweep:', err.message));
 }, DEV_BUILD_CHECK_MS);
+
+// Railway sends SIGTERM before swapping the container on every redeploy —
+// flush open dev-capture segments inside the grace period. Hard-capped:
+// whatever doesn't finish stays mirrored on the volume for the next container.
+let shuttingDown = false;
+process.on('SIGTERM', () => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log('[shutdown] SIGTERM — flushing dev-capture segments');
+  const hardStop = setTimeout(() => process.exit(0), 8000);
+  Promise.resolve(flushAllSegments({ anthropic: client, supabase, resolveUserId }, 'shutdown'))
+    .catch((err) => console.error('[shutdown] dev-capture flush failed:', err.message))
+    .finally(() => { clearTimeout(hardStop); process.exit(0); });
+});
 
 const PORT = process.env.PORT || 3333;
 server.listen(PORT, '0.0.0.0', () => {
