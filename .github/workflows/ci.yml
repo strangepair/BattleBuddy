@@ -26,6 +26,14 @@ jobs:
           node-version: 20
       - run: npm ci
       - run: npm run ci   # typecheck && lint && test
+      # Launch gate: the session screen — the surface that crashed builds
+      # 50–53 at launch while CI stayed green — must actually mount, unmount,
+      # and stay structurally dev-invariant (see mobile/src/__tests__/
+      # launch-gate.test.tsx). It already runs inside `npm run ci`'s jest
+      # pass; this named step keeps the gate explicit and un-losable if test
+      # globs ever change.
+      - name: launch gate (app mounts without throwing)
+        run: npx jest src/__tests__/launch-gate.test.tsx
 
   server:
     name: server (node --test)
