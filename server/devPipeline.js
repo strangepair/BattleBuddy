@@ -98,7 +98,8 @@ Rules:
 - NEVER emit tasks that touch CI/deploy workflows, signing/secrets, app-store config, or that weaken the app's crisis/safety footing (the 988 off-ramp, "## Hard limits"). If the request implies those, lower confidence to 0 and omit it.
 - Additive, reversible changes only. No destructive DB migrations.`;
 
-async function generateProductRequests(anthropic, { transcript, directiveText }) {
+// Exported for devCapture.js (server-side dev-mode capture) and tests.
+export async function generateProductRequests(anthropic, { transcript, directiveText }) {
   const userContent = directiveText
     ? `A developer typed this directive:\n\n"""${directiveText}"""\n\nEmit the JSON array of tasks.`
     : `Here is a developer-mode conversation transcript. Extract any concrete change requests.\n\n"""${(transcript || [])
@@ -140,7 +141,8 @@ async function generateProductRequests(anthropic, { transcript, directiveText })
 
 // ─── Persistence (Supabase dev_build_requests) ───────────────────────────────
 
-async function insertRequests(supabase, { source, userId, sessionId }, tasks) {
+// Exported for devCapture.js (server-side dev-mode capture) and tests.
+export async function insertRequests(supabase, { source, userId, sessionId }, tasks) {
   if (!supabase || tasks.length === 0) return [];
 
   // Skip duplicates of anything already open (not deployed/failed).
