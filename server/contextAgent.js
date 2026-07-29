@@ -373,7 +373,12 @@ await warmProfileStoreFromSupabase();
 // bookkeeping file, run it through migrateProfile (which happily bolts a
 // fake profile shape onto arbitrary JSON), cache it, and — since saveProfile
 // now upserts to Supabase — permanently plant a bogus "user" row.
-const RESERVED_PROFILE_IDS = new Set(['audit-state', 'design-loop-state']);
+const RESERVED_PROFILE_IDS = new Set([
+  'audit-state', 'design-loop-state',
+  // Scheduler state files that share STORE_DIR (index.js): the promotion
+  // sweep's and the fact-consolidation sweep's last-run markers.
+  'promotion-state', 'fact-consolidation-state',
+]);
 
 function getStorePath(userId) {
   return resolve(STORE_DIR, `${userId}.json`);
