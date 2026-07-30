@@ -132,12 +132,12 @@ async def fetch_agent_config(room_name, config_token):
     return None
 
 
-async def send_to_context_agent(user_id, messages, session_id=None, is_session_end=False, timezone="America/Chicago"):
+async def send_to_context_agent(user_id, messages, session_id=None, is_session_end=False, timezone="America/Chicago", dev_mode=False):
     try:
         async with aiohttp.ClientSession() as http:
             resp = await http.post(
                 f"{SERVER_URL}/context/analyze",
-                json={"userId": user_id, "sessionId": session_id, "messages": messages, "isSessionEnd": is_session_end, "timezone": timezone},
+                json={"userId": user_id, "sessionId": session_id, "messages": messages, "isSessionEnd": is_session_end, "timezone": timezone, "devMode": dev_mode},
                 headers=auth_headers(),
                 timeout=aiohttp.ClientTimeout(total=30),
             )
@@ -178,6 +178,9 @@ async def battlebuddy_session(ctx: agents.JobContext):
 
     user_id = dispatch_meta.get("userId") or "default"
     timezone = dispatch_meta.get("timezone") or "America/Chicago"
+    # Rides every /context/analyze post so the server can rebuild a dev-capture
+    # segment even after a redeploy wiped its in-memory state (devCapture.js).
+    dev_mode_on = dispatch_meta.get("devMode", False) is True
     last_session_at = dispatch_meta.get("last_session_at")
     session_id = getattr(ctx.room, "name", None) or f"session-{int(time.time())}"
 
@@ -499,7 +502,7 @@ async def battlebuddy_session(ctx: agents.JobContext):
                         lower = content.lower().strip()
                         for phrase in END_PHRASES:
                             if phrase in lower:
-                                asyncio.ensure_future(_end_session(session, ctx, user_id, session_messages, session_id, timezone))
+                                asyncio.ensure_future(_end_session(session, ctx, user_id, session_messages, session_id, timezone, dev_mode_on))
                                 return
         except Exception:
             pass
@@ -520,7 +523,7 @@ async def battlebuddy_session(ctx: agents.JobContext):
             if current_count > last_save_count and current_count >= 2:
                 last_save_count = current_count
                 print(f"[Agent] Periodic save: {current_count} messages for {user_id}")
-                await send_to_context_agent(user_id, list(session_messages), session_id=session_id, timezone=timezone)
+                await send_to_context_agent(user_id, list(session_messages), session_id=session_id, timezone=timezone, dev_mode=dev_mode_on)
 
     save_task = asyncio.ensure_future(periodic_save())
 
@@ -547,19 +550,19 @@ async def battlebuddy_session(ctx: agents.JobContext):
 
         if session_messages and len(session_messages) >= 2:
             print(f"[Agent] Session close: sending {len(session_messages)} messages for {user_id} (isSessionEnd=true)")
-            asyncio.ensure_future(_send_final_transcript(user_id, list(session_messages), session_id, timezone))
+            asyncio.ensure_future(_send_final_transcript(user_id, list(session_messages), session_id, timezone, dev_mode_on))
 
     await session.generate_reply(instructions=greeting)
 
 
-async def _send_final_transcript(user_id, messages, session_id=None, timezone="America/Chicago"):
+async def _send_final_transcript(user_id, messages, session_id=None, timezone="America/Chicago", dev_mode=False):
     """Send the final transcript with retries — this is the most important call."""
     for attempt in range(3):
         try:
             async with aiohttp.ClientSession() as http:
                 resp = await http.post(
                     f"{SERVER_URL}/context/analyze",
-                    json={"userId": user_id, "sessionId": session_id, "messages": messages, "isSessionEnd": True, "timezone": timezone},
+                    json={"userId": user_id, "sessionId": session_id, "messages": messages, "isSessionEnd": True, "timezone": timezone, "devMode": dev_mode},
                     headers=auth_headers(),
                     timeout=aiohttp.ClientTimeout(total=30),
                 )
@@ -572,7 +575,7 @@ async def _send_final_transcript(user_id, messages, session_id=None, timezone="A
                 await asyncio.sleep(2)
 
 
-async def _end_session(session, ctx, user_id, messages, session_id=None, timezone="America/Chicago"):
+async def _end_session(session, ctx, user_id, messages, session_id=None, timezone="America/Chicago", dev_mode=False):
     await session.generate_reply(
         instructions="The user said 'bye bye buddy' to end the call. "
         "Say bye and one short sentence of encouragement. Keep it warm and brief."
@@ -580,7 +583,7 @@ async def _end_session(session, ctx, user_id, messages, session_id=None, timezon
 
     if messages and len(messages) >= 2:
         print(f"[Agent] End session — sending {len(messages)} messages to context agent")
-        await send_to_context_agent(user_id, messages, session_id=session_id, is_session_end=True, timezone=timezone)
+        await send_to_context_agent(user_id, messages, session_id=session_id, is_session_end=True, timezone=timezone, dev_mode=dev_mode)
 
     await asyncio.sleep(3)
     await ctx.room.disconnect()

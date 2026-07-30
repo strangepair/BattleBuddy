@@ -42,7 +42,7 @@ import { DEFAULT_TZ, tzOffsetString, formatLocalTime, buildSessionContext as bui
 import { HABIT_EVENT_TYPES, deriveUsageFacts, renderUsageFactsLine } from './usageFacts.js';
 import { checkDevModeToolResult, devModeStatusBlock } from './devMode.js';
 import { handleDevPipeline, runDevBuildWorker } from './devPipeline.js';
-import { recordTextTurn, recordVoiceSessionStart, recordVoiceTranscript, sweepIdleSegments } from './devCapture.js';
+import { recordTextTurn, recordVoiceSessionStart, recordVoiceTranscript, sweepIdleSegments, registerShutdownFlush } from './devCapture.js';
 import { jsonrepair } from 'jsonrepair';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2123,7 +2123,7 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     let body = '';
     for await (const chunk of req) body += chunk;
     try {
-      const { userId, sessionId, messages, isSessionEnd, timezone } = JSON.parse(body);
+      const { userId, sessionId, messages, isSessionEnd, timezone, devMode } = JSON.parse(body);
 
       // Always persist the raw transcript first, independent of extraction —
       // this must survive even if Sonnet analysis below fails.
@@ -2131,10 +2131,12 @@ Return ONLY the JSON object, no markdown, no explanation.`;
       catch (e) { console.error('Save raw transcript error:', e.message); }
 
       // Server-side dev-mode capture (voice): the LiveKit agent posts full
-      // transcripts here; only users with an open voice dev segment are
+      // transcripts here; users with an open voice dev segment — or whose
+      // agent says devMode (rebuilds a segment lost to a redeploy) — are
       // captured. The agent's close-time post (isSessionEnd) flushes it.
       recordVoiceTranscript({ anthropic: client, supabase, resolveUserId }, {
         userId: userId || 'default', sessionId, messages, isSessionEnd: isSessionEnd === true,
+        devMode: devMode === true,
       });
 
       // Infer follow-up commitments from a finished session (no-op unless
@@ -3285,6 +3287,10 @@ setInterval(() => {
 }, DEV_BUILD_CHECK_MS);
 
 const PORT = process.env.PORT || 3333;
+// A Railway redeploy SIGTERMs this container; flush any in-flight dev-mode
+// capture segments before exiting so the swap can't eat a dev session.
+registerShutdownFlush({ anthropic: client, supabase, resolveUserId });
+
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`BattleBuddy API running on http://0.0.0.0:${PORT}`);
   console.log(`Vector store: ${isVectorConfigured() ? 'configured' : 'not configured (set SUPABASE_URL + SUPABASE_SERVICE_KEY)'}`);

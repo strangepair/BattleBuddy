@@ -26,9 +26,15 @@
 //   3. Idle sweep: segments quiet for IDLE_FLUSH_MS flush anyway, covering
 //      "toggled on, talked, killed the app".
 //
-// State is in-memory (same trade-off as devPipeline's PAUSED flag): a redeploy
-// drops unflushed segments. Voice is additionally covered by the agent's final
-// transcript; text loses at most the tail of an in-flight dev session.
+// State is in-memory (same trade-off as devPipeline's PAUSED flag), but a
+// redeploy no longer loses the session:
+//   - Voice: every agent /context/analyze post carries devMode, so a fresh
+//     container REBUILDS the segment from the payload — the agent's transcripts
+//     are full snapshots, self-sufficient on their own. The end-of-session
+//     post produces a request even when no open segment exists.
+//   - Graceful shutdown (SIGTERM/SIGINT — a Railway redeploy) flushes all
+//     pending segments before exit via registerShutdownFlush().
+// Only a hard kill of a TEXT dev session mid-flight can still drop the tail.
 
 import { generateProductRequests, insertRequests } from './devPipeline.js';
 
@@ -135,17 +141,23 @@ export function recordVoiceSessionStart(deps, { userId, devMode }, now = Date.no
 }
 
 /**
- * /context/analyze calls this with whatever the voice agent posted. Only a
- * user with an OPEN voice dev segment is captured — everyone else's analyze
- * traffic is untouched. isSessionEnd (the agent's close-time final transcript)
- * flushes immediately.
+ * /context/analyze calls this with whatever the voice agent posted. A user is
+ * captured if they have an OPEN voice dev segment, OR the agent itself says
+ * devMode=true — the latter rebuilds a segment a redeploy wiped, since every
+ * agent post is a full transcript snapshot. Everyone else's analyze traffic is
+ * untouched. isSessionEnd (the agent's close-time final transcript) flushes
+ * immediately, segment or not.
  */
-export function recordVoiceTranscript(deps, { userId, sessionId, messages, isSessionEnd }, now = Date.now()) {
+export function recordVoiceTranscript(deps, { userId, sessionId, messages, isSessionEnd, devMode }, now = Date.now()) {
   try {
     const uid = uidOf(deps, userId);
     const key = `voice:${uid}`;
-    const seg = segments.get(key);
-    if (!seg) return null;
+    let seg = segments.get(key);
+    if (!seg) {
+      if (devMode !== true) return null;
+      seg = { kind: 'voice', uid, sessionId: null, messages: [], attempts: 0 };
+      segments.set(key, seg);
+    }
     seg.sessionId = sessionId || seg.sessionId || null;
     if (Array.isArray(messages) && messages.length) seg.messages = snapshot(messages);
     seg.lastActivity = now;
@@ -167,6 +179,54 @@ export function sweepIdleSegments(deps, now = Date.now()) {
     if (now - seg.lastActivity >= IDLE_FLUSH_MS) flushes.push(flushSegment(deps, key, 'idle'));
   }
   return flushes.length ? Promise.all(flushes) : null;
+}
+
+/**
+ * Flush every open segment regardless of idle time — the shutdown path.
+ */
+export function flushAllSegments(deps, note = 'shutdown') {
+  const flushes = [];
+  for (const key of [...segments.keys()]) flushes.push(flushSegment(deps, key, note));
+  return Promise.all(flushes);
+}
+
+/**
+ * Install SIGTERM/SIGINT handlers that flush pending segments before the
+ * process exits, so a graceful redeploy (Railway sends SIGTERM, then waits)
+ * doesn't drop an in-flight dev session. Flushing calls the spec model, so the
+ * wait is bounded: whatever hasn't flushed when the timeout fires is given up
+ * — same as today's behavior, never worse. Returns the handler for tests;
+ * `exit` is injectable for the same reason.
+ */
+export function registerShutdownFlush(deps, {
+  signals = ['SIGTERM', 'SIGINT'],
+  timeoutMs = Number(process.env.DEV_CAPTURE_SHUTDOWN_FLUSH_MS || 10_000),
+  exit = (code) => process.exit(code),
+  proc = process,
+} = {}) {
+  let shuttingDown = false;
+  const handler = async (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    const pending = segments.size;
+    if (pending) {
+      console.log(`[devCapture] ${signal}: flushing ${pending} pending segment(s) before exit`);
+      let timer;
+      try {
+        await Promise.race([
+          flushAllSegments(deps, `shutdown:${signal}`),
+          new Promise((resolve) => { timer = setTimeout(resolve, timeoutMs); }),
+        ]);
+      } catch (err) {
+        console.error('[devCapture] shutdown flush:', err.message);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    exit(0);
+  };
+  for (const s of signals) proc.on(s, () => { handler(s); });
+  return handler;
 }
 
 // ─── test hooks ──────────────────────────────────────────────────────────────
