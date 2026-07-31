@@ -44,6 +44,7 @@ import { checkDevModeToolResult, devModeStatusBlock } from './devMode.js';
 import { handleDevPipeline, runDevBuildWorker } from './devPipeline.js';
 import { recordTextTurn, recordVoiceSessionStart, recordVoiceTranscript, sweepIdleSegments, registerShutdownFlush } from './devCapture.js';
 import { jsonrepair } from 'jsonrepair';
+import { broadcastToUser, registerSseClient } from './broadcast.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -2318,8 +2319,34 @@ Return ONLY the JSON object, no markdown, no explanation.`;
         res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: error.message }));
       }
+
       res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ ok: true, id: data.id, occurred_at: data.occurred_at }));
+      res.end(JSON.stringify({ ok: true, id: data.id, occurred_at: data.occurred_at }));
+
+      // Fire-and-forget dashboard push — must never reject the main request.
+      try {
+        const resolvedUserId = resolveUserId(userId);
+        const rows = await fetchUsageFactRows(resolvedUserId, eventTz);
+        const facts = deriveUsageFacts(rows, eventTz);
+        const todayCigs = rows
+          .filter(r => r.event_type === 'cigarette')
+          .map(r => new Date(r.occurred_at))
+          .sort((a, b) => a - b);
+        let longestGapTodayMinutes = 0;
+        for (let i = 1; i < todayCigs.length; i++) {
+          const gap = Math.round((todayCigs[i] - todayCigs[i - 1]) / 60000);
+          if (gap > longestGapTodayMinutes) longestGapTodayMinutes = gap;
+        }
+        broadcastToUser(resolvedUserId, 'dashboard:update', {
+          event: { id: data.id, type: eventType, timestamp: data.occurred_at },
+          today_count: facts.today_cigarette_count,
+          current_gap_minutes: facts.minutes_since_last_cigarette,
+          longest_gap_today_minutes: longestGapTodayMinutes,
+        });
+      } catch (broadcastErr) {
+        console.error('[broadcast] dashboard:update failed:', broadcastErr.message);
+      }
+      return;
     } catch (err) {
       res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: err.message }));
@@ -2421,6 +2448,29 @@ Return ONLY the JSON object, no markdown, no explanation.`;
       res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: err.message }));
     }
+  }
+
+  // ── SSE subscription — real-time push channel for a user ───────────────────
+  // Clients connect with GET /subscribe?userId=<id> and receive named SSE
+  // events (e.g. dashboard:update) whenever the server persists new data for
+  // that user.  The connection is kept open; the server pushes when needed.
+  if (req.method === 'GET' && req.url.startsWith('/subscribe')) {
+    const url = new URL(req.url, 'http://localhost');
+    const userId = url.searchParams.get('userId');
+    if (!userId) {
+      res.writeHead(400, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'userId required' }));
+    }
+    res.writeHead(200, {
+      ...CORS,
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    res.write(': connected\n\n');
+    const unregister = registerSseClient(resolveUserId(userId), res);
+    req.on('close', unregister);
+    return;
   }
 
   // One-shot hygiene sweep: deletes ghost transcript files (sessions that
