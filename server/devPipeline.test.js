@@ -129,17 +129,10 @@ test('insertRequests skips task when dedupe_key has status=deployed within 14 da
 
   const insertedRows = [];
   const fakeSupabase = {
-    from: (table) => ({
-      select: (cols) => ({
-        in: (col, vals) => ({
-          not: () => Promise.resolve({ data: [] }),
-        }),
-        eq: (col, val) => ({
-          eq: (col2, val2) => ({
-            gte: (col3, val3) => ({
-              limit: () => Promise.resolve({ data: [{ id: 'existing-deployed-row' }] }),
-            }),
-          }),
+    from: () => ({
+      select: () => ({
+        in: () => Promise.resolve({
+          data: [{ dedupe_key: key, status: 'deployed', updated_at: new Date().toISOString() }],
         }),
       }),
       insert: (rows) => {
@@ -158,32 +151,56 @@ test('insertRequests skips task when dedupe_key has status=deployed within 14 da
   assert.ok(logs.some((l) => l.includes('skip insert') && l.includes(key)), 'should log skip message');
 });
 
-test('insertRequests inserts task when no recently deployed row exists', async () => {
-  const task = { title: 'New unique feature', target: 'ui', confidence: 0.85, description: 'desc' };
-
-  const insertedRows = [];
-  const fakeSupabase = {
-    from: (table) => ({
-      select: (cols) => ({
-        in: (col, vals) => ({
-          not: () => Promise.resolve({ data: [] }),
-        }),
-        eq: (col, val) => ({
-          eq: (col2, val2) => ({
-            gte: (col3, val3) => ({
-              limit: () => Promise.resolve({ data: [] }),
-            }),
-          }),
-        }),
-      }),
+// A stub whose dedupe lookup returns `existingRows` regardless of the keys asked
+// for — enough of the supabase-js chain for insertRequests.
+function stubSupabase(existingRows, insertedRows) {
+  return {
+    from: () => ({
+      select: () => ({ in: () => Promise.resolve({ data: existingRows }) }),
       insert: (rows) => {
         insertedRows.push(...rows);
         return { select: () => Promise.resolve({ data: rows, error: null }) };
       },
     }),
   };
+}
 
-  await insertRequests(fakeSupabase, { source: 'test', userId: null, sessionId: null }, [task]);
+test('insertRequests inserts task when no recently deployed row exists', async () => {
+  const task = { title: 'New unique feature', target: 'ui', confidence: 0.85, description: 'desc' };
+  const insertedRows = [];
+
+  await insertRequests(stubSupabase([], insertedRows), { source: 'test', userId: null, sessionId: null }, [task]);
 
   assert.equal(insertedRows.length, 1, 'should insert the task');
+});
+
+test('insertRequests still skips a task whose dedupe_key is open (not yet deployed)', async () => {
+  const task = { title: 'Half-built feature', target: 'backend', confidence: 0.8, description: 'desc' };
+  const insertedRows = [];
+  const existing = [{ dedupe_key: dedupeKey(task.target, task.title), status: 'building', updated_at: new Date().toISOString() }];
+
+  await insertRequests(stubSupabase(existing, insertedRows), { source: 'test', userId: null, sessionId: null }, [task]);
+
+  assert.equal(insertedRows.length, 0, 'an in-flight build must not be queued twice');
+});
+
+test('insertRequests re-admits a task deployed longer ago than the 14-day window', async () => {
+  const task = { title: 'Seasonal tweak', target: 'ui', confidence: 0.8, description: 'desc' };
+  const insertedRows = [];
+  const longAgo = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+  const existing = [{ dedupe_key: dedupeKey(task.target, task.title), status: 'deployed', updated_at: longAgo }];
+
+  await insertRequests(stubSupabase(existing, insertedRows), { source: 'test', userId: null, sessionId: null }, [task]);
+
+  assert.equal(insertedRows.length, 1, 'an old deployment must not block the change forever');
+});
+
+test('insertRequests re-admits a task whose previous attempt failed', async () => {
+  const task = { title: 'Retry me', target: 'backend', confidence: 0.8, description: 'desc' };
+  const insertedRows = [];
+  const existing = [{ dedupe_key: dedupeKey(task.target, task.title), status: 'failed', updated_at: new Date().toISOString() }];
+
+  await insertRequests(stubSupabase(existing, insertedRows), { source: 'test', userId: null, sessionId: null }, [task]);
+
+  assert.equal(insertedRows.length, 1, 'a failed build must be retryable');
 });

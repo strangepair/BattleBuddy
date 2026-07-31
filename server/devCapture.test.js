@@ -43,16 +43,17 @@ function fakeAnthropic(tasks = [TASK]) {
 }
 
 // Just enough of the supabase-js chain for insertRequests: the dedupe lookup
-// (.select().in().not() → awaited) and the insert (.insert().select() → awaited).
-function fakeSupabase() {
+// (.select().in() → awaited) and the insert (.insert().select() → awaited).
+// `existingRows` seeds what the dedupe lookup finds, so a test can prove a
+// recently-deployed dedupe_key blocks re-insertion.
+function fakeSupabase(existingRows = []) {
   const inserted = [];
   return {
     inserted,
     from() {
       return {
         select() { return this; },
-        in() { return this; },
-        not: async () => ({ data: [] }),
+        in: async () => ({ data: existingRows }),
         insert(rows) {
           inserted.push(...rows);
           return { select: async () => ({ data: rows }) };

@@ -188,35 +188,33 @@ export async function generateProductRequests(anthropic, { transcript, directive
 export async function insertRequests(supabase, { source, userId, sessionId }, tasks) {
   if (!supabase || tasks.length === 0) return [];
 
-  // Skip duplicates of anything already open (not deployed/failed).
+  // Skip a task when its dedupe_key matches either (a) a row that is still
+  // open — anything not deployed/failed — or (b) a row that already reached
+  // 'deployed' recently. (b) is what let the dashboard broadcast feature ship
+  // twice on 2026-07-31: once #37 deployed, the old "open rows only" filter
+  // happily re-admitted the same change under a reworded title.
+  //
+  // One query, filtered in JS, rather than a lookup per task: the row count
+  // per batch is tiny and an N+1 against Supabase costs a round trip each.
   const keys = tasks.map((t) => dedupeKey(t.target, t.title));
   const { data: existing } = await supabase
     .from('dev_build_requests')
-    .select('dedupe_key')
-    .in('dedupe_key', keys)
-    .not('status', 'in', '(deployed,failed)');
-  const seen = new Set((existing || []).map((r) => r.dedupe_key));
+    .select('dedupe_key, status, updated_at')
+    .in('dedupe_key', keys);
 
   const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 3600 * 1000).toISOString();
-  const pendingTasks = tasks.filter((t) => !seen.has(dedupeKey(t.target, t.title)));
-  const finalTasks = [];
-  for (const t of pendingTasks) {
-    const key = dedupeKey(t.target, t.title);
-    const { data: deployedRows } = await supabase
-      .from('dev_build_requests')
-      .select('id')
-      .eq('dedupe_key', key)
-      .eq('status', 'deployed')
-      .gte('updated_at', fourteenDaysAgo)
-      .limit(1);
-    if (deployedRows && deployedRows.length > 0) {
-      console.log('[devPipeline] skip insert: recently deployed dedupe_key:', key);
-      continue;
+  const seen = new Set();
+  for (const r of existing || []) {
+    const stillOpen = r.status !== 'deployed' && r.status !== 'failed';
+    const recentlyDeployed = r.status === 'deployed' && r.updated_at && r.updated_at >= fourteenDaysAgo;
+    if (stillOpen || recentlyDeployed) {
+      if (recentlyDeployed) console.log('[devPipeline] skip insert: recently deployed dedupe_key:', r.dedupe_key);
+      seen.add(r.dedupe_key);
     }
-    finalTasks.push(t);
   }
 
-  const rows = finalTasks
+  const rows = tasks
+    .filter((t) => !seen.has(dedupeKey(t.target, t.title)))
     .map((t) => ({
       source,
       user_id: userId ? String(userId) : null,
