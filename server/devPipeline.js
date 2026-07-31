@@ -73,6 +73,40 @@ export function looksForbidden(text) {
   return FORBIDDEN_HINTS.some((h) => t.includes(h));
 }
 
+// ─── In-batch near-duplicate collapse ────────────────────────────────────────
+
+function normalizeWords(str) {
+  return String(str || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+}
+
+function jaccardOverlap(wordsA, wordsB) {
+  if (wordsA.length === 0 && wordsB.length === 0) return 1;
+  const setA = new Set(wordsA);
+  const setB = new Set(wordsB);
+  let intersection = 0;
+  for (const w of setA) if (setB.has(w)) intersection++;
+  const union = setA.size + setB.size - intersection;
+  return union === 0 ? 1 : intersection / union;
+}
+
+export function collapseNearDuplicates(items) {
+  const dropped = new Set();
+  for (let i = 0; i < items.length; i++) {
+    if (dropped.has(i)) continue;
+    for (let j = i + 1; j < items.length; j++) {
+      if (dropped.has(j)) continue;
+      if (items[i].target !== items[j].target) continue;
+      const wordsA = normalizeWords((items[i].title || '') + ' ' + (items[i].description || ''));
+      const wordsB = normalizeWords((items[j].title || '') + ' ' + (items[j].description || ''));
+      if (jaccardOverlap(wordsA, wordsB) > 0.6) {
+        const keepI = (items[i].confidence || 0) >= (items[j].confidence || 0);
+        dropped.add(keepI ? j : i);
+      }
+    }
+  }
+  return items.filter((_, idx) => !dropped.has(idx));
+}
+
 // ─── Spec generation (transcript | directive → product requests) ─────────────
 
 const SPEC_SYSTEM = `You convert product feedback for the BattleBuddy mobile app into concrete, buildable engineering tasks.
@@ -109,23 +143,30 @@ export async function generateProductRequests(anthropic, { transcript, directive
 
   const resp = await anthropic.messages.create({
     model: SPEC_MODEL,
-    max_tokens: 2000,
+    max_tokens: 8000,
     system: SPEC_SYSTEM,
     messages: [{ role: 'user', content: userContent }],
   });
 
-  const text = resp.content?.map((b) => (b.type === 'text' ? b.text : '')).join('') || '';
+  const rawText = resp.content?.map((b) => (b.type === 'text' ? b.text : '')).join('') || '';
+
+  if (resp.stop_reason === 'max_tokens') {
+    console.error('[devPipeline] TRUNCATED: stop_reason=max_tokens, raw:', rawText);
+    return [];
+  }
+
   let arr;
   try {
-    const start = text.indexOf('[');
-    const end = text.lastIndexOf(']');
-    arr = JSON.parse(text.slice(start, end + 1));
-  } catch {
+    const start = rawText.indexOf('[');
+    const end = rawText.lastIndexOf(']');
+    arr = JSON.parse(rawText.slice(start, end + 1));
+  } catch (err) {
+    console.error('[devPipeline] JSON.parse failed:', err.message, 'raw:', rawText);
     return [];
   }
   if (!Array.isArray(arr)) return [];
 
-  return arr
+  const items = arr
     .filter((t) => t && t.title && t.target && typeof t.confidence === 'number')
     .filter((t) => ['backend', 'agent', 'ui', 'prompt'].includes(t.target))
     .map((t) => ({
@@ -137,6 +178,8 @@ export async function generateProductRequests(anthropic, { transcript, directive
         looksForbidden(t.claudeCodePrompt) ||
         (t.affectedFiles || []).some(looksForbidden),
     }));
+
+  return collapseNearDuplicates(items);
 }
 
 // ─── Persistence (Supabase dev_build_requests) ───────────────────────────────
@@ -145,14 +188,30 @@ export async function generateProductRequests(anthropic, { transcript, directive
 export async function insertRequests(supabase, { source, userId, sessionId }, tasks) {
   if (!supabase || tasks.length === 0) return [];
 
-  // Skip duplicates of anything already open (not deployed/failed).
+  // Skip a task when its dedupe_key matches either (a) a row that is still
+  // open — anything not deployed/failed — or (b) a row that already reached
+  // 'deployed' recently. (b) is what let the dashboard broadcast feature ship
+  // twice on 2026-07-31: once #37 deployed, the old "open rows only" filter
+  // happily re-admitted the same change under a reworded title.
+  //
+  // One query, filtered in JS, rather than a lookup per task: the row count
+  // per batch is tiny and an N+1 against Supabase costs a round trip each.
   const keys = tasks.map((t) => dedupeKey(t.target, t.title));
   const { data: existing } = await supabase
     .from('dev_build_requests')
-    .select('dedupe_key')
-    .in('dedupe_key', keys)
-    .not('status', 'in', '(deployed,failed)');
-  const seen = new Set((existing || []).map((r) => r.dedupe_key));
+    .select('dedupe_key, status, updated_at')
+    .in('dedupe_key', keys);
+
+  const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 3600 * 1000).toISOString();
+  const seen = new Set();
+  for (const r of existing || []) {
+    const stillOpen = r.status !== 'deployed' && r.status !== 'failed';
+    const recentlyDeployed = r.status === 'deployed' && r.updated_at && r.updated_at >= fourteenDaysAgo;
+    if (stillOpen || recentlyDeployed) {
+      if (recentlyDeployed) console.log('[devPipeline] skip insert: recently deployed dedupe_key:', r.dedupe_key);
+      seen.add(r.dedupe_key);
+    }
+  }
 
   const rows = tasks
     .filter((t) => !seen.has(dedupeKey(t.target, t.title)))
