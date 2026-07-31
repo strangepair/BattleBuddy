@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { supabase } from '../services/supabase';
+import { ApiConfig } from '../config';
 import { useAuthStore } from '../stores/authStore';
 
 export interface SmokingLog {
@@ -7,6 +7,8 @@ export interface SmokingLog {
   user_id: string;
   occurred_at: string;
   metadata?: Record<string, unknown>;
+  activityLabel?: string;
+  location?: string;
 }
 
 interface UseSmokingLogsResult {
@@ -16,9 +18,12 @@ interface UseSmokingLogsResult {
 }
 
 /**
- * Fetches the current user's cigarette logs from Supabase.
- * `todayLogs` — entries where `occurred_at` is today (local midnight → now).
- * `historyLogs` — entries from the past 14 days (used for projection).
+ * Fetches the current user's cigarette logs from the server via
+ * GET /dashboard/today — which queries bb_events through resolveUserId so
+ * aliasing is consistent with POST /events and the broadcast path.
+ *
+ * `todayLogs`   — entries whose `occurred_at` falls within today (user TZ).
+ * `historyLogs` — entries from prior days (used for projection / ghost markers).
  */
 export function useSmokingLogs(): UseSmokingLogsResult {
   const userId = useAuthStore((s) => s.user?.id ?? null);
@@ -36,26 +41,33 @@ export function useSmokingLogs(): UseSmokingLogsResult {
 
     let cancelled = false;
 
-    async function fetch() {
+    async function load() {
       setLoading(true);
       try {
-        const now = new Date();
-        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-        const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000).toISOString();
+        const tz = (() => {
+          try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return 'America/Chicago'; }
+        })();
+        const res = await fetch(
+          `${ApiConfig.CHAT_URL}/dashboard/today?userId=${encodeURIComponent(userId!)}&timezone=${encodeURIComponent(tz)}`,
+        );
+        if (!res.ok || cancelled) return;
+        const json = await res.json();
 
-        const { data: history } = await supabase
-          .from('smoking_logs')
-          .select('id, user_id, occurred_at, metadata')
-          .eq('user_id', userId)
-          .gte('occurred_at', fourteenDaysAgo)
-          .order('occurred_at', { ascending: false });
+        const toLog = (e: { id: string; instant: string; activityLabel?: string | null; location?: string | null }): SmokingLog => ({
+          id: e.id,
+          user_id: userId!,
+          occurred_at: e.instant,
+          activityLabel: e.activityLabel ?? undefined,
+          location: e.location ?? undefined,
+        });
 
-        if (cancelled) return;
+        const today: SmokingLog[] = (json.todayEntries ?? []).map(toLog);
+        const history: SmokingLog[] = (json.recentHistory ?? []).map(toLog);
 
-        const logs: SmokingLog[] = history ?? [];
-        const today = logs.filter((l) => l.occurred_at >= todayStart);
-        setHistoryLogs(logs);
-        setTodayLogs(today);
+        if (!cancelled) {
+          setTodayLogs(today);
+          setHistoryLogs(history);
+        }
       } catch {
         if (!cancelled) {
           setTodayLogs([]);
@@ -66,7 +78,7 @@ export function useSmokingLogs(): UseSmokingLogsResult {
       }
     }
 
-    fetch();
+    load();
     return () => { cancelled = true; };
   }, [userId]);
 

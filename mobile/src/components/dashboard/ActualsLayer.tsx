@@ -12,6 +12,8 @@ interface ActualsLayerProps {
 /**
  * ActualsLayer renders coloured dot markers for cigarette log events
  * within a single hour row. Ghost markers (previous days) appear faded.
+ * When `activityLabel` or `location` is present on a log entry, it is
+ * rendered beside the time, e.g. "6:47 AM · car".
  */
 export default function ActualsLayer({ logs, ghost = false }: ActualsLayerProps) {
   if (logs.length === 0) return null;
@@ -20,7 +22,9 @@ export default function ActualsLayer({ logs, ghost = false }: ActualsLayerProps)
     <View style={styles.row}>
       {logs.map((log) => {
         const d = new Date(log.occurred_at);
-        const label = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const suffix = log.activityLabel || log.location || null;
+        const label = suffix ? `${time} · ${suffix}` : time;
         return (
           <View key={log.id} style={[styles.dot, ghost && styles.dotGhost]}>
             <Text style={[styles.label, ghost && styles.labelGhost]}>{label}</Text>

@@ -10,22 +10,28 @@ export interface DashboardRealtimeState {
   realtimeEvents: SmokingLog[];
 }
 
+interface BroadcastEntry {
+  id: string;
+  instant: string;
+  activityLabel?: string | null;
+  location?: string | null;
+}
+
 interface BroadcastPayload {
-  event: { id: string; type: string; timestamp: string };
-  today_count: number;
-  current_gap_minutes: number;
-  longest_gap_today_minutes: number;
+  event: BroadcastEntry | null;
+  todayCount: number;
+  currentGapMinutes: number | null;
+  longestGapTodayMinutes: number;
 }
 
 function isBroadcastPayload(v: unknown): v is BroadcastPayload {
   if (!v || typeof v !== 'object') return false;
   const p = v as Record<string, unknown>;
   return (
-    typeof p.today_count === 'number' &&
-    typeof p.current_gap_minutes === 'number' &&
-    typeof p.longest_gap_today_minutes === 'number' &&
-    typeof p.event === 'object' &&
-    p.event !== null
+    typeof p.todayCount === 'number' &&
+    typeof p.longestGapTodayMinutes === 'number' &&
+    'currentGapMinutes' in p &&
+    'event' in p
   );
 }
 
@@ -50,19 +56,26 @@ export function useDashboardRealtime(
     handlerRef.current = (payload: unknown) => {
       if (!isBroadcastPayload(payload)) return;
 
-      setTodayCount(payload.today_count);
-      setCurrentGapMinutes(payload.current_gap_minutes);
-      setLongestGapTodayMinutes(payload.longest_gap_today_minutes);
+      setTodayCount(payload.todayCount);
+      setCurrentGapMinutes(payload.currentGapMinutes);
+      setLongestGapTodayMinutes(payload.longestGapTodayMinutes);
 
       const ev = payload.event;
-      if (!seenIds.current.has(ev.id)) {
+      if (ev && !seenIds.current.has(ev.id)) {
         seenIds.current.add(ev.id);
         const newLog: SmokingLog = {
           id: ev.id,
           user_id: userId ?? '',
-          occurred_at: ev.timestamp,
+          occurred_at: ev.instant,
+          activityLabel: ev.activityLabel ?? undefined,
+          location: ev.location ?? undefined,
         };
-        setRealtimeEvents((prev) => [newLog, ...prev]);
+        setRealtimeEvents((prev) => {
+          const merged = [...prev, newLog].sort((a, b) =>
+            a.occurred_at.localeCompare(b.occurred_at),
+          );
+          return merged;
+        });
       }
     };
   });

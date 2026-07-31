@@ -39,13 +39,13 @@ import {
 } from './commitments.js';
 import { toCachedSystemBlocks } from './promptCache.js';
 import { DEFAULT_TZ, tzOffsetString, formatLocalTime, buildSessionContext as buildSessionContextLine, normalizeOccurredAt } from './timeContext.js';
-import { HABIT_EVENT_TYPES, deriveUsageFacts, renderUsageFactsLine } from './usageFacts.js';
+import { HABIT_EVENT_TYPES, deriveUsageFacts, renderUsageFactsLine, deriveDashboardPayload } from './usageFacts.js';
 import { checkDevModeToolResult, devModeStatusBlock } from './devMode.js';
 import { handleDevPipeline, runDevBuildWorker } from './devPipeline.js';
 import { recordTextTurn, recordVoiceSessionStart, recordVoiceTranscript, sweepIdleSegments, registerShutdownFlush } from './devCapture.js';
 import { jsonrepair } from 'jsonrepair';
 import { broadcastToUser, registerSseClient } from './broadcast.js';
-import { broadcastDashboardUpdate } from './broadcastDashboard.js';
+import { broadcastDashboard } from './broadcastDashboard.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -914,7 +914,18 @@ async function executeToolUse(toolUse, userId, timezone = DEFAULT_TZ, requestCon
     if (error) {
       return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: error.message }), is_error: true };
     }
-    broadcastDashboardUpdate(supabase, userId, { id: data.id, event_type, occurred_at: data.occurred_at }, timezone);
+    try {
+      const broadcastRows = await supabase
+        .from('bb_events')
+        .select('id, event_type, occurred_at, metadata')
+        .eq('user_id', userId)
+        .order('occurred_at', { ascending: false })
+        .limit(200);
+      const bPayload = deriveDashboardPayload(broadcastRows.data || [], timezone);
+      broadcastDashboard(userId, bPayload);
+    } catch (bErr) {
+      console.error('[broadcastDashboard] log_event fetch error:', bErr.message);
+    }
     return {
       type: 'tool_result',
       tool_use_id: toolUse.id,
@@ -2328,27 +2339,56 @@ Return ONLY the JSON object, no markdown, no explanation.`;
       // Fire-and-forget dashboard push — must never reject the main request.
       try {
         const resolvedUserId = resolveUserId(userId);
-        const rows = await fetchUsageFactRows(resolvedUserId, eventTz);
-        const facts = deriveUsageFacts(rows, eventTz);
-        const todayCigs = rows
-          .filter(r => r.event_type === 'cigarette')
-          .map(r => new Date(r.occurred_at))
-          .sort((a, b) => a - b);
-        let longestGapTodayMinutes = 0;
-        for (let i = 1; i < todayCigs.length; i++) {
-          const gap = Math.round((todayCigs[i] - todayCigs[i - 1]) / 60000);
-          if (gap > longestGapTodayMinutes) longestGapTodayMinutes = gap;
+        const { data: bRows, error: bError } = await supabase
+          .from('bb_events')
+          .select('id, event_type, occurred_at, metadata')
+          .eq('user_id', resolvedUserId)
+          .order('occurred_at', { ascending: false })
+          .limit(200);
+        if (!bError) {
+          const bPayload = deriveDashboardPayload(bRows || [], eventTz);
+          broadcastDashboard(resolvedUserId, bPayload);
         }
-        broadcastToUser(resolvedUserId, 'dashboard:update', {
-          event: { id: data.id, type: eventType, timestamp: data.occurred_at },
-          today_count: facts.today_cigarette_count,
-          current_gap_minutes: facts.minutes_since_last_cigarette,
-          longest_gap_today_minutes: longestGapTodayMinutes,
-        });
       } catch (broadcastErr) {
         console.error('[broadcast] dashboard:update failed:', broadcastErr.message);
       }
       return;
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  // ─── Dashboard today — mobile mission dashboard data path ───────────────────
+  // Serves today's bb_events (cigarette) entries plus recent history through
+  // resolveUserId so aliasing is consistent with POST /events.
+  if (req.method === 'GET' && req.url.startsWith('/dashboard/today')) {
+    if (!supabase) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Event store not configured' }));
+    }
+    try {
+      const url = new URL(req.url, 'http://localhost');
+      const rawUserId = url.searchParams.get('userId');
+      const timezone = url.searchParams.get('timezone') || DEFAULT_TZ;
+      if (!rawUserId) {
+        res.writeHead(400, { ...CORS, 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'userId required' }));
+      }
+      const resolvedId = resolveUserId(rawUserId);
+
+      const { data: rows, error } = await supabase
+        .from('bb_events')
+        .select('id, event_type, occurred_at, metadata')
+        .eq('user_id', resolvedId)
+        .in('event_type', ['cigarette'])
+        .order('occurred_at', { ascending: false })
+        .limit(200);
+
+      if (error) throw new Error(error.message);
+      const payload = deriveDashboardPayload(rows || [], timezone);
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(payload));
     } catch (err) {
       res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: err.message }));
