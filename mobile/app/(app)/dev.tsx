@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   RefreshControl,
   Alert,
+  Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router, useFocusEffect } from 'expo-router';
@@ -52,6 +53,7 @@ export default function DevScreen() {
   const [selectedRequest, setSelectedRequest] = useState<DevRequest | null>(null);
   const [directive, setDirective] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
 
   const load = useCallback(async () => {
     const list = await listRequests(userId);
@@ -94,7 +96,15 @@ export default function DevScreen() {
           <Text style={styles.backText}>← Back</Text>
         </TouchableOpacity>
         <Text style={styles.title}>Build pipeline</Text>
-        <View style={styles.spacer} />
+        <View style={styles.archiveToggle}>
+          <Text style={styles.archiveLabel}>Archived</Text>
+          <Switch
+            value={showArchived}
+            onValueChange={setShowArchived}
+            trackColor={{ false: Colors.surfaceBorder, true: Colors.coral }}
+            thumbColor="#fff"
+          />
+        </View>
       </View>
 
       <ScrollView
@@ -134,13 +144,13 @@ export default function DevScreen() {
 
         {loading ? (
           <ActivityIndicator color={Colors.coral} style={{ marginTop: Spacing.xl }} />
-        ) : requests.length === 0 ? (
+        ) : requests.filter((r) => showArchived || !r.archived).length === 0 ? (
           <Text style={styles.empty}>
             No build requests yet. Turn on Developer mode, have a conversation about a change,
             or send a directive above.
           </Text>
         ) : (
-          requests.map((r) => {
+          requests.filter((r) => showArchived || !r.archived).map((r) => {
             const meta = STATUS_META[r.status] ?? STATUS_META.pending;
             return (
               <TouchableOpacity key={r.id} style={styles.card} onPress={() => setSelectedRequest(r)} activeOpacity={0.75}>
@@ -188,7 +198,8 @@ const styles = StyleSheet.create({
   backButton: { paddingVertical: Spacing.xs, paddingRight: Spacing.sm, minWidth: 60 },
   backText: { color: Colors.coral, fontSize: 16, fontWeight: '600' },
   title: { fontSize: 18, fontWeight: '700', color: Colors.textPrimary },
-  spacer: { minWidth: 60 },
+  archiveToggle: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  archiveLabel: { fontSize: 12, color: Colors.textSecondary, fontWeight: '500' },
   scroll: { paddingHorizontal: Spacing.md, paddingTop: Spacing.lg, paddingBottom: Spacing.xxl },
   blurb: { fontSize: 13, color: Colors.textSecondary, lineHeight: 18, marginBottom: Spacing.md },
   composer: { marginBottom: Spacing.xl },

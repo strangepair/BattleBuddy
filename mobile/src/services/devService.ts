@@ -28,6 +28,7 @@ export interface DevRequest {
   branch?: string | null;
   deploy_status?: string | null;
   error?: string | null;
+  archived?: boolean;
   created_at: string;
   updated_at?: string;
 }
