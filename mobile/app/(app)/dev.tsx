@@ -150,7 +150,10 @@ export default function DevScreen() {
             or send a directive above.
           </Text>
         ) : (
-          requests.filter((r) => showArchived || !r.archived).map((r) => {
+          [...requests]
+            .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+            .filter((r) => showArchived || !r.archived)
+            .map((r) => {
             const meta = STATUS_META[r.status] ?? STATUS_META.pending;
             return (
               <TouchableOpacity key={r.id} style={styles.card} onPress={() => setSelectedRequest(r)} activeOpacity={0.75}>
