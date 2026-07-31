@@ -4,8 +4,10 @@ import HeroMetric from '../components/dashboard/HeroMetric';
 import DayCalendarView from '../components/dashboard/DayCalendarView';
 import { useSmokingLogs } from '../hooks/useSmokingLogs';
 import { useRoutineProjection } from '../hooks/useRoutineProjection';
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import type { DayLog } from '../components/dashboard/DayCalendarView';
+import { useDashboardBroadcast, newLogFromPayload } from '../hooks/useDashboardBroadcast';
+import type { SmokingLog } from '../hooks/useSmokingLogs';
 
 /**
  * MissionDashboardScreen is the redesigned mission dashboard.
@@ -13,10 +15,32 @@ import type { DayLog } from '../components/dashboard/DayCalendarView';
  *   1. HeroMetric — last cigarette timestamp + live elapsed-time counter.
  *   2. DayCalendarView — hourly timeline with projected routine and today's
  *      actuals, plus the last 3 days' patterns as ghost markers.
+ *
+ * Real-time layer: subscribes to `dashboard:update` SSE broadcasts and merges
+ * new events into the actuals list without a manual refresh.
  */
 export default function MissionDashboardScreen() {
   const { todayLogs, historyLogs } = useSmokingLogs();
   const projected = useRoutineProjection(historyLogs);
+  const broadcastPayload = useDashboardBroadcast();
+
+  const [realtimeLogs, setRealtimeLogs] = useState<SmokingLog[]>([]);
+  const seenIds = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (!broadcastPayload) return;
+    const log = newLogFromPayload(broadcastPayload);
+    if (seenIds.current.has(log.id)) return;
+    seenIds.current.add(log.id);
+    setRealtimeLogs((prev) => [log, ...prev]);
+  }, [broadcastPayload]);
+
+  const mergedTodayLogs: SmokingLog[] = useMemo(() => {
+    const fetched = todayLogs;
+    const fetchedIds = new Set(fetched.map((l) => l.id));
+    const extra = realtimeLogs.filter((l) => !fetchedIds.has(l.id));
+    return [...extra, ...fetched].sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
+  }, [todayLogs, realtimeLogs]);
 
   const previousDays: DayLog[] = useMemo(() => {
     const today = new Date();
@@ -40,7 +64,7 @@ export default function MissionDashboardScreen() {
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.container}>
       <HeroMetric />
-      <DayCalendarView projected={projected} actuals={todayLogs} previousDays={previousDays} />
+      <DayCalendarView projected={projected} actuals={mergedTodayLogs} previousDays={previousDays} />
     </ScrollView>
   );
 }
