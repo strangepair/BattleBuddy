@@ -8,7 +8,6 @@ import {
   TextInput,
   ActivityIndicator,
   RefreshControl,
-  Linking,
   Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -21,6 +20,7 @@ import {
   type DevRequestStatus,
 } from '../../src/services/devService';
 import { Colors, Spacing, Radii } from '../../src/theme';
+import { PRDetailView } from '../../src/components/dev/PRDetailView';
 
 // Map internal statuses → the buckets/labels the user asked for.
 const STATUS_META: Record<
@@ -49,6 +49,7 @@ export default function DevScreen() {
   const [requests, setRequests] = useState<DevRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedRequest, setSelectedRequest] = useState<DevRequest | null>(null);
   const [directive, setDirective] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -142,7 +143,7 @@ export default function DevScreen() {
           requests.map((r) => {
             const meta = STATUS_META[r.status] ?? STATUS_META.pending;
             return (
-              <View key={r.id} style={styles.card}>
+              <TouchableOpacity key={r.id} style={styles.card} onPress={() => setSelectedRequest(r)} activeOpacity={0.75}>
                 <View style={styles.cardTop}>
                   <Text style={styles.cardTitle} numberOfLines={2}>{r.title}</Text>
                   <View style={[styles.badge, { borderColor: meta.color }]}>
@@ -159,17 +160,16 @@ export default function DevScreen() {
                 </View>
                 {r.error ? <Text style={styles.errorText}>{r.error}</Text> : null}
                 {r.pr_url ? (
-                  <TouchableOpacity onPress={() => Linking.openURL(r.pr_url!)} activeOpacity={0.7}>
-                    <Text style={styles.prLink}>
-                      View PR{r.pr_number ? ` #${r.pr_number}` : ''} ›
-                    </Text>
-                  </TouchableOpacity>
+                  <Text style={styles.prLink}>
+                    View PR{r.pr_number ? ` #${r.pr_number}` : ''} ›
+                  </Text>
                 ) : null}
-              </View>
+              </TouchableOpacity>
             );
           })
         )}
       </ScrollView>
+      <PRDetailView request={selectedRequest} onDismiss={() => setSelectedRequest(null)} />
     </SafeAreaView>
   );
 }
