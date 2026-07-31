@@ -96,6 +96,77 @@ export function deriveUsageFacts(rows, timezone = DEFAULT_TZ, now = new Date()) 
   };
 }
 
+/**
+ * Derive the dashboard payload from bb_events rows.
+ *
+ * Returns the canonical shape consumed by both GET /dashboard/today and
+ * broadcastDashboard — a single source of truth for all dashboard consumers.
+ *
+ * @param {Array} rows - bb_events rows ({ id, event_type, occurred_at, metadata }),
+ *   any order; may span multiple days.
+ * @param {string} timezone - IANA zone of the user
+ * @param {Date} now - injected for testability
+ */
+export function deriveDashboardPayload(rows, timezone = DEFAULT_TZ, now = new Date()) {
+  const tz = timezone || DEFAULT_TZ;
+  const today = localDateOf(now.toISOString(), tz);
+
+  const allRows = (rows || [])
+    .filter(r => r.occurred_at && new Date(r.occurred_at).getTime() <= now.getTime())
+    .sort((a, b) => new Date(a.occurred_at) - new Date(b.occurred_at));
+
+  const todayCigRows = allRows.filter(
+    r => r.event_type === 'cigarette' && localDateOf(r.occurred_at, tz) === today,
+  );
+
+  const todayEntries = todayCigRows.map(r => ({
+    id: r.id,
+    instant: r.occurred_at,
+    activityLabel: r.metadata?.trigger?.label || r.metadata?.notes || null,
+    location: r.metadata?.location || null,
+  }));
+
+  const todayCount = todayCigRows.length;
+
+  const lastCig = todayCigRows.length ? todayCigRows[todayCigRows.length - 1] : null;
+  const currentGapMinutes = lastCig
+    ? Math.max(0, Math.round((now.getTime() - new Date(lastCig.occurred_at).getTime()) / 60000))
+    : null;
+
+  let longestGapTodayMinutes = 0;
+  for (let i = 1; i < todayCigRows.length; i++) {
+    const gap = Math.round(
+      (new Date(todayCigRows[i].occurred_at) - new Date(todayCigRows[i - 1].occurred_at)) / 60000,
+    );
+    if (gap > longestGapTodayMinutes) longestGapTodayMinutes = gap;
+  }
+
+  const seenDates = new Set();
+  seenDates.add(today);
+  const recentHistory = allRows
+    .filter(r => r.event_type === 'cigarette')
+    .filter(r => {
+      const d = localDateOf(r.occurred_at, tz);
+      if (seenDates.has(d) && d === today) return false;
+      seenDates.add(d);
+      return true;
+    })
+    .map(r => ({
+      id: r.id,
+      instant: r.occurred_at,
+      activityLabel: r.metadata?.trigger?.label || r.metadata?.notes || null,
+      location: r.metadata?.location || null,
+    }));
+
+  return {
+    todayEntries,
+    todayCount,
+    currentGapMinutes,
+    longestGapTodayMinutes,
+    recentHistory,
+  };
+}
+
 function gapPhrase(minutes) {
   if (minutes == null) return null;
   if (minutes < 60) return `${minutes} minutes ago`;

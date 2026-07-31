@@ -340,14 +340,21 @@ async def battlebuddy_session(ctx: agents.JobContext):
                 return json.dumps({"error": str(e)})
 
         @function_tool()
-        async def log_event(self, event_type: str, occurred_at: str = "", notes: str = ""):
-            """Log a smoking or urge event the user just told you about. event_type is one of: cigarette, urge_resisted, urge_gave_in, milestone. ALWAYS leave occurred_at empty for 'right now' — the server stamps the authoritative current time; never compute 'now' yourself. Only pass occurred_at when back-dating, as the user's LOCAL wall-clock time exactly as they said it (e.g. '2026-07-29T16:43:00') — no timezone conversion, no UTC offset. For slips, always confirm with the user before logging. Confirm back what you logged in one short line."""
+        async def log_event(self, event_type: str, occurred_at: str = "", notes: str = "", trigger: str = "", location: str = ""):
+            """Log a smoking or urge event the user just told you about. event_type is one of: cigarette, urge_resisted, urge_gave_in, milestone. ALWAYS leave occurred_at empty for 'right now' — the server stamps the authoritative current time; never compute 'now' yourself. Only pass occurred_at when back-dating, as the user's LOCAL wall-clock time exactly as they said it (e.g. '2026-07-29T16:43:00') — no timezone conversion, no UTC offset. trigger: optional short label for what triggered the event (e.g. 'after coffee', 'stress'). location: optional short label for where it happened (e.g. 'car', 'garage'). For slips, always confirm with the user before logging. Confirm back what you logged in one short line."""
             try:
+                metadata: dict = {"source": "voice"}
+                if notes:
+                    metadata["notes"] = notes
+                if location:
+                    metadata["location"] = location
+                if trigger:
+                    metadata["trigger"] = {"label": trigger}
                 payload = {
                     "userId": user_id,
                     "eventType": event_type,
                     "timezone": timezone,
-                    "metadata": {"source": "voice", "notes": notes or None},
+                    "metadata": metadata,
                 }
                 if occurred_at:
                     payload["occurredAt"] = occurred_at
@@ -365,8 +372,8 @@ async def battlebuddy_session(ctx: agents.JobContext):
                 return json.dumps({"error": str(e)})
 
         @function_tool()
-        async def update_event(self, event_id: str, action: str, event_type: str = "", occurred_at: str = "", notes: str = ""):
-            """Correct or delete a mislogged event. action is 'update' or 'delete'. Get the event_id from get_usage_stats first. If correcting the time, pass occurred_at as the user's LOCAL wall-clock time exactly as they said it (e.g. '2026-07-29T16:43:00') — no timezone conversion, no UTC offset. Tell the user what changed."""
+        async def update_event(self, event_id: str, action: str, event_type: str = "", occurred_at: str = "", notes: str = "", location: str = ""):
+            """Correct or delete a mislogged event. action is 'update' or 'delete'. Get the event_id from get_usage_stats first. If correcting the time, pass occurred_at as the user's LOCAL wall-clock time exactly as they said it (e.g. '2026-07-29T16:43:00') — no timezone conversion, no UTC offset. location: optional corrected location label. Tell the user what changed."""
             try:
                 payload = {"userId": user_id, "eventId": event_id, "action": action, "timezone": timezone}
                 if event_type:
@@ -375,6 +382,8 @@ async def battlebuddy_session(ctx: agents.JobContext):
                     payload["occurredAt"] = occurred_at
                 if notes:
                     payload["notes"] = notes
+                if location:
+                    payload["location"] = location
                 async with aiohttp.ClientSession() as http:
                     resp = await http.post(
                         f"{SERVER_URL}/events/update",
