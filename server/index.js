@@ -45,6 +45,7 @@ import { handleDevPipeline, runDevBuildWorker } from './devPipeline.js';
 import { recordTextTurn, recordVoiceSessionStart, recordVoiceTranscript, sweepIdleSegments, registerShutdownFlush } from './devCapture.js';
 import { jsonrepair } from 'jsonrepair';
 import { broadcastToUser, registerSseClient } from './broadcast.js';
+import { broadcastDashboardUpdate } from './broadcastDashboard.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -913,6 +914,7 @@ async function executeToolUse(toolUse, userId, timezone = DEFAULT_TZ, requestCon
     if (error) {
       return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: error.message }), is_error: true };
     }
+    broadcastDashboardUpdate(supabase, userId, { id: data.id, event_type, occurred_at: data.occurred_at }, timezone);
     return {
       type: 'tool_result',
       tool_use_id: toolUse.id,
