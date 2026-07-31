@@ -1,0 +1,82 @@
+import { useEffect, useRef, useState } from 'react';
+import { subscribe, unsubscribe, startRealtime, stopRealtime } from '../services/realtimeClient';
+import { useAuthStore } from '../stores/authStore';
+import type { SmokingLog } from './useSmokingLogs';
+
+export interface DashboardRealtimeState {
+  todayCount: number | null;
+  currentGapMinutes: number | null;
+  longestGapTodayMinutes: number | null;
+  realtimeEvents: SmokingLog[];
+}
+
+interface BroadcastPayload {
+  event: { id: string; type: string; timestamp: string };
+  today_count: number;
+  current_gap_minutes: number;
+  longest_gap_today_minutes: number;
+}
+
+function isBroadcastPayload(v: unknown): v is BroadcastPayload {
+  if (!v || typeof v !== 'object') return false;
+  const p = v as Record<string, unknown>;
+  return (
+    typeof p.today_count === 'number' &&
+    typeof p.current_gap_minutes === 'number' &&
+    typeof p.longest_gap_today_minutes === 'number' &&
+    typeof p.event === 'object' &&
+    p.event !== null
+  );
+}
+
+export function useDashboardRealtime(
+  initialTodayLogs: SmokingLog[] = [],
+): DashboardRealtimeState {
+  const userId = useAuthStore((s) => s.user?.id ?? null);
+
+  const [todayCount, setTodayCount] = useState<number | null>(null);
+  const [currentGapMinutes, setCurrentGapMinutes] = useState<number | null>(null);
+  const [longestGapTodayMinutes, setLongestGapTodayMinutes] = useState<number | null>(null);
+  const [realtimeEvents, setRealtimeEvents] = useState<SmokingLog[]>([]);
+
+  const seenIds = useRef(new Set<string>());
+  const handlerRef = useRef<(payload: unknown) => void>(() => {});
+
+  useEffect(() => {
+    seenIds.current = new Set(initialTodayLogs.map((l) => l.id));
+  }, [initialTodayLogs]);
+
+  useEffect(() => {
+    handlerRef.current = (payload: unknown) => {
+      if (!isBroadcastPayload(payload)) return;
+
+      setTodayCount(payload.today_count);
+      setCurrentGapMinutes(payload.current_gap_minutes);
+      setLongestGapTodayMinutes(payload.longest_gap_today_minutes);
+
+      const ev = payload.event;
+      if (!seenIds.current.has(ev.id)) {
+        seenIds.current.add(ev.id);
+        const newLog: SmokingLog = {
+          id: ev.id,
+          user_id: userId ?? '',
+          occurred_at: ev.timestamp,
+        };
+        setRealtimeEvents((prev) => [newLog, ...prev]);
+      }
+    };
+  });
+
+  useEffect(() => {
+    if (!userId) return;
+    startRealtime(userId);
+    const handler = (payload: unknown) => handlerRef.current(payload);
+    subscribe('dashboard:update', handler);
+    return () => {
+      unsubscribe('dashboard:update', handler);
+      stopRealtime();
+    };
+  }, [userId]);
+
+  return { todayCount, currentGapMinutes, longestGapTodayMinutes, realtimeEvents };
+}

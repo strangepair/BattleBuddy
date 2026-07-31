@@ -4,9 +4,9 @@ import HeroMetric from '../components/dashboard/HeroMetric';
 import DayCalendarView from '../components/dashboard/DayCalendarView';
 import { useSmokingLogs } from '../hooks/useSmokingLogs';
 import { useRoutineProjection } from '../hooks/useRoutineProjection';
-import { useMemo, useState, useEffect, useRef } from 'react';
+import { useMemo } from 'react';
 import type { DayLog } from '../components/dashboard/DayCalendarView';
-import { useDashboardBroadcast, newLogFromPayload } from '../hooks/useDashboardBroadcast';
+import { useDashboardRealtime } from '../hooks/useDashboardRealtime';
 import type { SmokingLog } from '../hooks/useSmokingLogs';
 
 /**
@@ -22,25 +22,13 @@ import type { SmokingLog } from '../hooks/useSmokingLogs';
 export default function MissionDashboardScreen() {
   const { todayLogs, historyLogs } = useSmokingLogs();
   const projected = useRoutineProjection(historyLogs);
-  const broadcastPayload = useDashboardBroadcast();
-
-  const [realtimeLogs, setRealtimeLogs] = useState<SmokingLog[]>([]);
-  const seenIds = useRef(new Set<string>());
-
-  useEffect(() => {
-    if (!broadcastPayload) return;
-    const log = newLogFromPayload(broadcastPayload);
-    if (seenIds.current.has(log.id)) return;
-    seenIds.current.add(log.id);
-    setRealtimeLogs((prev) => [log, ...prev]);
-  }, [broadcastPayload]);
+  const { realtimeEvents } = useDashboardRealtime(todayLogs);
 
   const mergedTodayLogs: SmokingLog[] = useMemo(() => {
-    const fetched = todayLogs;
-    const fetchedIds = new Set(fetched.map((l) => l.id));
-    const extra = realtimeLogs.filter((l) => !fetchedIds.has(l.id));
-    return [...extra, ...fetched].sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
-  }, [todayLogs, realtimeLogs]);
+    const fetchedIds = new Set(todayLogs.map((l) => l.id));
+    const extra = realtimeEvents.filter((l) => !fetchedIds.has(l.id));
+    return [...extra, ...todayLogs].sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
+  }, [todayLogs, realtimeEvents]);
 
   const previousDays: DayLog[] = useMemo(() => {
     const today = new Date();
