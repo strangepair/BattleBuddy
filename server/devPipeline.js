@@ -261,6 +261,7 @@ function publicRow(r) {
     branch: r.branch,
     deploy_status: r.deploy_status,
     error: r.error,
+    archived: r.archived ?? false,
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -467,6 +468,19 @@ export async function handleDevPipeline(req, res, deps) {
     const patch = patchForEvent(event, payload);
     if (!requestId || !patch) return json(400, { error: 'requestId and known event required' });
     await setStatus(supabase, requestId, patch, `gh:${event}`);
+    return json(200, { ok: true });
+  }
+
+  // PATCH /dev/requests/:id/archive — mark a request as archived (non-destructive).
+  if (req.method === 'PATCH' && path.startsWith('/dev/requests/') && path.endsWith('/archive')) {
+    if (!checkClientToken(req)) return json(401, { error: 'unauthorized' });
+    if (!supabase) return json(404, { error: 'not found' });
+    const id = decodeURIComponent(path.slice('/dev/requests/'.length, -'/archive'.length));
+    const { error: patchErr } = await supabase
+      .from('dev_build_requests')
+      .update({ archived: true, updated_at: new Date().toISOString() })
+      .eq('id', id);
+    if (patchErr) return json(500, { error: patchErr.message });
     return json(200, { ok: true });
   }
 

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -12,11 +12,13 @@ import {
   Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import Swipeable from 'react-native-gesture-handler/Swipeable';
 import { router, useFocusEffect } from 'expo-router';
 import { useAuthStore } from '../../src/stores/authStore';
 import {
   listRequests,
   submitDirective,
+  archiveRequest,
   type DevRequest,
   type DevRequestStatus,
 } from '../../src/services/devService';
@@ -54,6 +56,7 @@ export default function DevScreen() {
   const [directive, setDirective] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const swipeableRefs = useRef<Record<string, Swipeable | null>>({});
 
   const load = useCallback(async () => {
     const list = await listRequests(userId);
@@ -88,6 +91,16 @@ export default function DevScreen() {
       setSubmitting(false);
     }
   }, [directive, submitting, userId, load]);
+
+  const onArchive = useCallback(async (id: string) => {
+    swipeableRefs.current[id]?.close();
+    setRequests((prev) => prev.map((r) => r.id === id ? { ...r, archived: true } : r));
+    const ok = await archiveRequest(id);
+    if (!ok) {
+      setRequests((prev) => prev.map((r) => r.id === id ? { ...r, archived: false } : r));
+      Alert.alert('Archive failed', 'Could not archive this request. Please try again.');
+    }
+  }, []);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -144,7 +157,7 @@ export default function DevScreen() {
 
         {loading ? (
           <ActivityIndicator color={Colors.coral} style={{ marginTop: Spacing.xl }} />
-        ) : requests.filter((r) => showArchived || !r.archived).length === 0 ? (
+        ) : requests.filter((r) => showArchived ? r.archived : !r.archived).length === 0 ? (
           <Text style={styles.empty}>
             No build requests yet. Turn on Developer mode, have a conversation about a change,
             or send a directive above.
@@ -152,32 +165,49 @@ export default function DevScreen() {
         ) : (
           [...requests]
             .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-            .filter((r) => showArchived || !r.archived)
+            .filter((r) => showArchived ? r.archived : !r.archived)
             .map((r) => {
             const meta = STATUS_META[r.status] ?? STATUS_META.pending;
-            return (
-              <TouchableOpacity key={r.id} style={styles.card} onPress={() => setSelectedRequest(r)} activeOpacity={0.75}>
-                <View style={styles.cardTop}>
-                  <Text style={styles.cardTitle} numberOfLines={2}>{r.title}</Text>
-                  <View style={[styles.badge, { borderColor: meta.color }]}>
-                    <Text style={[styles.badgeText, { color: meta.color }]}>{meta.label}</Text>
-                  </View>
-                </View>
-                <View style={styles.cardMeta}>
-                  <View style={styles.targetPill}>
-                    <Text style={styles.targetText}>{TARGET_LABEL[r.target] ?? r.target}</Text>
-                  </View>
-                  <Text style={styles.sourceText}>
-                    {r.source === 'directive' ? 'from directive' : 'from conversation'}
-                  </Text>
-                </View>
-                {r.error ? <Text style={styles.errorText}>{r.error}</Text> : null}
-                {r.pr_url ? (
-                  <Text style={styles.prLink}>
-                    View PR{r.pr_number ? ` #${r.pr_number}` : ''} ›
-                  </Text>
-                ) : null}
+            const renderRightActions = () => (
+              <TouchableOpacity
+                style={styles.archiveAction}
+                onPress={() => onArchive(r.id)}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.archiveActionText}>Archive</Text>
               </TouchableOpacity>
+            );
+            return (
+              <Swipeable
+                key={r.id}
+                ref={(ref) => { swipeableRefs.current[r.id] = ref; }}
+                renderRightActions={renderRightActions}
+                overshootRight={false}
+                friction={2}
+              >
+                <TouchableOpacity style={styles.card} onPress={() => setSelectedRequest(r)} activeOpacity={0.75}>
+                  <View style={styles.cardTop}>
+                    <Text style={styles.cardTitle} numberOfLines={2}>{r.title}</Text>
+                    <View style={[styles.badge, { borderColor: meta.color }]}>
+                      <Text style={[styles.badgeText, { color: meta.color }]}>{meta.label}</Text>
+                    </View>
+                  </View>
+                  <View style={styles.cardMeta}>
+                    <View style={styles.targetPill}>
+                      <Text style={styles.targetText}>{TARGET_LABEL[r.target] ?? r.target}</Text>
+                    </View>
+                    <Text style={styles.sourceText}>
+                      {r.source === 'directive' ? 'from directive' : 'from conversation'}
+                    </Text>
+                  </View>
+                  {r.error ? <Text style={styles.errorText}>{r.error}</Text> : null}
+                  {r.pr_url ? (
+                    <Text style={styles.prLink}>
+                      View PR{r.pr_number ? ` #${r.pr_number}` : ''} ›
+                    </Text>
+                  ) : null}
+                </TouchableOpacity>
+              </Swipeable>
             );
           })
         )}
@@ -261,4 +291,13 @@ const styles = StyleSheet.create({
   sourceText: { fontSize: 12, color: Colors.textTertiary },
   errorText: { fontSize: 12, color: Colors.error, lineHeight: 16 },
   prLink: { fontSize: 13, fontWeight: '600', color: Colors.coral },
+  archiveAction: {
+    backgroundColor: Colors.error,
+    justifyContent: 'center',
+    alignItems: 'center',
+    width: 88,
+    marginBottom: Spacing.sm,
+    borderRadius: Radii.md,
+  },
+  archiveActionText: { color: '#fff', fontSize: 14, fontWeight: '700' },
 });
