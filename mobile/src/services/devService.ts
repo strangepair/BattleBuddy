@@ -109,3 +109,15 @@ export async function getRequest(id: string): Promise<DevRequest | null> {
     return null;
   }
 }
+
+export async function archiveRequest(id: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${ApiConfig.DEV_URL}/dev/requests/${encodeURIComponent(id)}/archive`, {
+      method: 'PATCH',
+      headers: authHeaders(),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
