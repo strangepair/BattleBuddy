@@ -73,6 +73,40 @@ export function looksForbidden(text) {
   return FORBIDDEN_HINTS.some((h) => t.includes(h));
 }
 
+// ─── In-batch near-duplicate collapse ────────────────────────────────────────
+
+function normalizeWords(str) {
+  return String(str || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean);
+}
+
+function jaccardOverlap(wordsA, wordsB) {
+  if (wordsA.length === 0 && wordsB.length === 0) return 1;
+  const setA = new Set(wordsA);
+  const setB = new Set(wordsB);
+  let intersection = 0;
+  for (const w of setA) if (setB.has(w)) intersection++;
+  const union = setA.size + setB.size - intersection;
+  return union === 0 ? 1 : intersection / union;
+}
+
+export function collapseNearDuplicates(items) {
+  const dropped = new Set();
+  for (let i = 0; i < items.length; i++) {
+    if (dropped.has(i)) continue;
+    for (let j = i + 1; j < items.length; j++) {
+      if (dropped.has(j)) continue;
+      if (items[i].target !== items[j].target) continue;
+      const wordsA = normalizeWords((items[i].title || '') + ' ' + (items[i].description || ''));
+      const wordsB = normalizeWords((items[j].title || '') + ' ' + (items[j].description || ''));
+      if (jaccardOverlap(wordsA, wordsB) > 0.6) {
+        const keepI = (items[i].confidence || 0) >= (items[j].confidence || 0);
+        dropped.add(keepI ? j : i);
+      }
+    }
+  }
+  return items.filter((_, idx) => !dropped.has(idx));
+}
+
 // ─── Spec generation (transcript | directive → product requests) ─────────────
 
 const SPEC_SYSTEM = `You convert product feedback for the BattleBuddy mobile app into concrete, buildable engineering tasks.
@@ -109,23 +143,30 @@ export async function generateProductRequests(anthropic, { transcript, directive
 
   const resp = await anthropic.messages.create({
     model: SPEC_MODEL,
-    max_tokens: 2000,
+    max_tokens: 8000,
     system: SPEC_SYSTEM,
     messages: [{ role: 'user', content: userContent }],
   });
 
-  const text = resp.content?.map((b) => (b.type === 'text' ? b.text : '')).join('') || '';
+  const rawText = resp.content?.map((b) => (b.type === 'text' ? b.text : '')).join('') || '';
+
+  if (resp.stop_reason === 'max_tokens') {
+    console.error('[devPipeline] TRUNCATED: stop_reason=max_tokens, raw:', rawText);
+    return [];
+  }
+
   let arr;
   try {
-    const start = text.indexOf('[');
-    const end = text.lastIndexOf(']');
-    arr = JSON.parse(text.slice(start, end + 1));
-  } catch {
+    const start = rawText.indexOf('[');
+    const end = rawText.lastIndexOf(']');
+    arr = JSON.parse(rawText.slice(start, end + 1));
+  } catch (err) {
+    console.error('[devPipeline] JSON.parse failed:', err.message, 'raw:', rawText);
     return [];
   }
   if (!Array.isArray(arr)) return [];
 
-  return arr
+  const items = arr
     .filter((t) => t && t.title && t.target && typeof t.confidence === 'number')
     .filter((t) => ['backend', 'agent', 'ui', 'prompt'].includes(t.target))
     .map((t) => ({
@@ -137,6 +178,8 @@ export async function generateProductRequests(anthropic, { transcript, directive
         looksForbidden(t.claudeCodePrompt) ||
         (t.affectedFiles || []).some(looksForbidden),
     }));
+
+  return collapseNearDuplicates(items);
 }
 
 // ─── Persistence (Supabase dev_build_requests) ───────────────────────────────
@@ -154,8 +197,26 @@ export async function insertRequests(supabase, { source, userId, sessionId }, ta
     .not('status', 'in', '(deployed,failed)');
   const seen = new Set((existing || []).map((r) => r.dedupe_key));
 
-  const rows = tasks
-    .filter((t) => !seen.has(dedupeKey(t.target, t.title)))
+  const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 3600 * 1000).toISOString();
+  const pendingTasks = tasks.filter((t) => !seen.has(dedupeKey(t.target, t.title)));
+  const finalTasks = [];
+  for (const t of pendingTasks) {
+    const key = dedupeKey(t.target, t.title);
+    const { data: deployedRows } = await supabase
+      .from('dev_build_requests')
+      .select('id')
+      .eq('dedupe_key', key)
+      .eq('status', 'deployed')
+      .gte('updated_at', fourteenDaysAgo)
+      .limit(1);
+    if (deployedRows && deployedRows.length > 0) {
+      console.log('[devPipeline] skip insert: recently deployed dedupe_key:', key);
+      continue;
+    }
+    finalTasks.push(t);
+  }
+
+  const rows = finalTasks
     .map((t) => ({
       source,
       user_id: userId ? String(userId) : null,
