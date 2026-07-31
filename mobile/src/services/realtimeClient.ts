@@ -102,6 +102,21 @@ export function startRealtime(uid: string) {
   connect();
 }
 
+/** Call when the app returns to foreground — cancels any pending backoff and
+ *  reconnects immediately so the SSE stream is live again. */
+export function reconnectRealtime() {
+  if (!userId) return;
+  if (reconnectTimer !== null) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  abortController?.abort();
+  abortController = null;
+  backoffMs = BACKOFF_INITIAL_MS;
+  disconnectedSince = null;
+  connect();
+}
+
 export function stopRealtime() {
   userId = null;
   if (reconnectTimer !== null) {

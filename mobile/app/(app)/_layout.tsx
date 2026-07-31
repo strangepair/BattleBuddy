@@ -8,8 +8,10 @@ import { FeatureFlags } from '../../src/config';
 import { Colors } from '../../src/theme';
 import { startSyncWorker } from '../../src/services/syncWorker';
 import { getDb } from '../../src/services/localDb';
-import { AppState } from 'react-native';
+import { AppState, AppStateStatus } from 'react-native';
 import { startBiometricStream } from '../../src/services/biometricStream';
+import { reconnectRealtime } from '../../src/services/realtimeClient';
+import { supabase } from '../../src/services/supabase';
 import { startRiskWindowMonitor } from '../../src/services/engagementEngine';
 import { useSessionStore, hydrateSessionStore } from '../../src/stores/sessionStore';
 import { hydrateSettingsStore } from '../../src/stores/settingsStore';
@@ -66,8 +68,14 @@ export default function AppLayout() {
   }, [authUser?.id]);
 
   // Auto-generate session report when app backgrounds with an active session
+  // Also reconnect SSE and refresh auth token when returning to foreground
   useEffect(() => {
-    const sub = AppState.addEventListener('change', (nextState) => {
+    let lastState: AppStateStatus = AppState.currentState;
+
+    const sub = AppState.addEventListener('change', (nextState: AppStateStatus) => {
+      const wasBackground = lastState === 'background' || lastState === 'inactive';
+      lastState = nextState;
+
       if (nextState === 'background' || nextState === 'inactive') {
         const session = useSessionStore.getState();
         if (session.isActive && session.messages.length >= 2) {
@@ -90,6 +98,11 @@ export default function AppLayout() {
             }).catch(() => {});
           }
         }
+      }
+
+      if (nextState === 'active' && wasBackground) {
+        supabase.auth.getSession().catch(() => {});
+        reconnectRealtime();
       }
     });
     return () => sub.remove();
