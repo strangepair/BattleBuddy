@@ -3,6 +3,7 @@
 import sys
 import os
 import asyncio
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sesame-csm"))
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -13,6 +14,19 @@ from livekit.agents import tts
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 SPEAKER_ID = 3
+TTS_TIMEOUT_SECONDS = 3
+
+
+def _log_voice_failure(reason: str, session_id: str = "") -> dict:
+    """Emit a structured voice_failure log entry and return the event dict."""
+    event = {
+        "type": "voice_failure",
+        "reason": reason,
+        "session_id": session_id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    print(f"[SesameTTS] VOICE_FAILURE {event}")
+    return event
 
 
 class SesameTTS(tts.TTS):
@@ -51,11 +65,25 @@ class SesameSynthesizeStream(tts.ChunkedStream):
         super().__init__(tts=tts_instance, input_text=input_text, conn_options=conn_options)
         self._tts_instance = tts_instance
 
+    # TODO: add unit test for voice_failure path
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
-        pcm_float, sr = await asyncio.to_thread(self._tts_instance.generate_audio_sync, self._input_text)
+        try:
+            pcm_float, sr = await asyncio.wait_for(
+                asyncio.to_thread(self._tts_instance.generate_audio_sync, self._input_text),
+                timeout=TTS_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            _log_voice_failure(f"TTS generation exceeded {TTS_TIMEOUT_SECONDS}s timeout")
+            raise
+        except Exception as exc:
+            _log_voice_failure(f"TTS generation error: {exc}")
+            raise
 
-        pcm_int16 = (pcm_float * 32767).clamp(-32768, 32767).to(torch.int16)
-        raw_bytes = pcm_int16.numpy().tobytes()
+        raw_bytes = (pcm_float * 32767).clamp(-32768, 32767).to(torch.int16).numpy().tobytes()
+
+        if not raw_bytes:
+            _log_voice_failure("TTS produced zero audio bytes")
+            raise RuntimeError("SesameTTS produced no audio output")
 
         output_emitter.initialize(
             request_id="sesame",

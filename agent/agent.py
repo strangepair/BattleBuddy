@@ -542,6 +542,14 @@ async def battlebuddy_session(ctx: agents.JobContext):
     def on_error(ev):
         err_msg = str(ev) if ev else "unknown error"
         print(f"[Agent] Session error for {user_id}: {err_msg}")
+        tts_keywords = ("tts", "audio", "synthesize", "voice", "timeout", "SesameTTS", "pcm")
+        if any(kw in err_msg.lower() for kw in tts_keywords):
+            # TODO: add unit test for voice_failure path
+            print(
+                f"[Agent] VOICE_FAILURE {{'type': 'voice_failure', 'reason': '{err_msg}', "
+                f"'session_id': '{session_id}', 'user_id': '{user_id}', "
+                f"'timestamp': '{datetime.now(ZoneInfo('UTC')).isoformat()}'}}"
+            )
         if "credit balance" in err_msg or "too low" in err_msg or "billing" in err_msg.lower():
             asyncio.ensure_future(session.generate_reply(
                 instructions="Say exactly: 'Hey, I'm having a connection issue on my end right now. Give me a minute and try again.' Do not say anything else."
