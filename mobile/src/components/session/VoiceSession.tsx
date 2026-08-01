@@ -6,7 +6,7 @@ import {
   registerGlobals,
   useRoomContext,
 } from '@livekit/react-native';
-import { RoomEvent, type TranscriptionSegment, type Participant } from 'livekit-client';
+import { RoomEvent, type TranscriptionSegment, type Participant, type RemoteTrackPublication, type RemoteParticipant } from 'livekit-client';
 import { ApiConfig } from '../../config';
 import { useSessionStore } from '../../stores/sessionStore';
 import { useAuthStore } from '../../stores/authStore';
@@ -19,6 +19,10 @@ import { useSettingsStore } from '../../stores/settingsStore';
 // (audio never auto-enables), and unmounting tears the room down.
 //
 // Extracted from app/session-voice.tsx, which Phase 5 retires.
+
+/** Must always exceed TTS_TIMEOUT_SECONDS in agent/sesame_tts.py (currently 30 s).
+ * If you lower the agent budget, lower this too, or the cross-repo test will fail. */
+export const VOICE_FIRST_AUDIO_TIMEOUT_MS = 35_000;
 
 try {
   registerGlobals();
@@ -194,6 +198,13 @@ function RoomStatus({
   const agentTurnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const userSpokeRef = useRef(false);
 
+  const cancelTimer = () => {
+    if (agentTurnTimerRef.current) {
+      clearTimeout(agentTurnTimerRef.current);
+      agentTurnTimerRef.current = null;
+    }
+  };
+
   // Root cause: a network blip fires RoomEvent.Reconnecting and drops the
   // remote audio tracks. Without a handler the audio consumer never restarts
   // and the session goes silent. On Reconnected we reconfigure the audio
@@ -227,6 +238,45 @@ function RoomStatus({
     };
   }, [room, setMascotState]);
 
+  // Listen for a remote audio track subscription — cancel the failure timer
+  // as soon as the agent's audio track is wired up, even before first audio.
+  useEffect(() => {
+    const onTrackSubscribed = (
+      _track: unknown,
+      publication: RemoteTrackPublication,
+      _participant: RemoteParticipant,
+    ) => {
+      if (publication.kind === 'audio') {
+        audioStartedRef.current = true;
+        cancelTimer();
+      }
+    };
+    room.on(RoomEvent.TrackSubscribed, onTrackSubscribed);
+    return () => {
+      room.off(RoomEvent.TrackSubscribed, onTrackSubscribed);
+    };
+  }, [room]);
+
+  // Listen for the explicit VOICE_FAILURE signal from the agent — show the
+  // fallback banner immediately rather than waiting for the backstop timer.
+  useEffect(() => {
+    const onDataReceived = (payload: Uint8Array) => {
+      try {
+        const text = new TextDecoder().decode(payload);
+        if (text === 'VOICE_FAILURE' && !failedRef.current) {
+          failedRef.current = true;
+          cancelTimer();
+          onVoiceFailed?.();
+        }
+      } catch {
+      }
+    };
+    room.on(RoomEvent.DataReceived, onDataReceived);
+    return () => {
+      room.off(RoomEvent.DataReceived, onDataReceived);
+    };
+  }, [room, onVoiceFailed]);
+
   useEffect(() => {
     const local = participants.find((p) => p.isLocal);
     const remotes = participants.filter((p) => !p.isLocal);
@@ -236,13 +286,10 @@ function RoomStatus({
     const agentLevel = remotes.reduce((max, p) => Math.max(max, (p as any).audioLevel ?? 0), 0);
     const userLevel = (local as any)?.audioLevel ?? 0;
 
-    if (agentSpeaking) {
+    if (agentSpeaking || agentLevel > 0) {
       setMascotState('speaking');
       audioStartedRef.current = true;
-      if (agentTurnTimerRef.current) {
-        clearTimeout(agentTurnTimerRef.current);
-        agentTurnTimerRef.current = null;
-      }
+      cancelTimer();
       wasSpeakingRef.current = false;
     } else if (userSpeaking) {
       setMascotState('user_speaking');
@@ -258,7 +305,7 @@ function RoomStatus({
             onVoiceFailed?.();
           }
           agentTurnTimerRef.current = null;
-        }, 3000);
+        }, VOICE_FIRST_AUDIO_TIMEOUT_MS);
       }
     } else {
       setMascotState('listening');
