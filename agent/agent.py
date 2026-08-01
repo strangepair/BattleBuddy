@@ -362,6 +362,7 @@ async def battlebuddy_session(ctx: agents.JobContext):
                     resp = await http.post(
                         f"{SERVER_URL}/events",
                         json=payload,
+                        headers=auth_headers(),
                         timeout=aiohttp.ClientTimeout(total=10),
                     )
                     data = await resp.json()
@@ -388,6 +389,7 @@ async def battlebuddy_session(ctx: agents.JobContext):
                     resp = await http.post(
                         f"{SERVER_URL}/events/update",
                         json=payload,
+                        headers=auth_headers(),
                         timeout=aiohttp.ClientTimeout(total=10),
                     )
                     data = await resp.json()
