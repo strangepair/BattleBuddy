@@ -53,7 +53,12 @@ export default function VoiceSession({ muted, onAudioLevel, onError, onVoiceFail
     let cancelled = false;
     const connect = async () => {
       try {
+        // Root cause: iOS defaults to soloAmbient, which silences remote
+        // (agent TTS) audio when another audio source interrupts or the app
+        // backgrounds. playAndRecord keeps the output route alive for the
+        // full duplex voice session.
         await AudioSession.startAudioSession();
+        await AudioSession.setAppleAudioConfiguration({ audioCategory: 'playAndRecord' });
         const state = useSessionStore.getState();
         const hasHistory = state.messages.some((m) => m.content.length > 0);
         const activeSessionId = state.sessionId;
@@ -179,6 +184,7 @@ function RoomStatus({
   onAudioLevel: (level: number) => void;
   onVoiceFailed?: () => void;
 }) {
+  const room = useRoomContext();
   const participants = useParticipants();
   const setMascotState = useSessionStore((s) => s.setMascotState);
   const prevLevelRef = useRef(0);
@@ -187,6 +193,39 @@ function RoomStatus({
   const audioStartedRef = useRef(false);
   const agentTurnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const userSpokeRef = useRef(false);
+
+  // Root cause: a network blip fires RoomEvent.Reconnecting and drops the
+  // remote audio tracks. Without a handler the audio consumer never restarts
+  // and the session goes silent. On Reconnected we reconfigure the audio
+  // session so the OS route is restored before LiveKit republishes tracks.
+  useEffect(() => {
+    const onReconnecting = () => {
+      console.warn('[VOICE] room reconnecting — audio may drop momentarily');
+      setMascotState('thinking');
+    };
+    const onReconnected = async () => {
+      console.log('[VOICE] room reconnected — restoring audio session');
+      try {
+        await AudioSession.startAudioSession();
+        await AudioSession.setAppleAudioConfiguration({ audioCategory: 'playAndRecord' });
+      } catch (e) {
+        console.error('[VOICE] audio session restore failed after reconnect:', e);
+      }
+      setMascotState('listening');
+      failedRef.current = false;
+    };
+    const onDisconnected = (...args: unknown[]) => {
+      console.error('[VOICE] room disconnected, reason:', args[1]);
+    };
+    room.on(RoomEvent.Reconnecting, onReconnecting);
+    room.on(RoomEvent.Reconnected, onReconnected);
+    room.on(RoomEvent.Disconnected, onDisconnected);
+    return () => {
+      room.off(RoomEvent.Reconnecting, onReconnecting);
+      room.off(RoomEvent.Reconnected, onReconnected);
+      room.off(RoomEvent.Disconnected, onDisconnected);
+    };
+  }, [room, setMascotState]);
 
   useEffect(() => {
     const local = participants.find((p) => p.isLocal);
