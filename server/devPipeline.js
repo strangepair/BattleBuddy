@@ -494,3 +494,71 @@ export async function handleDevPipeline(req, res, deps) {
 
   return json(404, { error: 'not found' });
 }
+
+// ─── POST /api/dev-items — agent-callable shortcut to create a pipeline task ──
+//
+// The voice agent's create_dev_item tool POSTs here when dev mode is active.
+// Maps the simplified (type, title, description, priority) payload into a
+// dev_build_requests row so it appears in the existing Dev tab backlog.
+
+export async function handleDevItems(req, res, deps) {
+  const { CORS, checkClientToken, supabase } = deps;
+
+  const json = (status, obj) => {
+    res.writeHead(status, { ...CORS, 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(obj));
+  };
+
+  if (req.method === 'OPTIONS') return json(204, {});
+  if (req.method !== 'POST') return json(405, { error: 'method not allowed' });
+  if (!checkClientToken(req)) return json(401, { error: 'unauthorized' });
+
+  let body;
+  try {
+    body = await readBody(req);
+  } catch {
+    return json(400, { error: 'invalid JSON' });
+  }
+
+  const { type, title, description, priority = 'normal', userId, sessionId } = body;
+
+  const VALID_TYPES = ['bug', 'feature', 'task'];
+  const VALID_PRIORITIES = ['low', 'normal', 'high'];
+
+  if (!type || !VALID_TYPES.includes(type)) return json(400, { error: `type must be one of: ${VALID_TYPES.join(', ')}` });
+  if (!title || typeof title !== 'string' || !title.trim()) return json(400, { error: 'title is required' });
+  if (!description || typeof description !== 'string' || !description.trim()) return json(400, { error: 'description is required' });
+  if (!VALID_PRIORITIES.includes(priority)) return json(400, { error: `priority must be one of: ${VALID_PRIORITIES.join(', ')}` });
+
+  if (!supabase) return json(503, { error: 'database not configured' });
+
+  const target = type === 'bug' ? 'backend' : 'agent';
+  const confidence = priority === 'high' ? 0.9 : priority === 'low' ? 0.65 : 0.75;
+
+  const row = {
+    source: 'agent_tool',
+    user_id: userId ? String(userId) : null,
+    session_id: sessionId || null,
+    title: String(title).trim().slice(0, 200),
+    target,
+    description: String(description).trim() || null,
+    confidence,
+    spec: {
+      acceptanceCriteria: [],
+      affectedFiles: [],
+      claudeCodePrompt: String(description).trim(),
+    },
+    dedupe_key: dedupeKey(target, title),
+    status: 'pending',
+    history: [{ at: new Date().toISOString(), to: 'created', note: `agent_tool:${type}:priority=${priority}` }],
+  };
+
+  const { data, error } = await supabase.from('dev_build_requests').insert([row]).select('id, title, status').single();
+  if (error) {
+    console.error('[devItems] insert failed:', error.message);
+    return json(500, { error: error.message });
+  }
+
+  console.log(`[devItems] created ${type} "${data.title}" id=${data.id} priority=${priority}`);
+  return json(201, { id: data.id, title: data.title, status: data.status });
+}

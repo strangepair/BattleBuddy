@@ -388,6 +388,32 @@ async def battlebuddy_session(ctx: agents.JobContext):
                 print(f"[Agent] log_event failed: {e}")
                 return json.dumps({"error": str(e)})
 
+        if dev_mode_on:
+            @function_tool()
+            async def create_dev_item(self, type: str, title: str, description: str, priority: str = "normal"):
+                """Create a pipeline task (bug, feature, or task) directly from a developer session. type must be one of: bug, feature, task. title: short summary. description: what needs doing and why. priority: low | normal | high. Only available in developer mode. After calling, confirm to the user with the returned ID and title."""
+                if not dev_mode_on:
+                    return json.dumps({"error": "create_dev_item is only available in developer mode."})
+                valid_types = ("bug", "feature", "task")
+                if type not in valid_types:
+                    return json.dumps({"error": f"type must be one of: {', '.join(valid_types)}"})
+                try:
+                    async with aiohttp.ClientSession() as http:
+                        resp = await http.post(
+                            f"{SERVER_URL}/api/dev-items",
+                            json={"type": type, "title": title, "description": description, "priority": priority, "userId": user_id, "sessionId": session_id},
+                            headers=auth_headers(),
+                            timeout=aiohttp.ClientTimeout(total=10),
+                        )
+                        data = await resp.json()
+                        print(f"[Agent] create_dev_item '{title}' for {user_id}: {data}")
+                        if resp.status in (200, 201) and data.get("id"):
+                            return json.dumps({"ok": True, "id": data["id"], "title": data.get("title", title)})
+                        return json.dumps({"error": data.get("error", f"Server returned {resp.status}")})
+                except Exception as e:
+                    print(f"[Agent] create_dev_item failed: {e}")
+                    return json.dumps({"error": str(e)})
+
         @function_tool()
         async def update_event(self, event_id: str, action: str, event_type: str = "", occurred_at: str = "", notes: str = "", location: str = ""):
             """Correct or delete a mislogged event. action is 'update' or 'delete'. Get the event_id from get_usage_stats first. If correcting the time, pass occurred_at as the user's LOCAL wall-clock time exactly as they said it (e.g. '2026-07-29T16:43:00') — no timezone conversion, no UTC offset. location: optional corrected location label. Tell the user what changed."""
