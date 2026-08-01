@@ -463,6 +463,28 @@ async def battlebuddy_session(ctx: agents.JobContext):
                 return json.dumps({"error": str(e)})
 
         async def on_user_turn_completed(self, turn_ctx, new_message):
+            # Log the STT result so pipeline failures are visible in agent logs.
+            try:
+                user_text = ""
+                if hasattr(new_message, 'text_content') and new_message.text_content:
+                    user_text = str(new_message.text_content)
+                elif hasattr(new_message, 'content'):
+                    c = new_message.content
+                    if isinstance(c, str):
+                        user_text = c
+                    elif isinstance(c, list):
+                        for part in c:
+                            t = getattr(part, 'text', None)
+                            if t:
+                                user_text = str(t)
+                                break
+                if user_text:
+                    print(f"[Agent] STT→LLM: user turn received ({len(user_text)} chars): {user_text[:120]!r}")
+                else:
+                    print(f"[Agent] STT→LLM: user turn received but text is empty — message type: {type(new_message).__name__}")
+            except Exception as e:
+                print(f"[Agent] STT→LLM logging error: {e}")
+
             # Inject the current local time before every response. This message
             # is the single source of "now" — it supersedes the (session-start,
             # by now stale) time in the system prompt and anything said earlier.
@@ -547,44 +569,50 @@ async def battlebuddy_session(ctx: agents.JobContext):
         try:
             item = ev.item
             role = str(getattr(item, 'role', ''))
-            if role in ('user', 'assistant'):
-                content = ""
-                if hasattr(item, 'text_content'):
-                    content = item.text_content
-                elif hasattr(item, 'content'):
-                    c = item.content
-                    if isinstance(c, str):
-                        content = c
-                    elif isinstance(c, list):
-                        for part in c:
-                            t = getattr(part, 'text', None) or getattr(part, 'content', None)
-                            if t:
-                                content = str(t)
-                                break
-                if not content and hasattr(item, 'text'):
-                    content = str(item.text)
+            if role not in ('user', 'assistant'):
+                return
+            content = ""
+            if hasattr(item, 'text_content') and item.text_content:
+                content = str(item.text_content)
+            elif hasattr(item, 'content'):
+                c = item.content
+                if isinstance(c, str):
+                    content = c
+                elif isinstance(c, list):
+                    for part in c:
+                        t = getattr(part, 'text', None) or getattr(part, 'content', None)
+                        if t:
+                            content = str(t)
+                            break
+            if not content and hasattr(item, 'text') and item.text:
+                content = str(item.text)
 
-                if content:
-                    session_messages.append({"role": role, "content": content})
+            if not content:
+                print(f"[Agent] on_item: {role} turn has no extractable text (item type: {type(item).__name__})")
+                return
 
-                    # Bug I: Track assistant questions for repeat buffer
-                    if role == "assistant" and "?" in content:
-                        last_question["text"] = content.strip()
-                        last_question["time"] = time.time()
+            print(f"[Agent] on_item: {role} turn captured ({len(content)} chars)")
+            session_messages.append({"role": role, "content": content})
 
-                    if role == "user":
-                        lower = content.lower().strip()
-                        for phrase in END_PHRASES:
-                            if phrase in lower:
-                                asyncio.ensure_future(_end_session(session, ctx, user_id, session_messages, session_id, timezone, dev_mode_on))
-                                return
-        except Exception:
-            pass
+            if role == "assistant" and "?" in content:
+                last_question["text"] = content.strip()
+                last_question["time"] = time.time()
 
+            if role == "user":
+                lower = content.lower().strip()
+                for phrase in END_PHRASES:
+                    if phrase in lower:
+                        asyncio.ensure_future(_end_session(session, ctx, user_id, session_messages, session_id, timezone, dev_mode_on))
+                        return
+        except Exception as e:
+            print(f"[Agent] on_item error: {e}")
+
+    print(f"[Agent] Starting session for {user_id} (session_id={session_id}, room={getattr(ctx.room, 'name', 'unknown')})")
     await session.start(
         room=ctx.room,
         agent=SessionAgent(),
     )
+    print(f"[Agent] Session started — STT={type(session.stt).__name__}, LLM={type(session.llm).__name__}, TTS={type(session.tts).__name__}")
 
     # Periodic save loop — runs every SAVE_INTERVAL_SECONDS, sends whatever we have
     async def periodic_save():

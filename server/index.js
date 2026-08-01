@@ -1424,7 +1424,7 @@ const server = createServer(async (req, res) => {
     for await (const chunk of req) body += chunk;
 
     try {
-      const { room, identity, context, sessionCount, profile, recentHistory, triggerContext, priorMessages, timezone, devMode } = JSON.parse(body);
+      const { room, identity, context, sessionCount, profile, recentHistory, triggerContext, priorMessages, timezone, devMode, sessionId: clientSessionId } = JSON.parse(body);
       const apiKey = process.env.LIVEKIT_API_KEY;
       const apiSecret = process.env.LIVEKIT_API_SECRET;
 
@@ -1585,6 +1585,7 @@ const server = createServer(async (req, res) => {
           timezone: effectiveTimezone,
           last_session_at: agentProfile?.last_session_at || null,
           devMode: devMode === true,
+          ...(clientSessionId ? { sessionId: clientSessionId } : {}),
         });
         await agentDispatch.createDispatch(roomName, 'battlebuddy', {
           metadata: dispatchMetadata,
