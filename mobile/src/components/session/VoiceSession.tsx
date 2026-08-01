@@ -56,13 +56,15 @@ export default function VoiceSession({ muted, onAudioLevel, onError, onVoiceFail
         await AudioSession.startAudioSession();
         const state = useSessionStore.getState();
         const hasHistory = state.messages.some((m) => m.content.length > 0);
+        const activeSessionId = state.sessionId;
         const res = await fetch(`${ApiConfig.CHAT_URL}/livekit/token`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            room: `bb-${Date.now()}`,
+            room: activeSessionId ? `bb-${activeSessionId}` : `bb-${Date.now()}`,
             identity: useAuthStore.getState().user?.id || `user-${Date.now()}`,
             context: hasHistory ? 'switched_from_text' : 'fresh_session',
+            sessionId: activeSessionId ?? undefined,
             sessionCount: state.sessionCount,
             profile: ensureNameInProfile(),
             recentHistory: state.recentHistory,
@@ -184,6 +186,7 @@ function RoomStatus({
   const failedRef = useRef(false);
   const audioStartedRef = useRef(false);
   const agentTurnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const userSpokeRef = useRef(false);
 
   useEffect(() => {
     const local = participants.find((p) => p.isLocal);
@@ -204,17 +207,19 @@ function RoomStatus({
       wasSpeakingRef.current = false;
     } else if (userSpeaking) {
       setMascotState('user_speaking');
+      userSpokeRef.current = true;
       wasSpeakingRef.current = true;
     } else if (wasSpeakingRef.current && !agentSpeaking) {
       setMascotState('thinking');
-      if (!audioStartedRef.current && !failedRef.current && !agentTurnTimerRef.current) {
+      if (!failedRef.current && !agentTurnTimerRef.current) {
+        audioStartedRef.current = false;
         agentTurnTimerRef.current = setTimeout(() => {
-          if (!audioStartedRef.current && !failedRef.current) {
+          if (!audioStartedRef.current && !failedRef.current && userSpokeRef.current) {
             failedRef.current = true;
             onVoiceFailed?.();
           }
           agentTurnTimerRef.current = null;
-        }, 5000);
+        }, 3000);
       }
     } else {
       setMascotState('listening');

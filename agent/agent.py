@@ -174,7 +174,12 @@ async def battlebuddy_session(ctx: agents.JobContext):
     system_prompt = dispatch_meta.get("systemPrompt") or FALLBACK_PROMPT
     if dispatch_meta.get("devMode", False):
         system_prompt = system_prompt + "\n\n## Developer Session\nYou are currently speaking with the BattleBuddy developer. This is not a live user coaching session. When the developer shares product feedback, feature ideas, or bug observations, acknowledge them naturally and conversationally (e.g. \"Good callout, I'll note that.\") rather than treating them as personal habit-coaching topics. All safety protocols and hard limits remain fully in effect."
-    greeting = dispatch_meta.get("greeting") or "Say: 'Hey, really glad you're here. How are you doing?'"
+    # When switching from text to voice mid-session, skip the standard greeting
+    # so the user doesn't hear "Hey, really glad you're here" again mid-conversation.
+    if dispatch_meta.get("context") == "switched_from_text" and dispatch_meta.get("sessionId"):
+        greeting = dispatch_meta.get("greeting") or "Say something brief and natural to let the user know you've switched to voice — one short sentence, no re-introduction."
+    else:
+        greeting = dispatch_meta.get("greeting") or "Say: 'Hey, really glad you're here. How are you doing?'"
 
     user_id = dispatch_meta.get("userId") or "default"
     timezone = dispatch_meta.get("timezone") or "America/Chicago"
@@ -182,7 +187,18 @@ async def battlebuddy_session(ctx: agents.JobContext):
     # segment even after a redeploy wiped its in-memory state (devCapture.js).
     dev_mode_on = dispatch_meta.get("devMode", False) is True
     last_session_at = dispatch_meta.get("last_session_at")
-    session_id = getattr(ctx.room, "name", None) or f"session-{int(time.time())}"
+    # When the user switches from text to voice mid-session the mobile client
+    # sends the active text-session ID so the voice agent continues the same
+    # conversation rather than forking a new one. Fall back to the LiveKit room
+    # name (which the token request also derives from the session ID when one
+    # exists) and finally to a timestamp-based ID for fresh sessions.
+    session_id = (
+        dispatch_meta.get("sessionId")
+        or getattr(ctx.room, "name", None)
+        or f"session-{int(time.time())}"
+    )
+    if dispatch_meta.get("sessionId"):
+        print(f"[Agent] Continuing existing session {session_id} for {user_id} (switched from text)")
 
     # Compute session gap for the system prompt injection (Bug D)
     session_gap_str = ""
