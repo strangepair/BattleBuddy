@@ -51,7 +51,7 @@ export default function MissionDashboardScreen() {
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.container}>
-      <HeroMetric />
+      <HeroMetric realtimeLogs={mergedTodayLogs} />
       <DayCalendarView projected={projected} actuals={mergedTodayLogs} previousDays={previousDays} />
     </ScrollView>
   );
