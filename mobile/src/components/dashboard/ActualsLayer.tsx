@@ -3,7 +3,7 @@ import { Colors, Radii } from '../../theme';
 import type { SmokingLog } from '../../hooks/useSmokingLogs';
 
 const MINUTE_HEIGHT = 2;
-export const MIN_BLOCK_HEIGHT = 6;
+export const MIN_BLOCK_HEIGHT = 48;
 const BLOCK_WIDTH_FRACTION = 0.85;
 const OVERLAP_OFFSET_FRACTION = 0.12;
 
@@ -84,7 +84,7 @@ export default function ActualsLayer({ logs, ghost = false, timelineLeft, ghostI
               ]}
             >
               {!ghost && (
-                <Text style={styles.label} numberOfLines={1}>
+                <Text style={styles.label} numberOfLines={1} ellipsizeMode="tail">
                   {label}
                 </Text>
               )}
@@ -99,7 +99,7 @@ export default function ActualsLayer({ logs, ghost = false, timelineLeft, ghostI
 const styles = StyleSheet.create({
   block: {
     position: 'absolute',
-    overflow: 'visible',
+    overflow: 'hidden',
   },
   blockActual: {},
   blockGhost: {
@@ -117,7 +117,7 @@ const styles = StyleSheet.create({
     minHeight: MIN_BLOCK_HEIGHT,
   },
   label: {
-    fontSize: 10,
+    fontSize: 13,
     fontWeight: '700',
     color: Colors.textPrimary,
     fontVariant: ['tabular-nums'],
