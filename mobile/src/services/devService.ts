@@ -82,10 +82,14 @@ export async function submitDirective(input: {
   return json.requests ?? [];
 }
 
-/** List all build requests (newest first) for the Dev tab. */
-export async function listRequests(userId: string | null): Promise<DevRequest[]> {
+/** List build requests (newest first) for the Dev tab.
+ *  Pass archived=true to fetch the archived view instead of the default (active) view. */
+export async function listRequests(userId: string | null, archived = false): Promise<DevRequest[]> {
   try {
-    const q = userId ? `?userId=${encodeURIComponent(userId)}` : '';
+    const params = new URLSearchParams();
+    if (userId) params.set('userId', userId);
+    if (archived) params.set('archived', 'true');
+    const q = params.toString() ? `?${params.toString()}` : '';
     const res = await fetch(`${ApiConfig.DEV_URL}/dev/requests${q}`, {
       headers: authHeaders(),
     });

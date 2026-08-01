@@ -439,12 +439,15 @@ export async function handleDevPipeline(req, res, deps) {
   }
 
   // GET /dev/requests — list for the Dev tab.
+  // ?archived=true returns only archived rows; default returns only non-archived.
   if (req.method === 'GET' && path === '/dev/requests') {
     if (!checkClientToken(req)) return json(401, { error: 'unauthorized' });
     if (!supabase) return json(200, { requests: [] });
+    const showArchived = url.searchParams.get('archived') === 'true';
     const { data } = await supabase
       .from('dev_build_requests')
       .select('*')
+      .eq('archived', showArchived)
       .order('created_at', { ascending: false })
       .limit(100);
     return json(200, { requests: (data || []).map(publicRow), enabled: isPipelineEnabled(), dryRun: isDryRun() });

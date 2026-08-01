@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -59,10 +59,10 @@ export default function DevScreen() {
   const swipeableRefs = useRef<Record<string, Swipeable | null>>({});
 
   const load = useCallback(async () => {
-    const list = await listRequests(userId);
+    const list = await listRequests(userId, showArchived);
     setRequests(list);
     setLoading(false);
-  }, [userId]);
+  }, [userId, showArchived]);
 
   // Refresh whenever the screen gains focus (and once on mount).
   useFocusEffect(
@@ -70,6 +70,12 @@ export default function DevScreen() {
       load();
     }, [load]),
   );
+
+  // Reload when the archived toggle changes.
+  useEffect(() => {
+    setLoading(true);
+    load();
+  }, [showArchived]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
