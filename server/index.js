@@ -46,6 +46,7 @@ import { recordTextTurn, recordVoiceSessionStart, recordVoiceTranscript, sweepId
 import { jsonrepair } from 'jsonrepair';
 import { broadcastToUser, registerSseClient } from './broadcast.js';
 import { broadcastDashboard } from './broadcastDashboard.js';
+import { findDuplicate } from './middleware/deduplicate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -2986,6 +2987,12 @@ Return ONLY the JSON object, no markdown, no explanation.`;
       if (platform !== undefined) payload.platform = platform;
       if (appVersion !== undefined) payload.appVersion = appVersion;
       if (errorMessage !== undefined) payload.errorMessage = errorMessage;
+
+      const existing = await findDuplicate(supabase, userId, 'voice_output_failure');
+      if (existing) {
+        res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ ok: true, deduplicated: true, id: existing.id }));
+      }
 
       const { error: insertErr } = await supabase
         .from('client_events')
