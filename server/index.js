@@ -2517,6 +2517,112 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     }
   }
 
+  // ─── Activity log — POST /logs/activity ────────────────────────────────────
+  if (req.method === 'POST' && req.url === '/logs/activity') {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const { userId, activity_name, start_time, end_time, location } = JSON.parse(body);
+      if (!userId || !activity_name || !start_time) {
+        res.writeHead(400, { ...CORS, 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'userId, activity_name, and start_time are required' }));
+      }
+      if (!checkClientToken(req)) {
+        const auth = await authorizeProfileAccess(req, userId);
+        if (!auth.ok) return send401(res, auth.status, auth.error);
+      }
+      if (!supabase) {
+        res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'Event store not configured' }));
+      }
+      const row = {
+        user_id: resolveUserId(userId),
+        activity_name,
+        start_time,
+      };
+      if (end_time !== undefined && end_time !== null) row.end_time = end_time;
+      if (location !== undefined && location !== null) row.location = location;
+      const { data, error } = await supabase
+        .from('activities')
+        .insert(row)
+        .select('id, created_at')
+        .single();
+      if (error) {
+        res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: error.message }));
+      }
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, id: data.id, created_at: data.created_at }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  // ─── Combined log feed — GET /logs ──────────────────────────────────────────
+  // Returns cigarette events (from bb_events) and activity entries (from
+  // activities), each tagged with a `type` field, ordered by time descending.
+  if (req.method === 'GET' && req.url.startsWith('/logs')) {
+    const url = new URL(req.url, 'http://localhost');
+    const userId = url.searchParams.get('userId');
+    const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 50, 200);
+    if (!userId) {
+      res.writeHead(400, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'userId required' }));
+    }
+    try {
+      const auth = await authorizeProfileAccess(req, userId);
+      if (!auth.ok) return send401(res, auth.status, auth.error);
+      if (!supabase) {
+        res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'Event store not configured' }));
+      }
+      const resolvedId = resolveUserId(userId);
+      const [cigResult, actResult] = await Promise.all([
+        supabase
+          .from('bb_events')
+          .select('id, event_type, occurred_at, metadata')
+          .eq('user_id', resolvedId)
+          .eq('event_type', 'cigarette')
+          .order('occurred_at', { ascending: false })
+          .limit(limit),
+        supabase
+          .from('activities')
+          .select('id, activity_name, start_time, end_time, location, created_at')
+          .eq('user_id', resolvedId)
+          .order('start_time', { ascending: false })
+          .limit(limit),
+      ]);
+      if (cigResult.error) throw new Error(cigResult.error.message);
+      if (actResult.error) throw new Error(actResult.error.message);
+      const cigarettes = (cigResult.data || []).map(r => ({
+        type: 'cigarette',
+        id: r.id,
+        occurred_at: r.occurred_at,
+        metadata: r.metadata,
+      }));
+      const activities = (actResult.data || []).map(r => ({
+        type: 'activity',
+        id: r.id,
+        activity_name: r.activity_name,
+        start_time: r.start_time,
+        end_time: r.end_time ?? null,
+        location: r.location ?? null,
+        created_at: r.created_at,
+      }));
+      const merged = [...cigarettes, ...activities].sort((a, b) => {
+        const ta = a.occurred_at || a.start_time;
+        const tb = b.occurred_at || b.start_time;
+        return new Date(tb) - new Date(ta);
+      }).slice(0, limit);
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ logs: merged, count: merged.length }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
   // ── SSE subscription — real-time push channel for a user ───────────────────
   // Clients connect with GET /subscribe?userId=<id> and receive named SSE
   // events (e.g. dashboard:update) whenever the server persists new data for
