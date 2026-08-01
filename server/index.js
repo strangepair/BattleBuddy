@@ -2950,10 +2950,16 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     let body = '';
     for await (const chunk of req) body += chunk;
     try {
-      const { sessionId, timestamp, platform, appVersion, errorMessage } = JSON.parse(body);
+      const parsed = JSON.parse(body);
+      const { platform, appVersion, errorMessage } = parsed;
+      // Accept both camelCase (legacy) and snake_case field names.
+      const sessionId = parsed.sessionId || parsed.session_id;
+      const timestamp = parsed.timestamp;
+      const clientUserId = parsed.user_id;
+      const reason = parsed.reason;
       if (!sessionId || !timestamp) {
         res.writeHead(400, { ...CORS, 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ error: 'missing required fields: sessionId, timestamp' }));
+        return res.end(JSON.stringify({ error: 'missing required fields: session_id, timestamp' }));
       }
 
       const authHeader = req.headers['authorization'] || '';
@@ -2988,7 +2994,20 @@ Return ONLY the JSON object, no markdown, no explanation.`;
       if (insertErr) {
         console.error('[voice-failure] insert error:', insertErr.message);
         res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ error: insertErr.message }));
+        return res.end(JSON.stringify({ error: 'Internal server error' }));
+      }
+
+      const { error: logErr } = await supabase
+        .from('voice_failure_logs')
+        .insert({
+          session_id: sessionId,
+          user_id: clientUserId || userId,
+          occurred_at: timestamp,
+          reason: reason || errorMessage || null,
+        });
+
+      if (logErr) {
+        console.error('[voice-failure] voice_failure_logs insert error:', logErr.message);
       }
 
       res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
