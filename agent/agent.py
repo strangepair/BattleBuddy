@@ -388,6 +388,22 @@ async def battlebuddy_session(ctx: agents.JobContext):
                 print(f"[Agent] log_event failed: {e}")
                 return json.dumps({"error": str(e)})
 
+        @function_tool()
+        async def log_activity(self, activity_name: str, start_time: str, end_time: str = "", location: str = ""):
+            """Log an activity the user just reported starting or finishing. activity_name: short label (e.g. 'gym', 'lunch', 'work'). start_time: user's LOCAL wall-clock time as stated (e.g. '2026-08-01T14:30:00') — never convert to UTC. end_time: same format; omit when only a start is known. location: optional short label. Call immediately when the user reports finishing an activity or arriving somewhere — do NOT ask for confirmation first. If start_time is genuinely ambiguous, ask once then call. Confirm in one sentence: the activity name and the time(s) logged."""
+            from agent.tools.log_activity import log_activity as _log_activity
+            result = await _log_activity(
+                server_url=SERVER_URL,
+                user_id=user_id,
+                auth_headers=auth_headers(),
+                activity_name=activity_name,
+                start_time=start_time,
+                end_time=end_time,
+                location=location,
+            )
+            print(f"[Agent] log_activity '{activity_name}' for {user_id}: {result}")
+            return result
+
         if dev_mode_on:
             @function_tool()
             async def create_dev_item(self, type: str, title: str, description: str, priority: str = "normal"):
