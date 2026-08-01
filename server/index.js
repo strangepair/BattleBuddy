@@ -2942,6 +2942,63 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     return res.end(JSON.stringify({ ok: true, vector_store: isVectorConfigured() }));
   }
 
+  // ─── Client diagnostic event: voice output failure ──────────────────────────
+  // Authenticated endpoint — requires a valid Supabase user JWT. Logs a row
+  // into client_events so server-side tooling has visibility into voice-mode
+  // failures without any conversation content leaving the device.
+  if (req.method === 'POST' && req.url === '/events/voice-failure') {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const { sessionId, timestamp, platform, appVersion, errorMessage } = JSON.parse(body);
+      if (!sessionId || !timestamp) {
+        res.writeHead(400, { ...CORS, 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'missing required fields: sessionId, timestamp' }));
+      }
+
+      const authHeader = req.headers['authorization'] || '';
+      const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+      if (!token) {
+        return send401(res, 401, 'Missing credentials');
+      }
+      if (!supabase) {
+        res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'Event store not configured' }));
+      }
+      const { data: userData, error: authErr } = await supabase.auth.getUser(token);
+      if (authErr || !userData?.user) {
+        return send401(res, 401, 'Invalid token');
+      }
+      const userId = userData.user.id;
+
+      const payload = { sessionId, timestamp };
+      if (platform !== undefined) payload.platform = platform;
+      if (appVersion !== undefined) payload.appVersion = appVersion;
+      if (errorMessage !== undefined) payload.errorMessage = errorMessage;
+
+      const { error: insertErr } = await supabase
+        .from('client_events')
+        .insert({
+          user_id: userId,
+          session_id: sessionId,
+          event_type: 'voice_output_failure',
+          payload,
+        });
+
+      if (insertErr) {
+        console.error('[voice-failure] insert error:', insertErr.message);
+        res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: insertErr.message }));
+      }
+
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
   res.writeHead(404, CORS);
   res.end('Not found');
 });
