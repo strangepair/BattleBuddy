@@ -440,6 +440,32 @@ const AGENT_TOOLS = [
     },
   },
   {
+    name: 'log_activity',
+    description: "Record an activity the user just reported starting or finishing (e.g. 'gym', 'lunch', 'drive home') or a location transition. Call immediately when the user reports finishing an activity or arriving somewhere — do NOT ask for confirmation first. Pass start_time (and end_time when known) as the user's LOCAL wall-clock time exactly as stated, e.g. '2026-08-01T14:30:00' — never convert to UTC. Confirm in one sentence naming the activity and time(s) logged. Activities and location transitions only; cigarette events still use log_event.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        activity_name: {
+          type: 'string',
+          description: "Short label for the activity, e.g. 'gym', 'lunch', 'drive home'.",
+        },
+        start_time: {
+          type: 'string',
+          description: "The user's LOCAL wall-clock start time exactly as stated, e.g. '2026-08-01T14:30:00'. Never convert to UTC. If genuinely ambiguous, ask once, then call.",
+        },
+        end_time: {
+          type: 'string',
+          description: "Optional LOCAL wall-clock end time, same format. Omit when only a start is known.",
+        },
+        location: {
+          type: 'string',
+          description: "Optional location label, e.g. 'home', 'office'.",
+        },
+      },
+      required: ['activity_name', 'start_time'],
+    },
+  },
+  {
     name: 'log_event',
     description: "Log a new smoking, urge, decision, or milestone event to the database on behalf of the user — and it hasn't been logged yet via the app's quick-log. 'urge' is a craving that may still be unresolved. 'decision' is a conscious, non-slip choice to smoke — distinct from urge_gave_in. Supports back-dating: pass the true occurred_at even if the user is telling you about it well after the fact ('I had one last night' → ask casually what time, log it at that time, set source to 'retroactive'). Always confirm what you logged back to the user.",
     input_schema: {
@@ -884,6 +910,35 @@ async function executeToolUse(toolUse, userId, timezone = DEFAULT_TZ, requestCon
     } catch (err) {
       return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: err.message }), is_error: true };
     }
+  }
+
+  if (toolUse.name === 'log_activity') {
+    if (!supabase) {
+      return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: 'Event store unavailable' }), is_error: true };
+    }
+    const { activity_name, start_time, end_time, location } = toolUse.input || {};
+    if (!activity_name || !start_time) {
+      return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: 'activity_name and start_time are required' }), is_error: true };
+    }
+    // Same storage contract as POST /logs/activity: local wall-clock strings
+    // are stored as given — never UTC-converted (the route and the voice
+    // surface follow the identical rule).
+    const row = { user_id: userId, activity_name, start_time };
+    if (end_time !== undefined && end_time !== null && end_time !== '') row.end_time = end_time;
+    if (location !== undefined && location !== null && location !== '') row.location = location;
+    const { data, error } = await supabase
+      .from('activities')
+      .insert(row)
+      .select('id, created_at')
+      .single();
+    if (error) {
+      return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: error.message }), is_error: true };
+    }
+    return {
+      type: 'tool_result',
+      tool_use_id: toolUse.id,
+      content: JSON.stringify({ ok: true, id: data.id, activity_name, start_time, end_time: end_time || null }),
+    };
   }
 
   if (toolUse.name === 'log_event') {

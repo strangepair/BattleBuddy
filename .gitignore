@@ -61,3 +61,7 @@ server/data/
 # used to sweep it into every auto PR, so any two auto PRs conflicted on it by
 # construction and the pipeline deadlocked itself. Never commit it.
 output.txt
+
+# Python bytecode
+__pycache__/
+*.pyc
