@@ -1,64 +1,125 @@
 import { View, Text, StyleSheet } from 'react-native';
-import { Colors } from '../../theme';
+import { Colors, Radii } from '../../theme';
 import type { SmokingLog } from '../../hooks/useSmokingLogs';
 
+const MINUTE_HEIGHT = 2;
+export const MIN_BLOCK_HEIGHT = 6;
+const BLOCK_WIDTH_FRACTION = 0.85;
+const OVERLAP_OFFSET_FRACTION = 0.12;
+
+function minuteOffset(hour: number, minute: number): number {
+  return (hour * 60 + minute) * MINUTE_HEIGHT;
+}
+
 interface ActualsLayerProps {
-  /** Today's cigarette log entries that fall within this hour row. */
+  /** Cigarette log entries to render as time-blocks. */
   logs: SmokingLog[];
   /** Whether these are ghost markers from a previous day. */
   ghost?: boolean;
+  /** Left offset (px) reserved for the hour-label column. */
+  timelineLeft: number;
+  /** Index used to horizontally stagger ghost layers (0–2). */
+  ghostIndex?: number;
+}
+
+function logDurationPx(log: SmokingLog): number {
+  const durationMin =
+    typeof log.metadata?.duration_minutes === 'number'
+      ? (log.metadata.duration_minutes as number)
+      : typeof log.metadata?.end_time === 'string'
+      ? (() => {
+          const end = new Date(log.metadata.end_time as string);
+          const start = new Date(log.occurred_at);
+          return Math.max(0, (end.getTime() - start.getTime()) / 60000);
+        })()
+      : 0;
+  return durationMin > 0 ? Math.max(MIN_BLOCK_HEIGHT, durationMin * MINUTE_HEIGHT) : MIN_BLOCK_HEIGHT;
 }
 
 /**
- * ActualsLayer renders coloured dot markers for cigarette log events
- * within a single hour row. Ghost markers (previous days) appear faded.
- * When `activityLabel` or `location` is present on a log entry, it is
- * rendered beside the time, e.g. "6:47 AM · car".
+ * ActualsLayer renders each SmokingLog entry as an absolutely-positioned
+ * time-block within the parent timeline. Block height corresponds to the
+ * item's duration; items without a duration render as a minimal point marker.
+ * Ghost layers (previous days) are staggered horizontally so they remain
+ * visible behind today's blocks.
  */
-export default function ActualsLayer({ logs, ghost = false }: ActualsLayerProps) {
+export default function ActualsLayer({ logs, ghost = false, timelineLeft, ghostIndex = 0 }: ActualsLayerProps) {
   if (logs.length === 0) return null;
 
+  const staggerFrac = ghost ? OVERLAP_OFFSET_FRACTION * (ghostIndex + 1) : 0;
+  const leftPct = `${Math.round(staggerFrac * 100)}%` as `${number}%`;
+  const widthPct = `${Math.round(BLOCK_WIDTH_FRACTION * 100)}%` as `${number}%`;
+
   return (
-    <View style={styles.row}>
+    <>
       {logs.map((log) => {
         const d = new Date(log.occurred_at);
+        const top = minuteOffset(d.getHours(), d.getMinutes());
+        const height = logDurationPx(log);
+        const isPoint = height === MIN_BLOCK_HEIGHT;
+
         const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         const suffix = log.activityLabel || log.location || null;
         const label = suffix ? `${time} · ${suffix}` : time;
+
         return (
-          <View key={log.id} style={[styles.dot, ghost && styles.dotGhost]}>
-            <Text style={[styles.label, ghost && styles.labelGhost]}>{label}</Text>
+          <View
+            key={log.id}
+            style={[
+              styles.block,
+              ghost ? styles.blockGhost : styles.blockActual,
+              isPoint && styles.blockPoint,
+              {
+                top,
+                left: timelineLeft,
+                right: 0,
+                height,
+              },
+            ]}
+          >
+            <View
+              style={[
+                styles.inner,
+                { left: leftPct, width: widthPct },
+              ]}
+            >
+              {!ghost && (
+                <Text style={styles.label} numberOfLines={1}>
+                  {label}
+                </Text>
+              )}
+            </View>
           </View>
         );
       })}
-    </View>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
-  row: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 4,
-    paddingHorizontal: 4,
-    alignItems: 'center',
+  block: {
+    position: 'absolute',
+    overflow: 'visible',
   },
-  dot: {
+  blockActual: {},
+  blockGhost: {
+    opacity: 0.35,
+  },
+  blockPoint: {},
+  inner: {
+    position: 'absolute',
+    top: 0,
+    height: '100%',
     backgroundColor: Colors.coral,
-    borderRadius: 999,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-  },
-  dotGhost: {
-    backgroundColor: 'rgba(232,98,74,0.22)',
+    borderRadius: Radii.sm,
+    paddingHorizontal: 5,
+    justifyContent: 'center',
+    minHeight: MIN_BLOCK_HEIGHT,
   },
   label: {
     fontSize: 10,
     fontWeight: '700',
     color: Colors.textPrimary,
     fontVariant: ['tabular-nums'],
-  },
-  labelGhost: {
-    color: Colors.textTertiary,
   },
 });
