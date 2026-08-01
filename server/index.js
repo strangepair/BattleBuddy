@@ -41,7 +41,7 @@ import { toCachedSystemBlocks } from './promptCache.js';
 import { DEFAULT_TZ, tzOffsetString, formatLocalTime, buildSessionContext as buildSessionContextLine, normalizeOccurredAt } from './timeContext.js';
 import { HABIT_EVENT_TYPES, deriveUsageFacts, renderUsageFactsLine, deriveDashboardPayload } from './usageFacts.js';
 import { checkDevModeToolResult, devModeStatusBlock } from './devMode.js';
-import { handleDevPipeline, runDevBuildWorker } from './devPipeline.js';
+import { handleDevPipeline, runDevBuildWorker, handleDevItems } from './devPipeline.js';
 import { recordTextTurn, recordVoiceSessionStart, recordVoiceTranscript, sweepIdleSegments, registerShutdownFlush } from './devCapture.js';
 import { jsonrepair } from 'jsonrepair';
 import { broadcastToUser, registerSseClient } from './broadcast.js';
@@ -2815,6 +2815,11 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     return handleDevPipeline(req, res, {
       CORS, checkClientToken, checkAdminSecret, anthropic: client, supabase, resolveUserId,
     });
+  }
+
+  // POST /api/dev-items — agent create_dev_item tool endpoint (dev mode only).
+  if (req.url === '/api/dev-items' || req.url.startsWith('/api/dev-items?')) {
+    return handleDevItems(req, res, { CORS, checkClientToken, supabase });
   }
 
   // The shell itself carries no data — a plain browser navigation can't attach
