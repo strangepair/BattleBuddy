@@ -9,9 +9,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sesame-csm"))
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["TORIO_USE_FFMPEG"] = "0"
 
+import logging
 import torch
 from livekit.agents import tts
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+
+logger = logging.getLogger(__name__)
 
 SPEAKER_ID = 3
 # Root cause: 3 s was too short for first-run Sesame CSM synthesis on
@@ -35,13 +38,14 @@ def _log_voice_failure(reason: str, session_id: str = "") -> dict:
 
 
 class SesameTTS(tts.TTS):
-    def __init__(self):
+    def __init__(self, room=None):
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
             sample_rate=24000,
             num_channels=1,
         )
         self._generator = None
+        self._room = room
 
     def _ensure_loaded(self):
         if self._generator is None:
@@ -65,6 +69,19 @@ class SesameTTS(tts.TTS):
         return audio.cpu(), self._generator.sample_rate
 
 
+async def _publish_voice_failure(room) -> None:
+    """Publish VOICE_FAILURE data message to the LiveKit room."""
+    if room is None:
+        return
+    try:
+        await room.local_participant.publish_data(
+            b"VOICE_FAILURE",
+            reliable=True,
+        )
+    except Exception as exc:
+        logger.warning("Failed to publish VOICE_FAILURE data message: %s", exc)
+
+
 class SesameSynthesizeStream(tts.ChunkedStream):
     def __init__(self, *, tts_instance: SesameTTS, input_text: str, conn_options):
         super().__init__(tts=tts_instance, input_text=input_text, conn_options=conn_options)
@@ -79,15 +96,18 @@ class SesameSynthesizeStream(tts.ChunkedStream):
             )
         except asyncio.TimeoutError:
             _log_voice_failure(f"TTS generation exceeded {TTS_TIMEOUT_SECONDS}s timeout")
+            await _publish_voice_failure(self._tts_instance._room)
             raise
         except Exception as exc:
             _log_voice_failure(f"TTS generation error: {exc}")
+            await _publish_voice_failure(self._tts_instance._room)
             raise
 
         raw_bytes = (pcm_float * 32767).clamp(-32768, 32767).to(torch.int16).numpy().tobytes()
 
         if not raw_bytes:
             _log_voice_failure("TTS produced zero audio bytes")
+            await _publish_voice_failure(self._tts_instance._room)
             raise RuntimeError("SesameTTS produced no audio output")
 
         output_emitter.initialize(
