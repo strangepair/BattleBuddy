@@ -27,7 +27,7 @@ export default function MissionDashboardScreen() {
   const mergedTodayLogs: SmokingLog[] = useMemo(() => {
     const fetchedIds = new Set(todayLogs.map((l) => l.id));
     const extra = realtimeEvents.filter((l) => !fetchedIds.has(l.id));
-    return [...extra, ...todayLogs].sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
+    return [...extra, ...todayLogs].sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
   }, [todayLogs, realtimeEvents]);
 
   const previousDays: DayLog[] = useMemo(() => {
