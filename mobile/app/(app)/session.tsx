@@ -77,6 +77,7 @@ export default function SessionScreen() {
   const [audioOn, setAudioOn] = useState(false);
   const [muted, setMuted] = useState(false);
   const [audioLevel, setAudioLevel] = useState(0);
+  const [voiceOutputFailed, setVoiceOutputFailed] = useState(false);
   const inputRef = useRef<TextInput>(null);
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
@@ -305,6 +306,21 @@ export default function SessionScreen() {
     switchMode('text');
   }, [switchMode]);
 
+  const handleVoiceFailed = useCallback(() => {
+    const sessionId = useSessionStore.getState().sessionId;
+    setVoiceOutputFailed(true);
+    setAudioOn(false);
+    setMuted(false);
+    setAudioLevel(0);
+    switchMode('text');
+    if (userId) {
+      logEvent(userId, 'voice_output_failure', {
+        session_id: sessionId ?? undefined,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }, [switchMode, userId]);
+
   const toggleMute = useCallback(() => {
     Haptics.selectionAsync().catch(() => {});
     setMuted((m) => !m);
@@ -420,9 +436,33 @@ export default function SessionScreen() {
           {/* Voice rides above the dock, in the same conversation. */}
           {audioOn && (
             <>
-              <VoiceSession muted={muted} onAudioLevel={setAudioLevel} onError={handleVoiceError} />
+              <VoiceSession
+                muted={muted}
+                onAudioLevel={setAudioLevel}
+                onError={handleVoiceError}
+                onVoiceFailed={handleVoiceFailed}
+              />
               <VoiceBand audioLevel={audioLevel} mascotState={mascotState} muted={muted} />
             </>
+          )}
+
+          {/* Non-blocking banner shown when voice output has failed. */}
+          {voiceOutputFailed && (
+            <View style={styles.voiceFailBanner}>
+              <Text style={styles.voiceFailText}>
+                Voice unavailable — switching to text mode
+              </Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setVoiceOutputFailed(false);
+                  inputRef.current?.focus();
+                }}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+              >
+                <Text style={styles.voiceFailCta}>Use text instead</Text>
+              </TouchableOpacity>
+            </View>
           )}
 
           {/* The unified dock. Audio never auto-enables; only the speaker
@@ -519,5 +559,26 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     fontSize: 18,
     fontWeight: '700',
+  },
+  voiceFailBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(255,69,58,0.12)',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.error,
+    gap: 8,
+  },
+  voiceFailText: {
+    flex: 1,
+    fontSize: 13,
+    color: Colors.textSecondary,
+  },
+  voiceFailCta: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.stateIdle,
   },
 });

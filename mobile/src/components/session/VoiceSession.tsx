@@ -40,9 +40,11 @@ interface VoiceSessionProps {
   onAudioLevel: (level: number) => void;
   /** Token fetch / connection failure — the dock falls back to text mode. */
   onError: (message: string) => void;
+  /** Called when audio output fails to start within 5 s of a bot turn. */
+  onVoiceFailed?: () => void;
 }
 
-export default function VoiceSession({ muted, onAudioLevel, onError }: VoiceSessionProps) {
+export default function VoiceSession({ muted, onAudioLevel, onError, onVoiceFailed }: VoiceSessionProps) {
   const [token, setToken] = useState<string | null>(null);
   const [wsUrl, setWsUrl] = useState<string | null>(null);
   const setMascotState = useSessionStore((s) => s.setMascotState);
@@ -105,7 +107,7 @@ export default function VoiceSession({ muted, onAudioLevel, onError }: VoiceSess
 
   return (
     <LiveKitRoom serverUrl={wsUrl} token={token} connect audio video={false}>
-      <RoomStatus onAudioLevel={onAudioLevel} />
+      <RoomStatus onAudioLevel={onAudioLevel} onVoiceFailed={onVoiceFailed} />
       <TranscriptCapture />
       <MuteControl muted={muted} />
     </LiveKitRoom>
@@ -168,11 +170,20 @@ function TranscriptCapture() {
   return null;
 }
 
-function RoomStatus({ onAudioLevel }: { onAudioLevel: (level: number) => void }) {
+function RoomStatus({
+  onAudioLevel,
+  onVoiceFailed,
+}: {
+  onAudioLevel: (level: number) => void;
+  onVoiceFailed?: () => void;
+}) {
   const participants = useParticipants();
   const setMascotState = useSessionStore((s) => s.setMascotState);
   const prevLevelRef = useRef(0);
   const wasSpeakingRef = useRef(false);
+  const failedRef = useRef(false);
+  const audioStartedRef = useRef(false);
+  const agentTurnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const local = participants.find((p) => p.isLocal);
@@ -185,12 +196,26 @@ function RoomStatus({ onAudioLevel }: { onAudioLevel: (level: number) => void })
 
     if (agentSpeaking) {
       setMascotState('speaking');
+      audioStartedRef.current = true;
+      if (agentTurnTimerRef.current) {
+        clearTimeout(agentTurnTimerRef.current);
+        agentTurnTimerRef.current = null;
+      }
       wasSpeakingRef.current = false;
     } else if (userSpeaking) {
       setMascotState('user_speaking');
       wasSpeakingRef.current = true;
     } else if (wasSpeakingRef.current && !agentSpeaking) {
       setMascotState('thinking');
+      if (!audioStartedRef.current && !failedRef.current && !agentTurnTimerRef.current) {
+        agentTurnTimerRef.current = setTimeout(() => {
+          if (!audioStartedRef.current && !failedRef.current) {
+            failedRef.current = true;
+            onVoiceFailed?.();
+          }
+          agentTurnTimerRef.current = null;
+        }, 5000);
+      }
     } else {
       setMascotState('listening');
     }
@@ -199,7 +224,15 @@ function RoomStatus({ onAudioLevel }: { onAudioLevel: (level: number) => void })
     const smoothed = prevLevelRef.current * 0.3 + level * 0.7;
     prevLevelRef.current = smoothed;
     onAudioLevel(smoothed);
-  }, [participants, setMascotState, onAudioLevel]);
+  }, [participants, setMascotState, onAudioLevel, onVoiceFailed]);
+
+  useEffect(() => {
+    return () => {
+      if (agentTurnTimerRef.current) {
+        clearTimeout(agentTurnTimerRef.current);
+      }
+    };
+  }, []);
 
   return null;
 }
