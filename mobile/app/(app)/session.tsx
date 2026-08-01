@@ -450,7 +450,7 @@ export default function SessionScreen() {
           {voiceOutputFailed && (
             <View style={styles.voiceFailBanner}>
               <Text style={styles.voiceFailText}>
-                Voice unavailable — switching to text mode
+                {"Voice isn't working right now \u2014 switching to text. I'm still here."}
               </Text>
               <TouchableOpacity
                 onPress={() => {
@@ -459,8 +459,9 @@ export default function SessionScreen() {
                 }}
                 activeOpacity={0.7}
                 accessibilityRole="button"
+                accessibilityLabel="Dismiss voice failure notice"
               >
-                <Text style={styles.voiceFailCta}>Use text instead</Text>
+                <Text style={styles.voiceFailCta}>Got it</Text>
               </TouchableOpacity>
             </View>
           )}
