@@ -1,6 +1,6 @@
 import { useRef, useEffect } from 'react';
 import { ScrollView, View, Text, StyleSheet } from 'react-native';
-import { Colors, Spacing, Radii } from '../../theme';
+import { Colors, Spacing } from '../../theme';
 import ProjectedRoutineLayer from './ProjectedRoutineLayer';
 import ActualsLayer from './ActualsLayer';
 import type { HourSlot } from '../../hooks/useRoutineProjection';
@@ -34,18 +34,13 @@ function minuteOffset(hour: number, minute: number): number {
   return (hour * 60 + minute) * MINUTE_HEIGHT;
 }
 
-function logsForMinute(logs: SmokingLog[], hour: number, minute: number): SmokingLog[] {
-  return logs.filter((l) => {
-    const d = new Date(l.occurred_at);
-    return d.getHours() === hour && d.getMinutes() === minute;
-  });
-}
-
 /**
  * DayCalendarView renders a vertically scrollable minute-level 24-hour timeline.
  *
  * Each minute is a distinct slot (MINUTE_HEIGHT px tall). Hour labels appear
  * at the top of each hour row. On mount the view scrolls to the current time.
+ * Calendar items are rendered as absolutely-positioned time-blocks whose height
+ * corresponds to their duration. Overlapping items are offset horizontally.
  *
  * @param projected - Per-hour average counts (0–23) from useRoutineProjection.
  * @param actuals - Today's SmokingLog entries from useSmokingLogs.
@@ -65,6 +60,7 @@ export default function DayCalendarView({ projected, actuals, previousDays = [] 
   const hours = Array.from({ length: 24 }, (_, i) => i);
   const nowHour = new Date().getHours();
   const nowMinute = new Date().getMinutes();
+  const nowOffset = minuteOffset(nowHour, nowMinute);
 
   return (
     <ScrollView
@@ -74,54 +70,46 @@ export default function DayCalendarView({ projected, actuals, previousDays = [] 
       showsVerticalScrollIndicator={true}
     >
       <Text style={styles.sectionLabel}>TODAY'S TIMELINE</Text>
-      <View style={styles.timeline}>
+      <View style={[styles.timeline, { height: TOTAL_MINUTES * MINUTE_HEIGHT }]}>
         {hours.map((hour) => {
           const slot = projected[hour];
           const isNowHour = hour === nowHour;
+          const hourTop = minuteOffset(hour, 0);
 
           return (
-            <View key={hour} style={styles.hourBlock}>
-              {Array.from({ length: 60 }, (_, minute) => {
-                const isNow = isNowHour && minute === nowMinute;
-                const todayActuals = logsForMinute(actuals, hour, minute);
-                const hasActuals = todayActuals.length > 0;
-                const hasGhosts = previousDays.some((d) =>
-                  logsForMinute(d.logs, hour, minute).length > 0
-                );
-
-                return (
-                  <View
-                    key={minute}
-                    style={[
-                      styles.minuteRow,
-                      isNow && styles.minuteRowNow,
-                    ]}
-                  >
-                    {minute === 0 && (
-                      <Text style={[styles.hourLabel, isNowHour && styles.hourLabelNow]}>
-                        {fmtHour(hour)}
-                      </Text>
-                    )}
-                    {minute !== 0 && <View style={styles.hourLabelSpacer} />}
-                    <View style={styles.minuteBody}>
-                      {minute === 0 && slot && (
-                        <ProjectedRoutineLayer projected={[slot]} maxAvg={maxAvg} />
-                      )}
-                      {hasGhosts &&
-                        previousDays.slice(0, 3).map((day) => {
-                          const ghostLogs = logsForMinute(day.logs, hour, minute);
-                          return ghostLogs.length > 0 ? (
-                            <ActualsLayer key={day.date} logs={ghostLogs} ghost />
-                          ) : null;
-                        })}
-                      {hasActuals && <ActualsLayer logs={todayActuals} />}
-                    </View>
-                  </View>
-                );
-              })}
+            <View key={hour} style={[styles.hourBlock, { top: hourTop }]}>
+              <Text style={[styles.hourLabel, isNowHour && styles.hourLabelNow]}>
+                {fmtHour(hour)}
+              </Text>
+              <View style={styles.hourBody}>
+                {slot && maxAvg > 0 && slot.avgCount > 0 && (
+                  <ProjectedRoutineLayer projected={[slot]} maxAvg={maxAvg} />
+                )}
+              </View>
             </View>
           );
         })}
+
+        <View
+          style={[styles.nowLine, { top: nowOffset }]}
+          pointerEvents="none"
+        />
+
+        <ActualsLayer
+          logs={actuals}
+          ghost={false}
+          timelineLeft={HOUR_LABEL_WIDTH}
+        />
+
+        {previousDays.slice(0, 3).map((day, idx) => (
+          <ActualsLayer
+            key={day.date}
+            logs={day.logs}
+            ghost
+            timelineLeft={HOUR_LABEL_WIDTH}
+            ghostIndex={idx}
+          />
+        ))}
       </View>
     </ScrollView>
   );
@@ -144,19 +132,15 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   timeline: {
-    minHeight: TOTAL_MINUTES * MINUTE_HEIGHT,
+    position: 'relative',
   },
   hourBlock: {
-    flexDirection: 'column',
-  },
-  minuteRow: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: 60 * MINUTE_HEIGHT,
     flexDirection: 'row',
-    alignItems: 'center',
-    height: MINUTE_HEIGHT,
-    borderBottomWidth: 0,
-  },
-  minuteRowNow: {
-    backgroundColor: 'rgba(91,159,255,0.25)',
+    alignItems: 'flex-start',
   },
   hourLabel: {
     width: HOUR_LABEL_WIDTH,
@@ -168,21 +152,22 @@ const styles = StyleSheet.create({
     paddingRight: Spacing.sm,
     flexShrink: 0,
     lineHeight: 10,
+    paddingTop: 1,
   },
   hourLabelNow: {
     color: Colors.stateIdle,
   },
-  hourLabelSpacer: {
-    width: HOUR_LABEL_WIDTH,
-    flexShrink: 0,
-  },
-  minuteBody: {
+  hourBody: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
+    height: 60 * MINUTE_HEIGHT,
     position: 'relative',
     overflow: 'hidden',
-    borderRadius: Radii.sm,
+  },
+  nowLine: {
+    position: 'absolute',
+    left: HOUR_LABEL_WIDTH,
+    right: 0,
+    height: 2,
+    backgroundColor: 'rgba(91,159,255,0.6)',
   },
 });
