@@ -14,7 +14,12 @@ from livekit.agents import tts
 from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
 
 SPEAKER_ID = 3
-TTS_TIMEOUT_SECONDS = 3
+# Root cause: 3 s was too short for first-run Sesame CSM synthesis on
+# CPU/MPS (model load + inference regularly exceeded it, causing the agent
+# to raise TimeoutError on the opening turn and go silent). 30 s matches
+# the Deepgram TTS fallback budget and is still shorter than any perceivable
+# "frozen" UX threshold — the agent's LiveKit session timeout is 45 s.
+TTS_TIMEOUT_SECONDS = 30
 
 
 def _log_voice_failure(reason: str, session_id: str = "") -> dict:
