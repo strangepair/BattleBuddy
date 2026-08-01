@@ -2308,6 +2308,10 @@ Return ONLY the JSON object, no markdown, no explanation.`;
         res.writeHead(400, { ...CORS, 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: 'userId and eventType required' }));
       }
+      if (!checkClientToken(req)) {
+        const auth = await authorizeProfileAccess(req, userId);
+        if (!auth.ok) return send401Unauthorized(res);
+      }
       if (!supabase) {
         res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: 'Event store not configured' }));
@@ -2375,15 +2379,29 @@ Return ONLY the JSON object, no markdown, no explanation.`;
         res.writeHead(400, { ...CORS, 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: 'userId required' }));
       }
+      const auth = await authorizeProfileAccess(req, rawUserId);
+      if (!auth.ok) return send401(res, auth.status, auth.error);
       const resolvedId = resolveUserId(rawUserId);
+
+      const fourteenDaysAgoISO = (() => {
+        const tz = timezone || DEFAULT_TZ;
+        const now = new Date();
+        const cutoff = new Date(now.getTime() - 14 * 24 * 3600 * 1000);
+        const dateStr = new Intl.DateTimeFormat('en-CA', {
+          timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+        }).format(cutoff);
+        const offset = tzOffsetString(tz, new Date(`${dateStr}T12:00:00Z`));
+        return new Date(`${dateStr}T00:00:00${offset}`).toISOString();
+      })();
 
       const { data: rows, error } = await supabase
         .from('bb_events')
         .select('id, event_type, occurred_at, metadata')
         .eq('user_id', resolvedId)
         .in('event_type', ['cigarette'])
+        .gte('occurred_at', fourteenDaysAgoISO)
         .order('occurred_at', { ascending: false })
-        .limit(200);
+        .limit(2000);
 
       if (error) throw new Error(error.message);
       const payload = deriveDashboardPayload(rows || [], timezone);
@@ -2431,6 +2449,10 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     for await (const chunk of req) body += chunk;
     try {
       const { userId, eventId, action, eventType, occurredAt, notes, timezone } = JSON.parse(body);
+      if (!checkClientToken(req)) {
+        const auth = await authorizeProfileAccess(req, userId || 'default');
+        if (!auth.ok) return send401Unauthorized(res);
+      }
       const resolvedId = resolveUserId(userId || 'default');
       const result = await updateEvent(resolvedId, {
         event_id: eventId, action, event_type: eventType, occurred_at: occurredAt, notes,
@@ -2481,6 +2503,8 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     }
 
     try {
+      const auth = await authorizeProfileAccess(req, userId);
+      if (!auth.ok) return send401(res, auth.status, auth.error);
       const eventTypes = eventTypesParam ? eventTypesParam.split(',') : undefined;
       const timezone = url.searchParams.get('timezone') || DEFAULT_TZ;
       const events = await queryEvents(resolveUserId(userId), { date, eventTypes, limit, timezone });

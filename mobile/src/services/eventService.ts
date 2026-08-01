@@ -1,4 +1,5 @@
 import { ApiConfig } from '../config';
+import { getAuthToken } from './supabase';
 
 export async function logEvent(
   userId: string,
@@ -7,9 +8,11 @@ export async function logEvent(
   occurredAt?: string,
 ): Promise<void> {
   try {
+    const token = await getAuthToken();
+    if (!token) return;
     await fetch(`${ApiConfig.CHAT_URL}/events`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ userId, eventType, occurredAt: occurredAt || new Date().toISOString(), metadata }),
     });
   } catch (err) {
@@ -33,11 +36,14 @@ export async function fetchRecentEvents(
 ): Promise<BBEvent[]> {
   if (!userId) return [];
   try {
+    const token = await getAuthToken();
+    if (!token) return [];
     const tz = (() => {
       try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return 'America/Chicago'; }
     })();
     const res = await fetch(
       `${ApiConfig.CHAT_URL}/events?userId=${encodeURIComponent(userId)}&limit=${limit}&timezone=${encodeURIComponent(tz)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
     );
     if (!res.ok) return [];
     const json = await res.json();

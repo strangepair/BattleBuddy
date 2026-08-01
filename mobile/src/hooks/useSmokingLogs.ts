@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ApiConfig } from '../config';
 import { useAuthStore } from '../stores/authStore';
+import { getAuthToken } from '../services/supabase';
 
 export interface SmokingLog {
   id: string;
@@ -44,11 +45,17 @@ export function useSmokingLogs(): UseSmokingLogsResult {
     async function load() {
       setLoading(true);
       try {
+        const token = await getAuthToken();
+        if (!token) {
+          if (!cancelled) { setTodayLogs([]); setHistoryLogs([]); }
+          return;
+        }
         const tz = (() => {
           try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return 'America/Chicago'; }
         })();
         const res = await fetch(
           `${ApiConfig.CHAT_URL}/dashboard/today?userId=${encodeURIComponent(userId!)}&timezone=${encodeURIComponent(tz)}`,
+          { headers: { Authorization: `Bearer ${token}` } },
         );
         if (!res.ok || cancelled) return;
         const json = await res.json();
