@@ -586,12 +586,22 @@ async def battlebuddy_session(ctx: agents.JobContext):
         print(f"[Agent] Session error for {user_id}: {err_msg}")
         tts_keywords = ("tts", "audio", "synthesize", "voice", "timeout", "SesameTTS", "pcm")
         if any(kw in err_msg.lower() for kw in tts_keywords):
-            # TODO: add unit test for voice_failure path
-            print(
-                f"[Agent] VOICE_FAILURE {{'type': 'voice_failure', 'reason': '{err_msg}', "
-                f"'session_id': '{session_id}', 'user_id': '{user_id}', "
-                f"'timestamp': '{datetime.now(ZoneInfo('UTC')).isoformat()}'}}"
-            )
+            # Root cause comment: voice_failure events were logged via an
+            # f-string with unescaped inner quotes, producing malformed
+            # pseudo-JSON that was hard to grep/parse. Now uses json.dumps for
+            # a properly serialised, machine-readable record including
+            # error_code (first word of reason) for log-based alerting.
+            import json as _json
+            _error_code = err_msg.split()[0] if err_msg else "unknown"
+            _vf_event = {
+                "type": "voice_failure",
+                "reason": err_msg,
+                "error_code": _error_code,
+                "session_id": session_id,
+                "user_id": user_id,
+                "timestamp": datetime.now(ZoneInfo("UTC")).isoformat(),
+            }
+            print(f"[Agent] VOICE_FAILURE {_json.dumps(_vf_event)}")
         if "credit balance" in err_msg or "too low" in err_msg or "billing" in err_msg.lower():
             asyncio.ensure_future(session.generate_reply(
                 instructions="Say exactly: 'Hey, I'm having a connection issue on my end right now. Give me a minute and try again.' Do not say anything else."
