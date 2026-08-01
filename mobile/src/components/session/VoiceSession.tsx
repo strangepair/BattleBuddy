@@ -146,11 +146,19 @@ function TranscriptCapture() {
 
   useEffect(() => {
     const handler = (segments: TranscriptionSegment[], participant?: Participant) => {
-      const isAgent = participant && !participant.isLocal;
       const text = segments.map((s) => s.text).join('').trim();
       if (!text) return;
 
       const isFinal = segments.every((s) => s.final);
+
+      // When participant is undefined the SDK emits transcription without
+      // attribution. Treat undefined the same as a remote (agent) participant
+      // since user STT transcripts always carry isLocal=true when attributed.
+      // An undefined participant here means the agent emitted the segment.
+      const isLocal = participant ? participant.isLocal : false;
+      const isAgent = !isLocal;
+
+      console.log(`[VOICE] TranscriptionReceived: isAgent=${isAgent} isFinal=${isFinal} len=${text.length} participant=${participant?.identity ?? 'undefined'}`);
 
       if (isAgent) {
         if (isFinal) {
@@ -168,10 +176,12 @@ function TranscriptCapture() {
           updateAssistantMsg(lastAgentMsgId.current, text);
         }
       } else if (isFinal) {
+        console.log(`[VOICE] User transcript captured: "${text.slice(0, 80)}"`);
         addUserMessage(text);
       }
     };
 
+    console.log('[VOICE] TranscriptCapture: registering TranscriptionReceived handler');
     room.on(RoomEvent.TranscriptionReceived, handler);
     return () => {
       room.off(RoomEvent.TranscriptionReceived, handler);
