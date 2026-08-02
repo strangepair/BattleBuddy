@@ -267,6 +267,7 @@ function publicRow(r) {
     deploy_status: r.deploy_status,
     error: r.error,
     archived: r.archived ?? false,
+    changeSummary: r.change_summary ?? null,
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -373,7 +374,7 @@ function checkStatusToken(req) {
 export function patchForEvent(evt, payload) {
   switch (evt) {
     case 'pr_opened':
-      return { status: 'in_review', pr_url: payload.pr_url, pr_number: payload.pr_number, branch: payload.branch, checks_status: 'running' };
+      return { status: 'in_review', pr_url: payload.pr_url, pr_number: payload.pr_number, branch: payload.branch, checks_status: 'running', ...(payload.change_summary != null ? { change_summary: String(payload.change_summary).slice(0, 1000) } : {}) };
     case 'checks_passed':
       return { status: 'merging', checks_status: 'passed' };
     case 'checks_failed':
