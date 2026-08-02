@@ -20,6 +20,8 @@ interface DayCalendarViewProps {
   previousDays?: DayLog[];
   /** Called when the user taps a non-ghost log block. */
   onPressLog?: (log: SmokingLog) => void;
+  /** Called when the user taps a projected routine block. */
+  onPressSlot?: (slot: HourSlot) => void;
 }
 
 const MINUTE_HEIGHT = 2;
@@ -48,7 +50,7 @@ function minuteOffset(hour: number, minute: number): number {
  * @param actuals - Today's SmokingLog entries from useSmokingLogs.
  * @param previousDays - Optional array of DayLog for the previous 1–3 days.
  */
-export default function DayCalendarView({ projected, actuals, previousDays = [], onPressLog }: DayCalendarViewProps) {
+export default function DayCalendarView({ projected, actuals, previousDays = [], onPressLog, onPressSlot }: DayCalendarViewProps) {
   const scrollRef = useRef<ScrollView>(null);
   const maxAvg = Math.max(...projected.map((s) => s.avgCount), 0);
 
@@ -85,7 +87,7 @@ export default function DayCalendarView({ projected, actuals, previousDays = [],
               </Text>
               <View style={styles.hourBody}>
                 {slot && maxAvg > 0 && slot.avgCount > 0 && (
-                  <ProjectedRoutineLayer projected={[slot]} maxAvg={maxAvg} />
+                  <ProjectedRoutineLayer projected={[slot]} maxAvg={maxAvg} onPress={onPressSlot} />
                 )}
               </View>
             </View>

@@ -1,4 +1,4 @@
-import { View, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Colors } from '../../theme';
 import type { HourSlot } from '../../hooks/useRoutineProjection';
 
@@ -7,6 +7,8 @@ interface ProjectedRoutineLayerProps {
   projected: HourSlot[];
   /** Max avgCount across all slots — used to normalise bar widths. */
   maxAvg: number;
+  /** Called when the user taps a projected routine block. */
+  onPress?: (slot: HourSlot) => void;
 }
 
 /**
@@ -14,20 +16,42 @@ interface ProjectedRoutineLayerProps {
  * indicating the user's historical average cigarette frequency for that hour.
  * Bars are proportionally scaled relative to the peak hour.
  */
-export default function ProjectedRoutineLayer({ projected, maxAvg }: ProjectedRoutineLayerProps) {
+export default function ProjectedRoutineLayer({ projected, maxAvg, onPress }: ProjectedRoutineLayerProps) {
   const slot = projected[0];
   if (!slot || maxAvg === 0 || slot.avgCount === 0) return null;
 
   const widthPct = Math.min(1, slot.avgCount / maxAvg);
+  const label = `~${slot.avgCount.toFixed(1)} avg`;
 
-  return (
+  const bar = (
     <View style={styles.track}>
-      <View style={[styles.bar, { width: `${Math.round(widthPct * 100)}%` as `${number}%` }]} />
+      <View style={[styles.bar, { width: `${Math.round(widthPct * 100)}%` as `${number}%` }]}>
+        <Text style={styles.label} numberOfLines={1} ellipsizeMode="tail">
+          {label}
+        </Text>
+      </View>
     </View>
   );
+
+  if (onPress) {
+    return (
+      <TouchableOpacity style={styles.touchable} onPress={() => onPress(slot)} activeOpacity={0.7}>
+        {bar}
+      </TouchableOpacity>
+    );
+  }
+
+  return bar;
 }
 
 const styles = StyleSheet.create({
+  touchable: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
+  },
   track: {
     position: 'absolute',
     left: 0,
@@ -38,9 +62,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   bar: {
-    height: 6,
+    height: 20,
     borderRadius: 3,
     backgroundColor: Colors.stateIdle,
-    opacity: 0.28,
+    opacity: 0.5,
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+    overflow: 'hidden',
+  },
+  label: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    fontVariant: ['tabular-nums'],
   },
 });
