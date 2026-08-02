@@ -44,6 +44,18 @@ const MAX_CONCURRENT = Number(process.env.DEV_MAX_CONCURRENT || 2);
 const MAX_PER_DAY = Number(process.env.DEV_MAX_PER_DAY || 20);
 const MIN_CONFIDENCE = Number(process.env.DEV_MIN_CONFIDENCE || 0.6);
 
+// ─── Self-heal tuning (migration 020) ────────────────────────────────────────
+// Retries are per failure CLASS, never blanket. An unrecognised failure is
+// treated as terminal on purpose: a pipeline that retries what it doesn't
+// understand burns build minutes and hides the real fault.
+const RETRY_BASE_MS = Number(process.env.DEV_RETRY_BASE_MS || 5 * 60 * 1000);
+const MAX_RETRIES = { transient: 2, stale_branch: 1, terminal: 0 };
+// N consecutive failures sharing a signature trip the breaker: stop retrying,
+// raise ONE alert. This is what would have caught the IPv6 SUPABASE_DB_URL
+// break after the first row instead of the fifth.
+const BREAKER_THRESHOLD = Number(process.env.DEV_BREAKER_THRESHOLD || 3);
+const BREAKER_WINDOW_MS = Number(process.env.DEV_BREAKER_WINDOW_MS || 6 * 3600 * 1000);
+
 // Paths the pipeline must never modify. Enforced hard in autobuild.yml; also
 // used here to refuse obviously out-of-bounds directives up front.
 const FORBIDDEN_HINTS = [
@@ -322,6 +334,148 @@ async function dispatchBuild(request) {
   }
 }
 
+// ─── Failure classification + circuit breaker ────────────────────────────────
+//
+// Order matters: terminal wins over everything. A scope-fence violation that
+// happens to mention a timeout must never be retried, so the terminal patterns
+// are tested first and anything unrecognised falls through to terminal too.
+
+const TERMINAL_HINTS = [
+  /scope fence/i, /protected path/i, /destructive migration/i,
+  /forbidden/i, /safety marker/i, /\b988\b/,
+];
+const STALE_BRANCH_HINTS = [
+  /merge conflict/i, /not mergeable/i, /\bdirty\b/i, /add\/add/i,
+  /rebase/i, /conflict/i, /behind .*base/i,
+];
+const TRANSIENT_HINTS = [
+  /ETIMEDOUT/i, /ECONNRESET/i, /ECONNREFUSED/i, /ENOTFOUND/i, /EAI_AGAIN/i,
+  /EPIPE/i, /socket hang up/i, /network is unreachable/i, /timed?\s?out/i,
+  /github dispatch 5\d\d/i, /\b(502|503|504)\b/, /rate limit/i,
+  /npm\s+err/i, /onnxruntime/i, /fetch failed/i,
+];
+
+/** One of 'terminal' | 'stale_branch' | 'transient'. Unknown → terminal. */
+export function classifyFailure(errorText) {
+  const text = String(errorText || '');
+  if (!text) return 'terminal';
+  if (TERMINAL_HINTS.some((re) => re.test(text))) return 'terminal';
+  if (STALE_BRANCH_HINTS.some((re) => re.test(text))) return 'stale_branch';
+  if (TRANSIENT_HINTS.some((re) => re.test(text))) return 'transient';
+  return 'terminal';
+}
+
+/** Stable fingerprint for "this failed the same way". Volatile bits (ids,
+    numbers, paths, timestamps) are stripped so repeats collapse onto one key. */
+export function failureSignature(stage, errorText) {
+  const normalized = String(errorText || '')
+    .toLowerCase()
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g, '<uuid>')
+    .replace(/\b\d+\b/g, '<n>')
+    .replace(/(\/[\w.-]+)+/g, '<path>')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 200);
+  const hash = createHash('sha1').update(`${stage}|${normalized}`).digest('hex').slice(0, 16);
+  return { signature: `${stage}:${hash}`, normalized };
+}
+
+/** Exponential backoff on the attempt count already recorded. */
+export function retryDelayMs(attempts) {
+  return RETRY_BASE_MS * Math.pow(2, Math.max(0, attempts));
+}
+
+/** True when an unresolved alert already exists for this signature. */
+async function isBreakerOpen(supabase, signature) {
+  const { data } = await supabase
+    .from('pipeline_alerts')
+    .select('id')
+    .eq('signature', signature)
+    .is('resolved_at', null)
+    .limit(1);
+  return (data || []).length > 0;
+}
+
+/** Count recent failed rows sharing a signature; trip the breaker at the
+    threshold. Raising the alert relies on the partial unique index from
+    migration 020 — a duplicate insert is expected and swallowed, so two
+    concurrent ticks cannot double-alert. */
+async function maybeTripBreaker(supabase, signature, normalized, stage) {
+  const since = new Date(Date.now() - BREAKER_WINDOW_MS).toISOString();
+  const { data: recent } = await supabase
+    .from('dev_build_requests')
+    .select('id')
+    .eq('failure_signature', signature)
+    .gte('updated_at', since);
+
+  const count = (recent || []).length;
+  if (count < BREAKER_THRESHOLD) return false;
+
+  const { error } = await supabase.from('pipeline_alerts').insert({
+    kind: 'repeated_failure',
+    signature,
+    detail: { stage, normalized, count, threshold: BREAKER_THRESHOLD },
+  });
+  // 23505 = unique violation: an alert for this signature is already open.
+  if (error && !/duplicate key|23505/i.test(error.message || '')) {
+    console.error('[devPipeline] breaker alert insert failed:', error.message);
+  }
+
+  // Stop the bleeding: nothing with this signature retries again until a human
+  // (or a later success) resolves the alert.
+  await supabase
+    .from('dev_build_requests')
+    .update({ next_retry_at: null, status: 'needs_attention', updated_at: new Date().toISOString() })
+    .eq('failure_signature', signature)
+    .eq('status', 'failed');
+
+  console.error(`[devPipeline] CIRCUIT BREAKER open for ${signature} (${count} failures at ${stage})`);
+  return true;
+}
+
+/** Record a failure with its class, signature and (if retryable) next attempt
+    time. Replaces a bare setStatus on every failure path. */
+export async function applyFailure(supabase, id, patch, note, stage) {
+  const { data: cur } = await supabase
+    .from('dev_build_requests')
+    .select('attempts')
+    .eq('id', id)
+    .single();
+  const attempts = cur?.attempts ?? 0;
+
+  const errorText = patch.error || note || '';
+  const failureClass = classifyFailure(errorText);
+  const { signature, normalized } = failureSignature(stage, errorText);
+
+  const cap = MAX_RETRIES[failureClass] ?? 0;
+  const breakerOpen = await isBreakerOpen(supabase, signature);
+  const retryable = attempts < cap && !breakerOpen;
+
+  await setStatus(
+    supabase,
+    id,
+    {
+      ...patch,
+      failure_class: failureClass,
+      failure_signature: signature,
+      next_retry_at: retryable ? new Date(Date.now() + retryDelayMs(attempts)).toISOString() : null,
+    },
+    `${note}${retryable ? ` — retry ${attempts + 1}/${cap} scheduled` : ` — terminal (${failureClass})`}`,
+  );
+
+  await maybeTripBreaker(supabase, signature, normalized, stage);
+}
+
+/** Clear any open alert once the same signature succeeds again. */
+async function resolveAlert(supabase, signature) {
+  if (!signature) return;
+  await supabase
+    .from('pipeline_alerts')
+    .update({ resolved_at: new Date().toISOString() })
+    .eq('signature', signature)
+    .is('resolved_at', null);
+}
+
 // ─── Build worker (scheduled tick) ───────────────────────────────────────────
 // Follows runScheduledDesignLoop: cheap, idempotent, swallows errors.
 
@@ -349,12 +503,73 @@ export async function runDevBuildWorker(deps) {
     .limit(slots);
 
   for (const req of pending || []) {
-    try {
-      await dispatchBuild(req);
-      await setStatus(supabase, req.id, { status: 'building' }, 'dispatched to GitHub Actions');
-    } catch (err) {
-      await setStatus(supabase, req.id, { status: 'failed', error: String(err.message).slice(0, 300) }, 'dispatch failed');
+    await attemptDispatch(supabase, req, 'dispatched to GitHub Actions');
+  }
+
+  // ── Retry pass ────────────────────────────────────────────────────────────
+  // Re-pick failed rows whose class is retryable and whose backoff has expired.
+  // A row only reaches here if applyFailure set next_retry_at, which it does
+  // only for transient / stale_branch under the per-class cap and only while
+  // the breaker for its signature is closed. Both classes re-dispatch: autobuild
+  // branches from current main, so a regenerated build resolves a stale-branch
+  // conflict by construction.
+  const retrySlots = slots - (pending || []).length;
+  if (retrySlots <= 0) return;
+
+  const { data: dueRetries } = await supabase
+    .from('dev_build_requests')
+    .select('*')
+    .eq('status', 'failed')
+    .in('failure_class', ['transient', 'stale_branch'])
+    .not('next_retry_at', 'is', null)
+    .lte('next_retry_at', new Date().toISOString())
+    .order('next_retry_at', { ascending: true })
+    .limit(retrySlots);
+
+  for (const req of dueRetries || []) {
+    const cap = MAX_RETRIES[req.failure_class] ?? 0;
+    if ((req.attempts ?? 0) >= cap) {
+      // Defensive: cap reached but next_retry_at was left set.
+      await setStatus(supabase, req.id, { next_retry_at: null }, 'retry budget exhausted');
+      continue;
     }
+    await attemptDispatch(
+      supabase,
+      req,
+      `retry ${(req.attempts ?? 0) + 1}/${cap} after ${req.failure_class} failure`,
+      (req.attempts ?? 0) + 1,
+    );
+  }
+}
+
+/** Dispatch one request, recording success or a classified failure. */
+async function attemptDispatch(supabase, req, note, attempts) {
+  try {
+    await dispatchBuild(req);
+    await setStatus(
+      supabase,
+      req.id,
+      {
+        status: 'building',
+        next_retry_at: null,
+        ...(attempts === undefined ? {} : { attempts }),
+      },
+      note,
+    );
+    // A success on this signature clears its breaker.
+    await resolveAlert(supabase, req.failure_signature);
+  } catch (err) {
+    await applyFailure(
+      supabase,
+      req.id,
+      {
+        status: 'failed',
+        error: String(err.message).slice(0, 300),
+        ...(attempts === undefined ? {} : { attempts }),
+      },
+      'dispatch failed',
+      'dispatch',
+    );
   }
 }
 
@@ -800,7 +1015,19 @@ export async function handleDevPipeline(req, res, deps) {
     const { requestId, event, ...payload } = body;
     const patch = patchForEvent(event, payload);
     if (!requestId || !patch) return json(400, { error: 'requestId and known event required' });
-    await setStatus(supabase, requestId, patch, `gh:${event}`);
+    // Failures arriving from the workflows get classified the same way as a
+    // dispatch failure, so CI/deploy flakes are retryable and scope-fence or
+    // destructive-migration blocks stay terminal.
+    if (patch.status === 'failed' || patch.status === 'needs_attention') {
+      await applyFailure(supabase, requestId, patch, `gh:${event}`, event);
+    } else {
+      await setStatus(supabase, requestId, patch, `gh:${event}`);
+      if (event === 'deployed') {
+        const { data: cur } = await supabase
+          .from('dev_build_requests').select('failure_signature').eq('id', requestId).single();
+        await resolveAlert(supabase, cur?.failure_signature);
+      }
+    }
     return json(200, { ok: true });
   }
 
