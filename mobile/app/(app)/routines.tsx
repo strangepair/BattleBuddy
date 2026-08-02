@@ -29,6 +29,7 @@ import DateTimePicker, {
   DateTimePickerEvent,
 } from '@react-native-community/datetimepicker';
 import { Colors, Spacing, Radii } from '../../src/theme';
+import HamburgerMenu from '../../src/components/common/HamburgerMenu';
 import { useNotificationStore } from '../../src/stores/notificationStore';
 
 type TimeField = 'checkInTime1' | 'checkInTime2' | 'quietStart' | 'quietEnd';
@@ -81,7 +82,7 @@ export default function RoutinesScreen() {
           <Text style={styles.backText}>← Back</Text>
         </TouchableOpacity>
         <Text style={styles.title}>Routines</Text>
-        <View style={styles.spacer} />
+        <HamburgerMenu />
       </View>
 
       <ScrollView
