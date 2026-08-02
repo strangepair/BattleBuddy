@@ -8,17 +8,20 @@
  */
 import { submitDirective } from '../services/devService';
 
-const originalFetch = global.fetch;
+// `global` is not in this project's tsconfig types (["jest"] only, no node),
+// so reach the fetch binding through globalThis.
+const g = globalThis as unknown as { fetch: typeof fetch };
+const originalFetch = g.fetch;
 
 function mockJson(body: unknown) {
-  global.fetch = jest.fn().mockResolvedValue({
+  g.fetch = jest.fn().mockResolvedValue({
     ok: true,
     json: async () => body,
   }) as unknown as typeof fetch;
 }
 
 afterEach(() => {
-  global.fetch = originalFetch;
+  g.fetch = originalFetch;
   jest.restoreAllMocks();
 });
 
