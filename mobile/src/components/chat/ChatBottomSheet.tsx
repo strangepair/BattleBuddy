@@ -194,6 +194,7 @@ export default function ChatBottomSheet({ open, onClose, onSwitchToVoice }: Chat
                 onPress={() => { handleSend(); inputRef.current?.focus(); }}
                 disabled={!input.trim() || isStreaming}
                 activeOpacity={0.7}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
                 <Text style={styles.sendText}>↑</Text>
               </TouchableOpacity>
@@ -338,9 +339,9 @@ const styles = StyleSheet.create({
     maxHeight: 120,
   },
   sendButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: Colors.coral,
     justifyContent: 'center',
     alignItems: 'center',
