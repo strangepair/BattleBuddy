@@ -2618,10 +2618,14 @@ Return ONLY the JSON object, no markdown, no explanation.`;
   // ─── Combined log feed — GET /logs ──────────────────────────────────────────
   // Returns cigarette events (from bb_events) and activity entries (from
   // activities), each tagged with a `type` field, ordered by time descending.
+  // Supports `before=<ISO date>` for paginated backward scrolling and
+  // `limit=<n>` (max 200). When `before` is provided only entries strictly
+  // before that ISO timestamp are returned, enabling infinite-scroll history.
   if (req.method === 'GET' && req.url.startsWith('/logs')) {
     const url = new URL(req.url, 'http://localhost');
     const userId = url.searchParams.get('userId');
     const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 50, 200);
+    const before = url.searchParams.get('before') || null;
     if (!userId) {
       res.writeHead(400, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'userId required' }));
@@ -2634,21 +2638,24 @@ Return ONLY the JSON object, no markdown, no explanation.`;
         return res.end(JSON.stringify({ error: 'Event store not configured' }));
       }
       const resolvedId = resolveUserId(userId);
-      const [cigResult, actResult] = await Promise.all([
-        supabase
-          .from('bb_events')
-          .select('id, event_type, occurred_at, metadata')
-          .eq('user_id', resolvedId)
-          .eq('event_type', 'cigarette')
-          .order('occurred_at', { ascending: false })
-          .limit(limit),
-        supabase
-          .from('activities')
-          .select('id, activity_name, start_time, end_time, location, created_at')
-          .eq('user_id', resolvedId)
-          .order('start_time', { ascending: false })
-          .limit(limit),
-      ]);
+      let cigQuery = supabase
+        .from('bb_events')
+        .select('id, event_type, occurred_at, metadata')
+        .eq('user_id', resolvedId)
+        .eq('event_type', 'cigarette')
+        .order('occurred_at', { ascending: false })
+        .limit(limit);
+      let actQuery = supabase
+        .from('activities')
+        .select('id, activity_name, start_time, end_time, location, created_at')
+        .eq('user_id', resolvedId)
+        .order('start_time', { ascending: false })
+        .limit(limit);
+      if (before) {
+        cigQuery = cigQuery.lt('occurred_at', before);
+        actQuery = actQuery.lt('start_time', before);
+      }
+      const [cigResult, actResult] = await Promise.all([cigQuery, actQuery]);
       if (cigResult.error) throw new Error(cigResult.error.message);
       if (actResult.error) throw new Error(actResult.error.message);
       const cigarettes = (cigResult.data || []).map(r => ({
