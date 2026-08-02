@@ -214,6 +214,7 @@ function makeTriageSupabase() {
     work_items: [],
     work_item_submissions: [],
     pipeline_events: [],
+    dev_build_requests: [],
   };
 
   const makeTable = (tableName) => {
@@ -252,9 +253,13 @@ function makeTriageSupabase() {
             : { data: rows, error: null };
           return Promise.resolve(result).then(resolve);
         }
-        // handle update
+        // handle update — apply the patch to matching rows so tests can assert
+        // on post-update state (holdDuplicateRequests relies on this).
         if (_pendingUpdate) {
-          return Promise.resolve({ data: null, error: null }).then(resolve);
+          let targets = store[tableName] || [];
+          for (const f of _filters) targets = targets.filter((r) => r[f.col] === f.val);
+          for (const row of targets) Object.assign(row, _pendingUpdate);
+          return Promise.resolve({ data: targets, error: null }).then(resolve);
         }
         // handle select
         let rows = store[tableName].slice();
@@ -329,6 +334,72 @@ test('duplicate path: attaches evidence, emits event, creates no build request',
   assert.equal(sb._store.work_item_submissions.length, 1, 'evidence link created');
   assert.equal(sb._store.work_item_submissions[0].role, 'evidence');
   assert.equal(sb._store.pipeline_events.length, 1, 'one pipeline_event emitted');
+});
+
+// Regression: the /dev/directive handler inserts dev_build_requests rows BEFORE
+// triage runs, and runDevBuildWorker dispatches anything still in 'pending'.
+// A duplicate therefore used to ship a second, identical build even though the
+// duplicate path returned early. The rows must be parked in a terminal status.
+test('duplicate path: parks pre-created build requests so no redundant build is dispatched', async () => {
+  const existingItemId = 'existing-wi-id';
+  const sb = makeTriageSupabase();
+  sb._store.work_items.push({ id: existingItemId, title: 'Voice crashes on iOS', subsystem: 'voice', stage: 'received', created_at: new Date().toISOString() });
+  // The row insertRequests() already wrote before triage ran.
+  sb._store.dev_build_requests.push({ id: 'req-dup', status: 'pending', history: [] });
+
+  const fakeAnthropic = {
+    messages: {
+      create: async () => ({
+        stop_reason: 'end_turn',
+        content: [{ type: 'text', text: JSON.stringify({ classification: 'duplicate', target_work_item_id: existingItemId }) }],
+      }),
+    },
+  };
+
+  const result = await processSubmission(sb, fakeAnthropic, {
+    source: 'dev_mode',
+    rawText: 'App crashes on voice screen',
+    sessionId: null,
+    insertedRequests: [{ id: 'req-dup' }],
+    dispatchFn: async () => 'req-dup',
+  });
+
+  assert.equal(result.isDuplicate, true);
+  const parked = sb._store.dev_build_requests.find((r) => r.id === 'req-dup');
+  assert.equal(parked.status, 'duplicate', 'build request must leave pending');
+  // runDevBuildWorker selects .eq('status', 'pending') — nothing left for it.
+  const stillPending = sb._store.dev_build_requests.filter((r) => r.status === 'pending');
+  assert.deepEqual(stillPending, [], 'no pending row left for the build worker');
+  assert.match(
+    parked.history.at(-1).note,
+    /duplicate of work item/,
+    'parking must be traceable in history',
+  );
+});
+
+test('new path: leaves the pre-created build request pending for the worker', async () => {
+  const sb = makeTriageSupabase();
+  sb._store.dev_build_requests.push({ id: 'req-new', status: 'pending', history: [] });
+
+  const fakeAnthropic = {
+    messages: {
+      create: async () => ({
+        stop_reason: 'end_turn',
+        content: [{ type: 'text', text: JSON.stringify({ classification: 'new', title: 'Fix voice crash', interpretation: 'Voice crashes', subsystem: 'voice' }) }],
+      }),
+    },
+  };
+
+  await processSubmission(sb, fakeAnthropic, {
+    source: 'dev_mode',
+    rawText: 'Voice crashes on iOS 17',
+    sessionId: null,
+    insertedRequests: [{ id: 'req-new' }],
+    dispatchFn: async () => 'req-new',
+  });
+
+  const row = sb._store.dev_build_requests.find((r) => r.id === 'req-new');
+  assert.equal(row.status, 'pending', 'a genuinely new request must still build');
 });
 
 test('new path: creates work_item + calls dispatchFn', async () => {

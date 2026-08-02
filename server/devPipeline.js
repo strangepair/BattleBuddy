@@ -556,6 +556,31 @@ export async function handleRepetition(supabase, subsystem) {
   });
 }
 
+// holdDuplicateRequests — park the dev_build_requests rows a duplicate
+// submission already created so no redundant build is dispatched.
+//
+// Why this is needed: the /dev/directive handler calls insertRequests() BEFORE
+// triage runs, so the rows exist by the time we learn the submission is a
+// duplicate. Returning early from the duplicate path only skips dispatchFn,
+// which is a no-op that returns an id — the real dispatch is runDevBuildWorker,
+// a scheduled tick that picks up anything still in 'pending'. Without this the
+// duplicate ships a second, identical build.
+//
+// 'duplicate' is a terminal status (migration 019); the worker only selects
+// 'pending', so parked rows are never dispatched and never retried.
+export async function holdDuplicateRequests(supabase, insertedRequests, targetItem) {
+  if (!supabase || !targetItem) return;
+  for (const row of insertedRequests || []) {
+    if (!row?.id) continue;
+    await setStatus(
+      supabase,
+      row.id,
+      { status: 'duplicate' },
+      `duplicate of work item ${targetItem.id} (${targetItem.title}) — attached as evidence, no build dispatched`,
+    );
+  }
+}
+
 // processSubmission — the main triage entry point. Called from handleDevPipeline
 // for the /dev/requests (directive) submission path.
 //
@@ -564,7 +589,8 @@ export async function handleRepetition(supabase, subsystem) {
 //     temporary placeholder work item if needed — see NOTE below).
 //  2. Triage (classify). On any error → default to 'new'.
 //  3. Duplicate path: attach submission as evidence, emit 'submitted' event on
-//     the existing work item. Return { isDuplicate: true, workItem }.
+//     the existing work item, park any pre-created build requests so the worker
+//     never dispatches them. Return { isDuplicate: true, workItem }.
 //  4. New path: create work_item, link submission as 'origin', emit events,
 //     then create dev_build_request + dispatch (same as today).
 //  5. Repetition check.
@@ -626,6 +652,7 @@ export async function processSubmission(supabase, anthropic, {
     } else {
       await supabase.from('work_item_submissions').insert({ work_item_id: targetId, submission_id: submissionId, role: 'evidence' });
       await emitEvent(supabase, { kind: 'submitted', workItemId: targetId, detail: { submission_id: submissionId, classification: 'duplicate' } });
+      await holdDuplicateRequests(supabase, insertedRequests, targetItem);
       await handleRepetition(supabase, targetItem.subsystem);
       return { isDuplicate: true, existingWorkItem: targetItem };
     }

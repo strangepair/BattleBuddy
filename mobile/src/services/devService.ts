@@ -12,9 +12,27 @@ export type DevRequestStatus =
   | 'deploying'
   | 'deployed'
   | 'failed'
-  | 'needs_attention';
+  | 'needs_attention'
+  // Terminal: triage matched this submission to an existing work item, so the
+  // request was parked instead of built. See holdDuplicateRequests (server).
+  | 'duplicate';
 
 export type DevTarget = 'backend' | 'agent' | 'ui' | 'prompt';
+
+/** The work item a duplicate submission was attached to as evidence. */
+export interface AttachedWorkItem {
+  id: string;
+  title: string;
+  subsystem?: string;
+}
+
+/** Result of submitting a directive. `duplicate` means triage matched it to an
+    existing work item and no build was started. */
+export interface DirectiveResult {
+  requests: DevRequest[];
+  duplicate: boolean;
+  attachedTo: AttachedWorkItem | null;
+}
 
 export interface DevRequest {
   id: string;
@@ -28,7 +46,6 @@ export interface DevRequest {
   branch?: string | null;
   deploy_status?: string | null;
   error?: string | null;
-  change_summary?: string | null;
   archived?: boolean;
   created_at: string;
   updated_at?: string;
@@ -67,12 +84,14 @@ export async function captureTranscript(input: {
   }
 }
 
-/** Submit a typed directive from the Dev tab. Returns the created request(s). */
+/** Submit a typed directive from the Dev tab. Returns the created request(s)
+    plus the triage verdict — `duplicate`/`attachedTo` are set when the backend
+    matched this submission to an existing work item and started no build. */
 export async function submitDirective(input: {
   userId: string | null;
   text: string;
   target?: DevTarget;
-}): Promise<DevRequest[]> {
+}): Promise<DirectiveResult> {
   const res = await fetch(`${ApiConfig.DEV_URL}/dev/directive`, {
     method: 'POST',
     headers: authHeaders(),
@@ -80,7 +99,11 @@ export async function submitDirective(input: {
   });
   if (!res.ok) throw new Error(`directive failed: ${res.status}`);
   const json = await res.json();
-  return json.requests ?? [];
+  return {
+    requests: json.requests ?? [],
+    duplicate: json.duplicate === true,
+    attachedTo: json.attachedTo ?? null,
+  };
 }
 
 /** List all build requests (newest first) for the Dev tab. */
