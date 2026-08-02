@@ -3,7 +3,7 @@
 --
 -- Additive and idempotent: every statement is safe to re-run against a
 -- database that already contains this schema (deploy.yml re-runs all
--- migration files on every change). No DROP / TRUNCATE / DELETE.
+-- migration files on every change). Additive only - this file never removes tables, columns or rows.
 
 -- ─── submissions — raw user input ────────────────────────────────────────────
 
