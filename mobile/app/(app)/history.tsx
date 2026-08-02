@@ -1,3 +1,12 @@
+/*
+ * AUDIT SUMMARY — history.tsx
+ * ─────────────────────────────────────────────────────────────────────────────
+ * LIVE   sessions list  – fetchSessionStats → GET /events (sessionStats.ts)
+ * LIVE   session cards  – occurredAt, mode, outcome, helped, intensityStart/End
+ *                         all come from the /events response rows
+ * ─────────────────────────────────────────────────────────────────────────────
+ * No stale or hardcoded stats found on this screen.
+ */
 import { useState, useEffect, useCallback } from 'react';
 import { View, FlatList, StyleSheet, ActivityIndicator } from 'react-native';
 import SessionCard from '../../src/components/history/SessionCard';
@@ -11,6 +20,7 @@ export default function HistoryScreen() {
   const [sessions, setSessions] = useState<SessionEventRow[] | null>(null);
   const userId = useAuthStore((s) => s.user?.id);
 
+  // AUDIT: live – fetchSessionStats → GET /events on bb-server (sessionStats.ts)
   const loadEvents = useCallback(async () => {
     const stats = await fetchSessionStats(userId ?? null);
     setSessions(stats.sessions);
@@ -39,12 +49,12 @@ export default function HistoryScreen() {
           contentContainerStyle={styles.list}
           renderItem={({ item }) => (
             <SessionCard
-              startedAt={item.occurredAt}
-              mode={item.mode}
-              outcome={item.outcome}
-              helped={item.helped}
-              intensityStart={item.intensityStart}
-              intensityEnd={item.intensityEnd}
+              startedAt={item.occurredAt}     // AUDIT: live – /events row.occurred_at
+              mode={item.mode}                // AUDIT: live – /events row.metadata.mode
+              outcome={item.outcome}          // AUDIT: live – /events row.metadata.outcome
+              helped={item.helped}            // AUDIT: live – /events row.metadata.helped
+              intensityStart={item.intensityStart}  // AUDIT: live – /events row.metadata.intensity_start
+              intensityEnd={item.intensityEnd}      // AUDIT: live – /events row.metadata.intensity_end
               onPress={() => {}}
             />
           )}

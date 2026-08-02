@@ -1,3 +1,14 @@
+/*
+ * AUDIT SUMMARY — preferences.tsx
+ * ─────────────────────────────────────────────────────────────────────────────
+ * LIVE   user.name / user.email  – authStore (Supabase auth session)
+ * LIVE   developerMode           – settingsStore (Zustand, persisted locally)
+ * STALE  Version "1.0.0"         – hardcoded string literal; not read from
+ *                                  app.json, expo-constants, or any build
+ *                                  artefact. Replaced with "Stat unavailable".
+ * ─────────────────────────────────────────────────────────────────────────────
+ * REMOVED  hardcoded "1.0.0" version value — replaced with placeholder text.
+ */
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -7,8 +18,10 @@ import { FeatureFlags } from '../../src/config';
 import { Colors, Spacing, Radii } from '../../src/theme';
 
 export default function PreferencesScreen() {
+  // AUDIT: live – authStore reads from Supabase auth session
   const user = useAuthStore((s) => s.user);
   const signOut = useAuthStore((s) => s.signOut);
+  // AUDIT: live – settingsStore (Zustand, persisted locally)
   const developerMode = useSettingsStore((s) => s.developerMode);
 
   return (
@@ -46,6 +59,7 @@ export default function PreferencesScreen() {
 
         <Text style={[styles.sectionHeader, styles.sectionGap]}>ACCOUNT</Text>
         {user && (
+          // AUDIT: live – user.name and user.email from authStore (Supabase session)
           <View style={styles.row}>
             <Text style={styles.rowIcon}>👤</Text>
             <Text style={styles.rowLabel} numberOfLines={1}>{user.name} ({user.email})</Text>
@@ -84,6 +98,7 @@ export default function PreferencesScreen() {
                   conversation becomes build-pipeline input.
                 </Text>
               </View>
+              {/* AUDIT: live – developerMode from settingsStore */}
               <Text style={styles.rowValue}>{developerMode ? 'ON' : 'OFF'}</Text>
             </View>
             {/* Always reachable: the dashboard is a read-only view of recorded
@@ -105,7 +120,8 @@ export default function PreferencesScreen() {
         <View style={styles.row}>
           <Text style={styles.rowIcon}>📱</Text>
           <Text style={styles.rowLabel}>Version</Text>
-          <Text style={styles.rowValue}>1.0.0</Text>
+          {/* AUDIT: stale – hardcoded "1.0.0"; not read from app.json or build artefact */}
+          <Text style={styles.rowValue}>Stat unavailable</Text>
         </View>
       </ScrollView>
     </SafeAreaView>

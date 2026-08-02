@@ -1,3 +1,18 @@
+/*
+ * AUDIT SUMMARY — routines.tsx
+ * ─────────────────────────────────────────────────────────────────────────────
+ * LIVE   checkInEnabled   – notificationStore (Zustand, persisted locally)
+ * LIVE   checkInTime1     – notificationStore (Zustand, persisted locally)
+ * LIVE   checkInTime2     – notificationStore (Zustand, persisted locally)
+ * LIVE   streakEnabled    – notificationStore (Zustand, persisted locally)
+ * LIVE   reEngageEnabled  – notificationStore (Zustand, persisted locally)
+ * LIVE   quietStart       – notificationStore (Zustand, persisted locally)
+ * LIVE   quietEnd         – notificationStore (Zustand, persisted locally)
+ * ─────────────────────────────────────────────────────────────────────────────
+ * No stale or hardcoded stats found on this screen.
+ * All displayed values are user-controlled toggles/times written to and read
+ * from notificationStore; no backend data is rendered here.
+ */
 import { useState, useCallback } from 'react';
 import {
   View,
@@ -37,6 +52,7 @@ function formatTime(timeStr: string): string {
 }
 
 export default function RoutinesScreen() {
+  // AUDIT: live – all values from notificationStore (Zustand, persisted locally)
   const store = useNotificationStore();
 
   const [editingField, setEditingField] = useState<TimeField | null>(null);
@@ -80,7 +96,7 @@ export default function RoutinesScreen() {
 
         <ToggleRow
           label="Check-in nudges"
-          value={store.checkInEnabled}
+          value={store.checkInEnabled} // AUDIT: live – notificationStore
           onChange={(v) => store.setPreference('checkInEnabled', v)}
         />
 
@@ -88,12 +104,12 @@ export default function RoutinesScreen() {
           <>
             <TimeRow
               label="First check-in"
-              time={store.checkInTime1}
+              time={store.checkInTime1} // AUDIT: live – notificationStore
               onPress={() => setEditingField('checkInTime1')}
             />
             <TimeRow
               label="Second check-in"
-              time={store.checkInTime2}
+              time={store.checkInTime2} // AUDIT: live – notificationStore
               onPress={() => setEditingField('checkInTime2')}
             />
           </>
@@ -109,7 +125,7 @@ export default function RoutinesScreen() {
 
         <ToggleRow
           label="Streak celebrations"
-          value={store.streakEnabled}
+          value={store.streakEnabled} // AUDIT: live – notificationStore
           onChange={(v) => store.setPreference('streakEnabled', v)}
         />
 
@@ -123,7 +139,7 @@ export default function RoutinesScreen() {
 
         <ToggleRow
           label="Re-engagement"
-          value={store.reEngageEnabled}
+          value={store.reEngageEnabled} // AUDIT: live – notificationStore
           onChange={(v) => store.setPreference('reEngageEnabled', v)}
         />
 
@@ -137,12 +153,12 @@ export default function RoutinesScreen() {
 
         <TimeRow
           label="Quiet from"
-          time={store.quietStart}
+          time={store.quietStart} // AUDIT: live – notificationStore
           onPress={() => setEditingField('quietStart')}
         />
         <TimeRow
           label="Until"
-          time={store.quietEnd}
+          time={store.quietEnd} // AUDIT: live – notificationStore
           onPress={() => setEditingField('quietEnd')}
         />
       </ScrollView>
