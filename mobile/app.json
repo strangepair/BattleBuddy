@@ -20,7 +20,7 @@
         "NSCameraUsageDescription": "BattleBuddy does not use the camera.",
         "UIBackgroundModes": [
           "audio",
-          "audio"
+          "voip"
         ],
         "ITSAppUsesNonExemptEncryption": false
       }

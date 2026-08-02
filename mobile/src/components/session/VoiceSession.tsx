@@ -1,3 +1,34 @@
+// VOICE PIPELINE INVESTIGATION (2026-08-02)
+// ============================================
+// Symptom: voice mode stopped capturing speech, transcripts did not appear in
+// the chat stream, and LiveKit audio sessions initialized with errors.
+// Text chat was unaffected.
+//
+// Root cause found: mobile/app.json had "audio" listed TWICE in
+// UIBackgroundModes (introduced in commit 03d4131, "ethereal design pass").
+// The second entry should be "voip". Without the "voip" mode, iOS refuses to
+// grant the WebRTC audio route that LiveKit/WebRTC require for full-duplex
+// voice. The OS suspends the mic capture pipeline when the app is in
+// foreground but the audio category is not voip-capable, causing Deepgram STT
+// to receive no audio frames and produce empty transcripts.
+//
+// Fix: restored UIBackgroundModes to ["audio", "voip"] in mobile/app.json.
+// This requires a native rebuild (EAS Build) to take effect; OTA update alone
+// is not sufficient because Info.plist is baked into the binary.
+//
+// Pipeline trace (failure point starred):
+//   tap speaker → AudioSession.startAudioSession() → setAppleAudioConfiguration
+//   (playAndRecord) → fetch /livekit/token → LiveKitRoom connects → agent joins
+//   → MuteControl calls setMicrophoneEnabled(true) → *** iOS denies WebRTC mic
+//   track (no voip background mode) *** → Deepgram STT receives silence →
+//   empty transcript → on_user_turn_completed returns early → no LLM turn →
+//   no TTS → no voice response.
+//
+// Secondary (already fixed): the agent's on_user_turn_completed now returns
+// early on empty transcripts (commit daef0f8) so it no longer forwards blank
+// messages to Claude. The TranscriptCapture component correctly attributes
+// undefined-participant segments to the agent (commit 32d5866).
+
 import { useEffect, useRef, useState } from 'react';
 import {
   LiveKitRoom,
