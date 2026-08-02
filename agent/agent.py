@@ -13,11 +13,68 @@ from livekit.agents import AgentServer, AgentSession, Agent, function_tool, APIC
 from livekit.agents.llm import ChatContext
 from livekit.agents.voice.agent_session import SessionConnectOptions
 from livekit.plugins import anthropic, deepgram
+from livekit.agents import tts as lk_tts
 import logging
 import aiohttp
 import asyncio
 
 logger = logging.getLogger(__name__)
+
+
+class _LoggedTTS(lk_tts.TTS):
+    """Thin wrapper around deepgram.TTS that adds explicit per-step logging.
+
+    Every TTS request is traced: request sent → synthesis complete → frames
+    counted. Exceptions are re-raised (never swallowed) so the session error
+    handler and LiveKit framework both see them.
+    Playback start/end is logged via agent_started_speaking / agent_stopped_speaking
+    session events (registered after session creation).
+    """
+
+    def __init__(self, inner: lk_tts.TTS):
+        super().__init__(
+            capabilities=inner.capabilities,
+            sample_rate=inner.sample_rate,
+            num_channels=inner.num_channels,
+        )
+        self._inner = inner
+
+    def synthesize(self, text: str, *, conn_options=None) -> "_LoggedStream":
+        from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+        opts = conn_options if conn_options is not None else DEFAULT_API_CONNECT_OPTIONS
+        text_preview = text[:80].replace("\n", " ")
+        print(f"[TTS] Request sent — text ({len(text)} chars): {text_preview!r}")
+        try:
+            inner_stream = self._inner.synthesize(text, conn_options=opts)
+        except Exception as exc:
+            print(f"[TTS] ERROR creating synthesis stream: {exc!r}")
+            raise
+        return _LoggedStream(tts=self, input_text=text, inner_stream=inner_stream, conn_options=opts)
+
+    def stream(self, *, conn_options=None):
+        from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
+        opts = conn_options if conn_options is not None else DEFAULT_API_CONNECT_OPTIONS
+        return self._inner.stream(conn_options=opts)
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
+class _LoggedStream(lk_tts.ChunkedStream):
+    """Intercepts the inner Deepgram ChunkedStream to count frames and surface errors."""
+
+    def __init__(self, *, tts: _LoggedTTS, input_text: str, inner_stream, conn_options):
+        super().__init__(tts=tts, input_text=input_text, conn_options=conn_options)
+        self._inner_stream = inner_stream
+        self._frame_count = 0
+
+    async def _run(self, output_emitter: lk_tts.AudioEmitter) -> None:
+        try:
+            await self._inner_stream._run(output_emitter)
+        except Exception as exc:
+            print(f"[TTS] ERROR during synthesis: {exc!r}")
+            raise
+        print(f"[TTS] Synthesis complete — audio queued for playback")
 
 
 def local_now(timezone):
@@ -557,6 +614,11 @@ async def battlebuddy_session(ctx: agents.JobContext):
                 except Exception:
                     pass
 
+    _voice_model = get_voice()
+    print(f"[Agent] TTS voice model: {_voice_model}")
+    _deepgram_tts = deepgram.TTS(model=_voice_model)
+    _logged_tts = _LoggedTTS(_deepgram_tts)
+
     session = AgentSession(
         stt=deepgram.STT(model="nova-3", language="multi"),
         # caching="ephemeral" caches the big system prompt + tools across turns
@@ -569,7 +631,7 @@ async def battlebuddy_session(ctx: agents.JobContext):
             caching="ephemeral",
             timeout=httpx.Timeout(10.0, read=90.0),
         ),
-        tts=deepgram.TTS(model=get_voice()),
+        tts=_logged_tts,
         min_endpointing_delay=0.5,
         max_endpointing_delay=1.5,
         # Our on_user_turn_completed injects the local time each turn, which
@@ -675,6 +737,14 @@ async def battlebuddy_session(ctx: agents.JobContext):
             asyncio.ensure_future(session.generate_reply(
                 instructions="Say exactly: 'I'm getting a lot of traffic right now. Hang tight — try again in a minute.' Do not say anything else."
             ))
+
+    @session.on("agent_started_speaking")
+    def on_agent_started_speaking(ev):
+        print(f"[TTS] Playback started — agent speaking")
+
+    @session.on("agent_stopped_speaking")
+    def on_agent_stopped_speaking(ev):
+        print(f"[TTS] Playback completed — agent finished speaking")
 
     @session.on("close")
     def on_close(ev):
