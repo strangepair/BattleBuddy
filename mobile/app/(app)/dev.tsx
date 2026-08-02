@@ -200,6 +200,11 @@ export default function DevScreen() {
                       {r.source === 'directive' ? 'from directive' : 'from conversation'}
                     </Text>
                   </View>
+                  {r.change_summary ? (
+                    <Text style={styles.changeSummary} numberOfLines={3} ellipsizeMode="tail">
+                      {r.change_summary}
+                    </Text>
+                  ) : null}
                   {r.error ? <Text style={styles.errorText}>{r.error}</Text> : null}
                   {r.pr_url ? (
                     <Text style={styles.prLink}>
@@ -289,6 +294,7 @@ const styles = StyleSheet.create({
   },
   targetText: { fontSize: 11, fontWeight: '600', color: Colors.textSecondary },
   sourceText: { fontSize: 12, color: Colors.textTertiary },
+  changeSummary: { fontSize: 12, color: Colors.textTertiary, lineHeight: 17 },
   errorText: { fontSize: 12, color: Colors.error, lineHeight: 16 },
   prLink: { fontSize: 13, fontWeight: '600', color: Colors.coral },
   archiveAction: {
