@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Colors, Radii } from '../../theme';
 import type { SmokingLog } from '../../hooks/useSmokingLogs';
 
@@ -20,6 +20,8 @@ interface ActualsLayerProps {
   timelineLeft: number;
   /** Index used to horizontally stagger ghost layers (0–2). */
   ghostIndex?: number;
+  /** Called when a non-ghost block is tapped. */
+  onPressLog?: (log: SmokingLog) => void;
 }
 
 function logDurationPx(log: SmokingLog): number {
@@ -43,7 +45,7 @@ function logDurationPx(log: SmokingLog): number {
  * Ghost layers (previous days) are staggered horizontally so they remain
  * visible behind today's blocks.
  */
-export default function ActualsLayer({ logs, ghost = false, timelineLeft, ghostIndex = 0 }: ActualsLayerProps) {
+export default function ActualsLayer({ logs, ghost = false, timelineLeft, ghostIndex = 0, onPressLog }: ActualsLayerProps) {
   if (logs.length === 0) return null;
 
   const staggerFrac = ghost ? OVERLAP_OFFSET_FRACTION * (ghostIndex + 1) : 0;
@@ -62,34 +64,39 @@ export default function ActualsLayer({ logs, ghost = false, timelineLeft, ghostI
         const suffix = log.activityLabel || log.location || null;
         const label = suffix ? `${time} · ${suffix}` : time;
 
-        return (
-          <View
-            key={log.id}
-            style={[
-              styles.block,
-              ghost ? styles.blockGhost : styles.blockActual,
-              isPoint && styles.blockPoint,
-              {
-                top,
-                left: timelineLeft,
-                right: 0,
-                height,
-              },
-            ]}
-          >
-            <View
-              style={[
-                styles.inner,
-                { left: leftPct, width: widthPct },
-              ]}
-            >
-              {!ghost && (
-                <Text style={styles.label} numberOfLines={1} ellipsizeMode="tail">
-                  {label}
-                </Text>
-              )}
-            </View>
+        const blockStyle = [
+          styles.block,
+          ghost ? styles.blockGhost : styles.blockActual,
+          isPoint && styles.blockPoint,
+          {
+            top,
+            left: timelineLeft,
+            right: 0,
+            height,
+          },
+        ];
+
+        const inner = (
+          <View style={[styles.inner, { left: leftPct, width: widthPct }]}>
+            {!ghost && (
+              <Text style={styles.label} numberOfLines={1} ellipsizeMode="tail">
+                {label}
+              </Text>
+            )}
           </View>
+        );
+
+        return ghost || !onPressLog ? (
+          <View key={log.id} style={blockStyle}>{inner}</View>
+        ) : (
+          <TouchableOpacity
+            key={log.id}
+            style={blockStyle}
+            onPress={() => onPressLog(log)}
+            activeOpacity={0.7}
+          >
+            {inner}
+          </TouchableOpacity>
         );
       })}
     </>

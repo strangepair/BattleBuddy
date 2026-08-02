@@ -2,9 +2,10 @@ import { ScrollView, StyleSheet } from 'react-native';
 import { Colors, Spacing } from '../theme';
 import HeroMetric from '../components/dashboard/HeroMetric';
 import DayCalendarView from '../components/dashboard/DayCalendarView';
+import CalendarDetailModal from '../components/dashboard/CalendarDetailModal';
 import { useSmokingLogs } from '../hooks/useSmokingLogs';
 import { useRoutineProjection } from '../hooks/useRoutineProjection';
-import { useMemo } from 'react';
+import { useMemo, useState, useCallback } from 'react';
 import type { DayLog } from '../components/dashboard/DayCalendarView';
 import { useDashboardRealtime } from '../hooks/useDashboardRealtime';
 import type { SmokingLog } from '../hooks/useSmokingLogs';
@@ -23,6 +24,9 @@ export default function MissionDashboardScreen() {
   const { todayLogs, historyLogs } = useSmokingLogs();
   const projected = useRoutineProjection(historyLogs);
   const { realtimeEvents } = useDashboardRealtime(todayLogs);
+  const [selectedLog, setSelectedLog] = useState<SmokingLog | null>(null);
+  const handlePressLog = useCallback((log: SmokingLog) => setSelectedLog(log), []);
+  const handleDismiss = useCallback(() => setSelectedLog(null), []);
 
   const mergedTodayLogs: SmokingLog[] = useMemo(() => {
     const fetchedIds = new Set(todayLogs.map((l) => l.id));
@@ -49,11 +53,38 @@ export default function MissionDashboardScreen() {
       .slice(0, 3);
   }, [historyLogs]);
 
+  const modalTitle = selectedLog
+    ? selectedLog.activityLabel || new Date(selectedLog.occurred_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : '';
+  const modalDescription = selectedLog
+    ? [
+        selectedLog.location ? `Location: ${selectedLog.location}` : null,
+        selectedLog.occurred_at
+          ? `Time: ${new Date(selectedLog.occurred_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join('\n') || 'No additional details.'
+    : '';
+
   return (
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.container}>
-      <HeroMetric realtimeLogs={mergedTodayLogs} />
-      <DayCalendarView projected={projected} actuals={mergedTodayLogs} previousDays={previousDays} />
-    </ScrollView>
+    <>
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.container}>
+        <HeroMetric realtimeLogs={mergedTodayLogs} />
+        <DayCalendarView
+          projected={projected}
+          actuals={mergedTodayLogs}
+          previousDays={previousDays}
+          onPressLog={handlePressLog}
+        />
+      </ScrollView>
+      <CalendarDetailModal
+        visible={selectedLog !== null}
+        onDismiss={handleDismiss}
+        title={modalTitle}
+        description={modalDescription}
+      />
+    </>
   );
 }
 
