@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dedupeKey, looksForbidden, patchForEvent, isPipelineEnabled, collapseNearDuplicates, generateProductRequests, insertRequests, insertSubmission, triageSubmission, handleRepetition, processSubmission } from './devPipeline.js';
+import { dedupeKey, looksForbidden, patchForEvent, isPipelineEnabled, collapseNearDuplicates, generateProductRequests, insertRequests, insertSubmission, triageSubmission, handleRepetition, processSubmission, classifyFailure, failureSignature, retryDelayMs, applyFailure, runDevBuildWorker } from './devPipeline.js';
 
 test('dedupeKey is stable and target-scoped', () => {
   const a = dedupeKey('ui', 'Make the greeting warmer!');
@@ -510,4 +510,264 @@ test('repetition marker: does not create duplicate if investigation already open
 
   const rcItems = sb._store.work_items.filter((w) => w.title === 'Root-cause investigation: voice');
   assert.equal(rcItems.length, 1, 'must not create a second investigation');
+});
+
+// ─── Self-heal: classified retry + circuit breaker ────────────────────────────
+
+// A fuller Supabase double: filters, counts, updates and the partial-unique
+// behaviour of pipeline_alerts (one open row per signature).
+function makeSelfHealSupabase(seed = {}) {
+  const store = {
+    dev_build_requests: seed.dev_build_requests ?? [],
+    pipeline_alerts: seed.pipeline_alerts ?? [],
+  };
+
+  const table = (name) => {
+    const preds = [];
+    let mode = 'select';
+    let patch = null;
+    let insertRows = null;
+    let single = false;
+    let head = false;
+    let limitN = null;
+
+    const self = {
+      select(_cols, opt) { mode = 'select'; if (opt && opt.head) head = true; return self; },
+      insert(rows) { mode = 'insert'; insertRows = Array.isArray(rows) ? rows : [rows]; return self; },
+      update(p) { mode = 'update'; patch = p; return self; },
+      eq(c, v) { preds.push((r) => r[c] === v); return self; },
+      neq(c, v) { preds.push((r) => r[c] !== v); return self; },
+      in(c, vals) { preds.push((r) => vals.includes(r[c])); return self; },
+      gte(c, v) { preds.push((r) => String(r[c] ?? '') >= String(v)); return self; },
+      lte(c, v) { preds.push((r) => String(r[c] ?? '') <= String(v)); return self; },
+      is(c, v) { preds.push((r) => (v === null ? r[c] === null || r[c] === undefined : r[c] === v)); return self; },
+      not(c, op, v) {
+        if (op === 'is' && v === null) preds.push((r) => r[c] !== null && r[c] !== undefined);
+        else if (op === 'in') {
+          const vals = String(v).replace(/[()"]/g, '').split(',').map((s) => s.trim());
+          preds.push((r) => !vals.includes(r[c]));
+        }
+        return self;
+      },
+      order() { return self; },
+      limit(n) { limitN = n; return self; },
+      single() { single = true; return self; },
+      then(resolve) {
+        const matching = () => {
+          let out = (store[name] || []).filter((r) => preds.every((f) => f(r)));
+          if (limitN != null) out = out.slice(0, limitN);
+          return out;
+        };
+
+        if (mode === 'insert') {
+          for (const row of insertRows) {
+            // Mirrors the partial unique index: one OPEN alert per signature.
+            if (name === 'pipeline_alerts'
+              && store.pipeline_alerts.some((a) => a.signature === row.signature && !a.resolved_at)) {
+              return Promise.resolve({ data: null, error: { message: 'duplicate key value violates unique constraint' } }).then(resolve);
+            }
+            store[name].push({ id: `id-${store[name].length + 1}`, resolved_at: null, ...row });
+          }
+          return Promise.resolve({ data: insertRows, error: null }).then(resolve);
+        }
+
+        if (mode === 'update') {
+          const targets = matching();
+          for (const r of targets) Object.assign(r, patch);
+          return Promise.resolve({ data: targets, error: null }).then(resolve);
+        }
+
+        const out = matching();
+        if (head) return Promise.resolve({ count: out.length, data: null, error: null }).then(resolve);
+        if (single) return Promise.resolve({ data: out[0] || null, error: out[0] ? null : { message: 'not found' } }).then(resolve);
+        return Promise.resolve({ data: out, error: null }).then(resolve);
+      },
+    };
+    return self;
+  };
+
+  return { from: table, _store: store };
+}
+
+test('classifyFailure: terminal wins even when the text also looks transient', () => {
+  assert.equal(classifyFailure('scope fence violation: ETIMEDOUT on protected path'), 'terminal');
+  assert.equal(classifyFailure('Destructive migration detected — refusing to auto-apply.'), 'terminal');
+});
+
+test('classifyFailure: transient infra flakes and stale branches are separated', () => {
+  assert.equal(classifyFailure('connect ETIMEDOUT downloading onnxruntime'), 'transient');
+  assert.equal(classifyFailure('psql: error: connection ... Network is unreachable'), 'transient');
+  assert.equal(classifyFailure('github dispatch 503: service unavailable'), 'transient');
+  assert.equal(classifyFailure('merge conflict in server/migrations'), 'stale_branch');
+  assert.equal(classifyFailure('PR is not mergeable (dirty)'), 'stale_branch');
+});
+
+test('classifyFailure: anything unrecognised stays terminal, never blanket-retried', () => {
+  assert.equal(classifyFailure('something nobody has seen before'), 'terminal');
+  assert.equal(classifyFailure(''), 'terminal');
+  assert.equal(classifyFailure(undefined), 'terminal');
+});
+
+test('failureSignature collapses volatile ids so repeats share one key', () => {
+  const a = failureSignature('deploy_failed', 'run 30729006919 failed for 49db9246-b357-4b24-a8c6-b9516158c968 at /home/runner/x.sql');
+  const b = failureSignature('deploy_failed', 'run 30753987877 failed for a43d0e91-f08c-42ae-ace4-7049a238e057 at /home/runner/y.sql');
+  assert.equal(a.signature, b.signature, 'same failure, different ids → same signature');
+
+  const other = failureSignature('checks_failed', 'totally different problem');
+  assert.notEqual(a.signature, other.signature);
+});
+
+test('retryDelayMs backs off exponentially', () => {
+  assert.ok(retryDelayMs(1) > retryDelayMs(0));
+  assert.equal(retryDelayMs(1), retryDelayMs(0) * 2);
+});
+
+test('applyFailure schedules a retry for a transient failure', async () => {
+  const sb = makeSelfHealSupabase({
+    dev_build_requests: [{ id: 'r1', status: 'building', attempts: 0, history: [] }],
+  });
+
+  await applyFailure(sb, 'r1', { status: 'failed', error: 'connect ETIMEDOUT' }, 'deploy failed', 'deploy_failed');
+
+  const row = sb._store.dev_build_requests[0];
+  assert.equal(row.failure_class, 'transient');
+  assert.ok(row.failure_signature, 'signature recorded');
+  assert.ok(row.next_retry_at, 'retry scheduled');
+});
+
+test('applyFailure leaves a terminal failure with no retry scheduled', async () => {
+  const sb = makeSelfHealSupabase({
+    dev_build_requests: [{ id: 'r1', status: 'building', attempts: 0, history: [] }],
+  });
+
+  await applyFailure(sb, 'r1', { status: 'needs_attention', error: 'Destructive migration detected' }, 'blocked', 'needs_attention');
+
+  const row = sb._store.dev_build_requests[0];
+  assert.equal(row.failure_class, 'terminal');
+  assert.equal(row.next_retry_at, null, 'scope-fence class must never self-retry');
+});
+
+test('applyFailure stops retrying once the per-class cap is reached', async () => {
+  const sb = makeSelfHealSupabase({
+    dev_build_requests: [{ id: 'r1', status: 'building', attempts: 2, history: [] }],
+  });
+
+  await applyFailure(sb, 'r1', { status: 'failed', error: 'connect ETIMEDOUT' }, 'deploy failed', 'deploy_failed');
+
+  assert.equal(sb._store.dev_build_requests[0].next_retry_at, null, 'transient cap is 2 attempts');
+});
+
+test('circuit breaker: N same-signature failures raise ONE alert and halt retries', async () => {
+  const now = new Date().toISOString();
+  const err = 'connect ETIMEDOUT';
+  const { signature } = failureSignature('deploy_failed', err);
+
+  // Two rows have already failed the same way; this is the third.
+  const sb = makeSelfHealSupabase({
+    dev_build_requests: [
+      { id: 'r1', status: 'failed', attempts: 0, history: [], failure_signature: signature, failure_class: 'transient', next_retry_at: now, updated_at: now },
+      { id: 'r2', status: 'failed', attempts: 0, history: [], failure_signature: signature, failure_class: 'transient', next_retry_at: now, updated_at: now },
+      { id: 'r3', status: 'building', attempts: 0, history: [], updated_at: now },
+    ],
+  });
+
+  await applyFailure(sb, 'r3', { status: 'failed', error: err }, 'deploy failed', 'deploy_failed');
+
+  const alerts = sb._store.pipeline_alerts.filter((a) => !a.resolved_at);
+  assert.equal(alerts.length, 1, 'one alert, not one per row');
+  assert.equal(alerts[0].kind, 'repeated_failure');
+  assert.equal(alerts[0].signature, signature);
+
+  for (const row of sb._store.dev_build_requests) {
+    assert.equal(row.next_retry_at, null, `${row.id} must stop retrying once the breaker is open`);
+  }
+  assert.ok(
+    sb._store.dev_build_requests.filter((r) => r.status === 'needs_attention').length >= 2,
+    'failed rows are escalated to a human',
+  );
+});
+
+test('circuit breaker does not double-alert on a later failure with the same signature', async () => {
+  const now = new Date().toISOString();
+  const err = 'connect ETIMEDOUT';
+  const { signature } = failureSignature('deploy_failed', err);
+
+  const sb = makeSelfHealSupabase({
+    dev_build_requests: [
+      { id: 'r1', status: 'failed', attempts: 0, history: [], failure_signature: signature, updated_at: now },
+      { id: 'r2', status: 'failed', attempts: 0, history: [], failure_signature: signature, updated_at: now },
+      { id: 'r3', status: 'building', attempts: 0, history: [], updated_at: now },
+    ],
+    pipeline_alerts: [{ id: 'a1', kind: 'repeated_failure', signature, resolved_at: null }],
+  });
+
+  await applyFailure(sb, 'r3', { status: 'failed', error: err }, 'deploy failed', 'deploy_failed');
+
+  assert.equal(sb._store.pipeline_alerts.filter((a) => !a.resolved_at).length, 1);
+  assert.equal(sb._store.dev_build_requests.find((r) => r.id === 'r3').next_retry_at, null,
+    'no retry scheduled while the breaker is open');
+});
+
+test('worker retry pass re-dispatches a due transient failure and clears its alert', async () => {
+  const past = new Date(Date.now() - 60_000).toISOString();
+  const { signature } = failureSignature('dispatch', 'connect ETIMEDOUT');
+  const sb = makeSelfHealSupabase({
+    dev_build_requests: [{
+      id: 'r1', status: 'failed', attempts: 0, history: [], target: 'ui', title: 't', spec: {},
+      failure_class: 'transient', failure_signature: signature, next_retry_at: past,
+      created_at: new Date().toISOString(), updated_at: past,
+    }],
+    pipeline_alerts: [{ id: 'a1', kind: 'repeated_failure', signature, resolved_at: null }],
+  });
+
+  const prevEnabled = process.env.DEV_PIPELINE_ENABLED;
+  const prevToken = process.env.GITHUB_TOKEN;
+  const prevFetch = globalThis.fetch;
+  process.env.DEV_PIPELINE_ENABLED = 'true';
+  process.env.GITHUB_TOKEN = 'test-token';
+  globalThis.fetch = async () => ({ ok: true, text: async () => '' });
+
+  try {
+    await runDevBuildWorker({ supabase: sb });
+  } finally {
+    globalThis.fetch = prevFetch;
+    if (prevEnabled === undefined) delete process.env.DEV_PIPELINE_ENABLED; else process.env.DEV_PIPELINE_ENABLED = prevEnabled;
+    if (prevToken === undefined) delete process.env.GITHUB_TOKEN; else process.env.GITHUB_TOKEN = prevToken;
+  }
+
+  const row = sb._store.dev_build_requests[0];
+  assert.equal(row.status, 'building', 'due transient failure must be re-dispatched');
+  assert.equal(row.attempts, 1, 'attempt count incremented');
+  assert.equal(row.next_retry_at, null);
+  assert.ok(sb._store.pipeline_alerts[0].resolved_at, 'a success closes the breaker');
+});
+
+test('worker retry pass ignores terminal failures entirely', async () => {
+  const past = new Date(Date.now() - 60_000).toISOString();
+  const sb = makeSelfHealSupabase({
+    dev_build_requests: [{
+      id: 'r1', status: 'failed', attempts: 0, history: [], target: 'ui', title: 't', spec: {},
+      failure_class: 'terminal', failure_signature: 'x', next_retry_at: past,
+      created_at: new Date().toISOString(), updated_at: past,
+    }],
+  });
+
+  const prevEnabled = process.env.DEV_PIPELINE_ENABLED;
+  const prevToken = process.env.GITHUB_TOKEN;
+  const prevFetch = globalThis.fetch;
+  process.env.DEV_PIPELINE_ENABLED = 'true';
+  process.env.GITHUB_TOKEN = 'test-token';
+  let dispatched = 0;
+  globalThis.fetch = async () => { dispatched += 1; return { ok: true, text: async () => '' }; };
+
+  try {
+    await runDevBuildWorker({ supabase: sb });
+  } finally {
+    globalThis.fetch = prevFetch;
+    if (prevEnabled === undefined) delete process.env.DEV_PIPELINE_ENABLED; else process.env.DEV_PIPELINE_ENABLED = prevEnabled;
+    if (prevToken === undefined) delete process.env.GITHUB_TOKEN; else process.env.GITHUB_TOKEN = prevToken;
+  }
+
+  assert.equal(dispatched, 0, 'a scope-fence/destructive failure must never be auto-retried');
+  assert.equal(sb._store.dev_build_requests[0].status, 'failed');
 });
