@@ -22,7 +22,15 @@ create index if not exists idx_bb_events_user_type on bb_events(user_id, event_t
 -- the policy below is defense-in-depth for any future direct client access.
 alter table bb_events enable row level security;
 
-create policy "bb_events: own rows only"
-  on bb_events for all
-  using (auth.uid()::text = user_id)
-  with check (auth.uid()::text = user_id);
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where tablename = 'bb_events' and policyname = 'bb_events: own rows only'
+  ) then
+    create policy "bb_events: own rows only"
+      on bb_events for all
+      using (auth.uid()::text = user_id)
+      with check (auth.uid()::text = user_id);
+  end if;
+end $$;

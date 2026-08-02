@@ -1,7 +1,13 @@
 -- Push notification infrastructure: tokens + per-user notification preferences.
+--
+-- Idempotent (see 001_initial_schema.sql) — deploy.yml re-runs every file.
+-- Note: 20260703_identity_alignment.sql later drops and recreates the
+-- push_tokens policy with text-typed user_id semantics. The guard below is
+-- name-based, so on a re-run it finds that newer policy and skips, leaving
+-- the identity-alignment version in place.
 
 -- ─── Push tokens ────────────────────────────────────────────────────────────────
-create table public.push_tokens (
+create table if not exists public.push_tokens (
   id         uuid primary key default uuid_generate_v4(),
   user_id    uuid not null references public.users(id) on delete cascade,
   token      text not null,
@@ -12,13 +18,21 @@ create table public.push_tokens (
 
 alter table public.push_tokens enable row level security;
 
-create policy "push_tokens: own rows only"
-  on public.push_tokens for all
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'push_tokens' and policyname = 'push_tokens: own rows only'
+  ) then
+    create policy "push_tokens: own rows only"
+      on public.push_tokens for all
+      using (auth.uid() = user_id)
+      with check (auth.uid() = user_id);
+  end if;
+end $$;
 
 -- ─── Notification preferences ───────────────────────────────────────────────────
-create table public.notification_preferences (
+create table if not exists public.notification_preferences (
   user_id           uuid primary key references public.users(id) on delete cascade,
 
   -- Nudge type toggles
@@ -42,10 +56,18 @@ create table public.notification_preferences (
 
 alter table public.notification_preferences enable row level security;
 
-create policy "notification_preferences: own row only"
-  on public.notification_preferences for all
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'notification_preferences' and policyname = 'notification_preferences: own row only'
+  ) then
+    create policy "notification_preferences: own row only"
+      on public.notification_preferences for all
+      using (auth.uid() = user_id)
+      with check (auth.uid() = user_id);
+  end if;
+end $$;
 
 -- Auto-create default preferences when a user row is created
 create or replace function public.handle_new_user_preferences()
@@ -58,6 +80,9 @@ begin
 end;
 $$;
 
+-- No CREATE TRIGGER IF NOT EXISTS in Postgres; drop-then-create is the
+-- idempotent equivalent (the function above is replaced in the same run).
+drop trigger if exists on_user_created_prefs on public.users;
 create trigger on_user_created_prefs
   after insert on public.users
   for each row execute function public.handle_new_user_preferences();

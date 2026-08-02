@@ -1,11 +1,13 @@
 -- Layer 4: Longitudinal quit-journey data model
 -- Stores years of history segmented by journey phase so the agent can
 -- compare the current moment against the user's own past patterns.
+--
+-- Idempotent (see 001_initial_schema.sql) — deploy.yml re-runs every file.
 
 -- ─── Journey phases ─────────────────────────────────────────────────────────────
 -- Each phase is a contiguous period of a particular behavior pattern.
 -- Phases are created/updated by the batch profiler, not by real-time events.
-create table public.journey_phases (
+create table if not exists public.journey_phases (
   id            uuid primary key default uuid_generate_v4(),
   user_id       uuid not null references public.users(id) on delete cascade,
   phase_type    text not null check (phase_type in (
@@ -26,17 +28,26 @@ create table public.journey_phases (
 
 alter table public.journey_phases enable row level security;
 
-create policy "journey_phases: own rows only"
-  on public.journey_phases for all
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'journey_phases' and policyname = 'journey_phases: own rows only'
+  ) then
+    create policy "journey_phases: own rows only"
+      on public.journey_phases for all
+      using (auth.uid() = user_id)
+      with check (auth.uid() = user_id);
+  end if;
+end $$;
 
-create index on public.journey_phases (user_id, started_at desc);
+create index if not exists journey_phases_user_id_started_at_idx
+  on public.journey_phases (user_id, started_at desc);
 
 -- ─── Context profiles ───────────────────────────────────────────────────────────
 -- The compact artifact written by the batch profiler.
 -- Read cheaply by the real-time agent — never recomputed on the hot path.
-create table public.user_context_profiles (
+create table if not exists public.user_context_profiles (
   user_id         uuid primary key references public.users(id) on delete cascade,
   updated_at      timestamptz not null default now(),
 
@@ -58,14 +69,22 @@ create table public.user_context_profiles (
 
 alter table public.user_context_profiles enable row level security;
 
-create policy "user_context_profiles: own row only"
-  on public.user_context_profiles for all
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'user_context_profiles' and policyname = 'user_context_profiles: own row only'
+  ) then
+    create policy "user_context_profiles: own row only"
+      on public.user_context_profiles for all
+      using (auth.uid() = user_id)
+      with check (auth.uid() = user_id);
+  end if;
+end $$;
 
 -- ─── Biometric events (cloud mirror of on-device data) ──────────────────────────
 -- Only anonymized/aggregated data syncs here. Raw values stay on-device.
-create table public.biometric_anomalies (
+create table if not exists public.biometric_anomalies (
   id            uuid primary key default uuid_generate_v4(),
   user_id       uuid not null references public.users(id) on delete cascade,
   signal_type   text not null,    -- heart_rate, steps, sleep, hrv
@@ -78,9 +97,18 @@ create table public.biometric_anomalies (
 
 alter table public.biometric_anomalies enable row level security;
 
-create policy "biometric_anomalies: own rows only"
-  on public.biometric_anomalies for all
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'biometric_anomalies' and policyname = 'biometric_anomalies: own rows only'
+  ) then
+    create policy "biometric_anomalies: own rows only"
+      on public.biometric_anomalies for all
+      using (auth.uid() = user_id)
+      with check (auth.uid() = user_id);
+  end if;
+end $$;
 
-create index on public.biometric_anomalies (user_id, timestamp desc);
+create index if not exists biometric_anomalies_user_id_timestamp_idx
+  on public.biometric_anomalies (user_id, timestamp desc);
