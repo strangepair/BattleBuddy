@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dedupeKey, looksForbidden, patchForEvent, isPipelineEnabled, collapseNearDuplicates, generateProductRequests, insertRequests } from './devPipeline.js';
+import { dedupeKey, looksForbidden, patchForEvent, isPipelineEnabled, collapseNearDuplicates, generateProductRequests, insertRequests, insertSubmission, triageSubmission, handleRepetition, processSubmission } from './devPipeline.js';
 
 test('dedupeKey is stable and target-scoped', () => {
   const a = dedupeKey('ui', 'Make the greeting warmer!');
@@ -203,4 +203,240 @@ test('insertRequests re-admits a task whose previous attempt failed', async () =
   await insertRequests(stubSupabase(existing, insertedRows), { source: 'test', userId: null, sessionId: null }, [task]);
 
   assert.equal(insertedRows.length, 1, 'a failed build must be retryable');
+});
+
+// ─── Triage layer tests ───────────────────────────────────────────────────────
+
+// Builds a minimal Supabase double that records inserted rows per table.
+function makeTriageSupabase() {
+  const store = {
+    submissions: [],
+    work_items: [],
+    work_item_submissions: [],
+    pipeline_events: [],
+  };
+
+  const makeTable = (tableName) => {
+    let _filters = [];
+    let _notFilters = [];
+    let _orderBy = null;
+    let _limitN = null;
+    let _selectCols = '*';
+    let _isSingle = false;
+    let _pendingInsert = null;
+    let _pendingUpdate = null;
+
+    const self = {
+      select(cols) { _selectCols = cols; return self; },
+      insert(rows) {
+        _pendingInsert = Array.isArray(rows) ? rows : [rows];
+        return self;
+      },
+      update(patch) {
+        _pendingUpdate = patch;
+        return self;
+      },
+      eq(col, val) { _filters.push({ col, val }); return self; },
+      not(col, op, val) { _notFilters.push({ col, op, val }); return self; },
+      gte(col, val) { return self; },
+      order() { return self; },
+      limit(n) { _limitN = n; return self; },
+      single() { _isSingle = true; return self; },
+      then(resolve) {
+        // handle insert
+        if (_pendingInsert) {
+          const rows = _pendingInsert.map((r) => ({ id: `uuid-${Date.now()}-${Math.random()}`, ...r }));
+          store[tableName].push(...rows);
+          const result = _isSingle
+            ? { data: rows[0], error: null }
+            : { data: rows, error: null };
+          return Promise.resolve(result).then(resolve);
+        }
+        // handle update
+        if (_pendingUpdate) {
+          return Promise.resolve({ data: null, error: null }).then(resolve);
+        }
+        // handle select
+        let rows = store[tableName].slice();
+        for (const f of _filters) rows = rows.filter((r) => r[f.col] === f.val);
+        for (const f of _notFilters) {
+          if (f.op === 'in') {
+            const vals = f.val.replace(/[()""]/g, '').split(',').map((s) => s.trim());
+            rows = rows.filter((r) => !vals.includes(r[f.col]));
+          }
+        }
+        if (_limitN) rows = rows.slice(0, _limitN);
+        const result = _isSingle
+          ? { data: rows[0] || null, error: rows[0] ? null : { message: 'not found' } }
+          : { data: rows, error: null };
+        return Promise.resolve(result).then(resolve);
+      },
+    };
+    return self;
+  };
+
+  const sb = {
+    from: (tableName) => makeTable(tableName),
+    _store: store,
+  };
+  return sb;
+}
+
+test('durability: submission row exists even when triage call throws', async () => {
+  const sb = makeTriageSupabase();
+  const badAnthropic = {
+    messages: { create: async () => { throw new Error('anthropic down'); } },
+  };
+
+  const result = await processSubmission(sb, badAnthropic, {
+    source: 'dev_mode',
+    rawText: 'The voice assistant crashes on iOS 17',
+    sessionId: null,
+    insertedRequests: [],
+    dispatchFn: null,
+  });
+
+  assert.equal(sb._store.submissions.length, 1, 'submission row must be written');
+  assert.equal(result.isDuplicate, false, 'defaults to new on error');
+});
+
+test('duplicate path: attaches evidence, emits event, creates no build request', async () => {
+  const existingItemId = 'existing-wi-id';
+  const sb = makeTriageSupabase();
+  sb._store.work_items.push({ id: existingItemId, title: 'Voice crashes on iOS', subsystem: 'voice', stage: 'received', created_at: new Date().toISOString() });
+
+  const fakeAnthropic = {
+    messages: {
+      create: async () => ({
+        stop_reason: 'end_turn',
+        content: [{ type: 'text', text: JSON.stringify({ classification: 'duplicate', target_work_item_id: existingItemId }) }],
+      }),
+    },
+  };
+
+  let dispatchCalled = false;
+  const result = await processSubmission(sb, fakeAnthropic, {
+    source: 'dev_mode',
+    rawText: 'App crashes on voice screen',
+    sessionId: null,
+    insertedRequests: [],
+    dispatchFn: async () => { dispatchCalled = true; return 'req-1'; },
+  });
+
+  assert.equal(result.isDuplicate, true, 'should be marked duplicate');
+  assert.equal(result.existingWorkItem.id, existingItemId);
+  assert.equal(dispatchCalled, false, 'no dispatch for duplicate');
+  assert.equal(sb._store.work_item_submissions.length, 1, 'evidence link created');
+  assert.equal(sb._store.work_item_submissions[0].role, 'evidence');
+  assert.equal(sb._store.pipeline_events.length, 1, 'one pipeline_event emitted');
+});
+
+test('new path: creates work_item + calls dispatchFn', async () => {
+  const sb = makeTriageSupabase();
+  const fakeAnthropic = {
+    messages: {
+      create: async () => ({
+        stop_reason: 'end_turn',
+        content: [{ type: 'text', text: JSON.stringify({ classification: 'new', title: 'Fix voice crash', interpretation: 'Voice crashes on iOS 17', subsystem: 'voice' }) }],
+      }),
+    },
+  };
+
+  let dispatchedId = null;
+  const result = await processSubmission(sb, fakeAnthropic, {
+    source: 'dev_mode',
+    rawText: 'Voice crashes on iOS 17',
+    sessionId: null,
+    insertedRequests: [{ id: 'req-42' }],
+    dispatchFn: async () => { dispatchedId = 'req-42'; return 'req-42'; },
+  });
+
+  assert.equal(result.isDuplicate, false);
+  assert.ok(result.workItem, 'work_item returned');
+  assert.equal(sb._store.work_items.length, 1, 'one work_item created');
+  assert.equal(sb._store.work_items[0].title, 'Fix voice crash');
+  assert.equal(sb._store.work_item_submissions[0].role, 'origin');
+  assert.equal(dispatchedId, 'req-42', 'dispatchFn was called');
+  const buildEvent = sb._store.pipeline_events.find((e) => e.kind === 'build_started');
+  assert.ok(buildEvent, 'build_started event emitted');
+  assert.equal(buildEvent.detail.requestId, 'req-42');
+});
+
+test('invalid JSON from model defaults to new on second failure (no stall)', async () => {
+  const sb = makeTriageSupabase();
+  let callCount = 0;
+  const fakeAnthropic = {
+    messages: {
+      create: async () => {
+        callCount++;
+        return { stop_reason: 'end_turn', content: [{ type: 'text', text: 'not json at all' }] };
+      },
+    },
+  };
+
+  const result = await triageSubmission(fakeAnthropic, { rawText: 'test', openWorkItems: [] });
+
+  assert.equal(result.classification, 'new', 'must default to new');
+  assert.equal(callCount, 2, 'must retry once');
+});
+
+test('triage timeout defaults to new', async () => {
+  const fakeAnthropic = {
+    messages: {
+      create: async (_body, opts) => {
+        if (opts?.signal) {
+          return new Promise((_res, rej) => {
+            opts.signal.addEventListener('abort', () => rej(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+          });
+        }
+        return new Promise(() => {});
+      },
+    },
+  };
+
+  const originalTimeout = globalThis.setTimeout;
+  let abortFn;
+  globalThis.setTimeout = (fn, _ms) => { abortFn = fn; return 1; };
+  globalThis.clearTimeout = () => {};
+
+  const triagePromise = triageSubmission(fakeAnthropic, { rawText: 'test', openWorkItems: [] });
+  if (abortFn) abortFn();
+  globalThis.setTimeout = originalTimeout;
+
+  const result = await triagePromise;
+  assert.equal(result.classification, 'new', 'timeout must default to new');
+});
+
+test('repetition marker: creates root-cause item when >= 3 items for subsystem in 7 days', async () => {
+  const sb = makeTriageSupabase();
+  const now = new Date().toISOString();
+  sb._store.work_items.push(
+    { id: 'wi-1', subsystem: 'voice', stage: 'received', created_at: now, title: 'a' },
+    { id: 'wi-2', subsystem: 'voice', stage: 'received', created_at: now, title: 'b' },
+    { id: 'wi-3', subsystem: 'voice', stage: 'received', created_at: now, title: 'c' },
+  );
+
+  await handleRepetition(sb, 'voice');
+
+  const rcItem = sb._store.work_items.find((w) => w.title === 'Root-cause investigation: voice');
+  assert.ok(rcItem, 'root-cause work item created');
+  assert.equal(rcItem.subsystem, 'pipeline');
+  const rcEvent = sb._store.pipeline_events.find((e) => e.detail?.reason === 'repetition_marker');
+  assert.ok(rcEvent, 'repetition_marker event emitted');
+});
+
+test('repetition marker: does not create duplicate if investigation already open', async () => {
+  const sb = makeTriageSupabase();
+  const now = new Date().toISOString();
+  sb._store.work_items.push(
+    { id: 'wi-1', subsystem: 'voice', stage: 'received', created_at: now, title: 'a' },
+    { id: 'wi-2', subsystem: 'voice', stage: 'received', created_at: now, title: 'b' },
+    { id: 'wi-3', subsystem: 'voice', stage: 'received', created_at: now, title: 'c' },
+    { id: 'wi-rc', subsystem: 'pipeline', stage: 'received', created_at: now, title: 'Root-cause investigation: voice' },
+  );
+
+  await handleRepetition(sb, 'voice');
+
+  const rcItems = sb._store.work_items.filter((w) => w.title === 'Root-cause investigation: voice');
+  assert.equal(rcItems.length, 1, 'must not create a second investigation');
 });
