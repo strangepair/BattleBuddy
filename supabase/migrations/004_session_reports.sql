@@ -1,7 +1,9 @@
 -- Session reports: structured AI analysis of each session, generated server-side.
 -- Fed into profile builder for personalization.
+--
+-- Idempotent (see 001_initial_schema.sql) — deploy.yml re-runs every file.
 
-create table public.session_reports (
+create table if not exists public.session_reports (
   id                uuid primary key default uuid_generate_v4(),
   craving_event_id  uuid not null references public.craving_events(id) on delete cascade,
   user_id           uuid not null references public.users(id) on delete cascade,
@@ -21,10 +23,20 @@ create table public.session_reports (
 
 alter table public.session_reports enable row level security;
 
-create policy "session_reports: own rows only"
-  on public.session_reports for all
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'session_reports' and policyname = 'session_reports: own rows only'
+  ) then
+    create policy "session_reports: own rows only"
+      on public.session_reports for all
+      using (auth.uid() = user_id)
+      with check (auth.uid() = user_id);
+  end if;
+end $$;
 
-create index on public.session_reports (user_id, created_at desc);
-create unique index on public.session_reports (craving_event_id);
+create index if not exists session_reports_user_id_created_at_idx
+  on public.session_reports (user_id, created_at desc);
+create unique index if not exists session_reports_craving_event_id_idx
+  on public.session_reports (craving_event_id);

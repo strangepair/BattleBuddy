@@ -1,12 +1,19 @@
 -- BattleBuddy initial schema
 -- All tables are per-user with Row-Level Security enforced.
 -- Run in Supabase SQL editor or via supabase db push.
+--
+-- Idempotent: deploy.yml re-runs every migration file on every migration-
+-- touching push, so each statement must be safe against a database that
+-- already contains this schema. Index names below match the names Postgres
+-- auto-generated for the original unnamed CREATE INDEX statements
+-- (<table>_<col>_<col>_idx), so re-runs match the existing index instead of
+-- adding a duplicate.
 
 -- ─── Extensions ────────────────────────────────────────────────────────────────
 create extension if not exists "uuid-ossp";
 
 -- ─── Users (extends Supabase auth.users) ───────────────────────────────────────
-create table public.users (
+create table if not exists public.users (
   id             uuid primary key references auth.users(id) on delete cascade,
   created_at     timestamptz not null default now(),
   display_name   text,
@@ -17,10 +24,18 @@ create table public.users (
 
 alter table public.users enable row level security;
 
-create policy "users: own row only"
-  on public.users for all
-  using (auth.uid() = id)
-  with check (auth.uid() = id);
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'users' and policyname = 'users: own row only'
+  ) then
+    create policy "users: own row only"
+      on public.users for all
+      using (auth.uid() = id)
+      with check (auth.uid() = id);
+  end if;
+end $$;
 
 -- Auto-create a users row when a new auth user signs up
 create or replace function public.handle_new_user()
@@ -33,12 +48,16 @@ begin
 end;
 $$;
 
+-- Postgres has no CREATE TRIGGER IF NOT EXISTS; drop-then-create is the
+-- idempotent equivalent and is safe because the function above is replaced
+-- in the same run.
+drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
 
 -- ─── Craving events ─────────────────────────────────────────────────────────────
-create table public.craving_events (
+create table if not exists public.craving_events (
   id              uuid primary key default uuid_generate_v4(),
   user_id         uuid not null references public.users(id) on delete cascade,
   started_at      timestamptz not null default now(),
@@ -53,15 +72,24 @@ create table public.craving_events (
 
 alter table public.craving_events enable row level security;
 
-create policy "craving_events: own rows only"
-  on public.craving_events for all
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'craving_events' and policyname = 'craving_events: own rows only'
+  ) then
+    create policy "craving_events: own rows only"
+      on public.craving_events for all
+      using (auth.uid() = user_id)
+      with check (auth.uid() = user_id);
+  end if;
+end $$;
 
-create index on public.craving_events (user_id, started_at desc);
+create index if not exists craving_events_user_id_started_at_idx
+  on public.craving_events (user_id, started_at desc);
 
 -- ─── Messages ───────────────────────────────────────────────────────────────────
-create table public.messages (
+create table if not exists public.messages (
   id               uuid primary key default uuid_generate_v4(),
   craving_event_id uuid not null references public.craving_events(id) on delete cascade,
   user_id          uuid not null references public.users(id) on delete cascade,
@@ -74,16 +102,25 @@ create table public.messages (
 
 alter table public.messages enable row level security;
 
-create policy "messages: own rows only"
-  on public.messages for all
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'messages' and policyname = 'messages: own rows only'
+  ) then
+    create policy "messages: own rows only"
+      on public.messages for all
+      using (auth.uid() = user_id)
+      with check (auth.uid() = user_id);
+  end if;
+end $$;
 
-create index on public.messages (craving_event_id, created_at asc);
+create index if not exists messages_craving_event_id_created_at_idx
+  on public.messages (craving_event_id, created_at asc);
 
 -- ─── Media library ──────────────────────────────────────────────────────────────
 -- Seeded by admins; readable by all authenticated users.
-create table public.media_library (
+create table if not exists public.media_library (
   id       uuid primary key default uuid_generate_v4(),
   type     text not null check (type in ('song', 'video', 'image', 'exercise')),
   title    text not null,
@@ -94,12 +131,20 @@ create table public.media_library (
 
 alter table public.media_library enable row level security;
 
-create policy "media_library: authenticated read"
-  on public.media_library for select
-  using (auth.role() = 'authenticated');
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'media_library' and policyname = 'media_library: authenticated read'
+  ) then
+    create policy "media_library: authenticated read"
+      on public.media_library for select
+      using (auth.role() = 'authenticated');
+  end if;
+end $$;
 
 -- ─── User media stats ───────────────────────────────────────────────────────────
-create table public.user_media_stats (
+create table if not exists public.user_media_stats (
   user_id          uuid not null references public.users(id) on delete cascade,
   media_id         uuid not null references public.media_library(id) on delete cascade,
   shown_count      int not null default 0,
@@ -111,13 +156,21 @@ create table public.user_media_stats (
 
 alter table public.user_media_stats enable row level security;
 
-create policy "user_media_stats: own rows only"
-  on public.user_media_stats for all
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'user_media_stats' and policyname = 'user_media_stats: own rows only'
+  ) then
+    create policy "user_media_stats: own rows only"
+      on public.user_media_stats for all
+      using (auth.uid() = user_id)
+      with check (auth.uid() = user_id);
+  end if;
+end $$;
 
 -- ─── User framing stats ─────────────────────────────────────────────────────────
-create table public.user_framing_stats (
+create table if not exists public.user_framing_stats (
   user_id       uuid not null references public.users(id) on delete cascade,
   framing       text not null check (framing in ('encouragement', 'consequences', 'distraction', 'education')),
   shown_count   int not null default 0,
@@ -127,14 +180,22 @@ create table public.user_framing_stats (
 
 alter table public.user_framing_stats enable row level security;
 
-create policy "user_framing_stats: own rows only"
-  on public.user_framing_stats for all
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'user_framing_stats' and policyname = 'user_framing_stats: own rows only'
+  ) then
+    create policy "user_framing_stats: own rows only"
+      on public.user_framing_stats for all
+      using (auth.uid() = user_id)
+      with check (auth.uid() = user_id);
+  end if;
+end $$;
 
 -- ─── Risk windows ───────────────────────────────────────────────────────────────
 -- MVP: seeded from onboarding answers. Phase 3+: learned from events.
-create table public.risk_windows (
+create table if not exists public.risk_windows (
   user_id     uuid not null references public.users(id) on delete cascade,
   day_of_week smallint not null check (day_of_week between 0 and 6),  -- 0=Sun
   hour        smallint not null check (hour between 0 and 23),
@@ -144,7 +205,15 @@ create table public.risk_windows (
 
 alter table public.risk_windows enable row level security;
 
-create policy "risk_windows: own rows only"
-  on public.risk_windows for all
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public' and tablename = 'risk_windows' and policyname = 'risk_windows: own rows only'
+  ) then
+    create policy "risk_windows: own rows only"
+      on public.risk_windows for all
+      using (auth.uid() = user_id)
+      with check (auth.uid() = user_id);
+  end if;
+end $$;
