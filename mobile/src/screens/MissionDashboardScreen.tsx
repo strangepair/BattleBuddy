@@ -1,11 +1,13 @@
-import { ScrollView, StyleSheet } from 'react-native';
+import { View, StyleSheet } from 'react-native';
 import { Colors, Spacing } from '../theme';
 import HeroMetric from '../components/dashboard/HeroMetric';
 import DayCalendarView from '../components/dashboard/DayCalendarView';
 import CalendarDetailModal from '../components/dashboard/CalendarDetailModal';
+import MultiDayCalendarView from '../components/dashboard/MultiDayCalendarView';
 import { useSmokingLogs } from '../hooks/useSmokingLogs';
 import { useRoutineProjection } from '../hooks/useRoutineProjection';
-import { useMemo, useState, useCallback } from 'react';
+import { useActivityLog, type ActivityLogEntry } from '../hooks/useActivityLog';
+import { useMemo, useState, useCallback, useEffect } from 'react';
 import type { DayLog } from '../components/dashboard/DayCalendarView';
 import { useDashboardRealtime } from '../hooks/useDashboardRealtime';
 import type { SmokingLog } from '../hooks/useSmokingLogs';
@@ -17,6 +19,8 @@ import type { HourSlot } from '../hooks/useRoutineProjection';
  *   1. HeroMetric — last cigarette timestamp + live elapsed-time counter.
  *   2. DayCalendarView — hourly timeline with projected routine and today's
  *      actuals, plus the last 3 days' patterns as ghost markers.
+ *   3. MultiDayCalendarView — infinite backward-scrollable history list,
+ *      paginated by date back to account creation. No future dates shown.
  *
  * Real-time layer: subscribes to `dashboard:update` SSE broadcasts and merges
  * new events into the actuals list without a manual refresh.
@@ -56,6 +60,24 @@ export default function MissionDashboardScreen() {
       .slice(0, 3);
   }, [historyLogs]);
 
+  const todayActivityEntries: ActivityLogEntry[] = useMemo(
+    () =>
+      mergedTodayLogs.map((l) => ({
+        type: 'cigarette' as const,
+        id: l.id,
+        occurred_at: l.occurred_at,
+        metadata: l.metadata,
+      })),
+    [mergedTodayLogs],
+  );
+
+  const { days, loadingInitial, loadingMore, hasMore, loadMore } =
+    useActivityLog(todayActivityEntries);
+
+  useEffect(() => {
+    loadMore();
+  }, [loadMore]);
+
   const modalTitle = selectedLog
     ? selectedLog.activityLabel || new Date(selectedLog.occurred_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : selectedSlot
@@ -76,16 +98,27 @@ export default function MissionDashboardScreen() {
 
   return (
     <>
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.container}>
+      <View style={styles.root}>
         <HeroMetric realtimeLogs={mergedTodayLogs} />
-        <DayCalendarView
-          projected={projected}
-          actuals={mergedTodayLogs}
-          previousDays={previousDays}
-          onPressLog={handlePressLog}
-          onPressSlot={handlePressSlot}
-        />
-      </ScrollView>
+        <View style={styles.dayView}>
+          <DayCalendarView
+            projected={projected}
+            actuals={mergedTodayLogs}
+            previousDays={previousDays}
+            onPressLog={handlePressLog}
+            onPressSlot={handlePressSlot}
+          />
+        </View>
+        <View style={styles.historyView}>
+          <MultiDayCalendarView
+            days={days}
+            loadingInitial={loadingInitial}
+            loadingMore={loadingMore}
+            hasMore={hasMore}
+            onEndReached={loadMore}
+          />
+        </View>
+      </View>
       <CalendarDetailModal
         visible={selectedLog !== null || selectedSlot !== null}
         onDismiss={handleDismiss}
@@ -97,13 +130,21 @@ export default function MissionDashboardScreen() {
 }
 
 const styles = StyleSheet.create({
-  scroll: {
+  root: {
     flex: 1,
     backgroundColor: Colors.background,
-  },
-  container: {
-    padding: Spacing.md,
+    paddingHorizontal: Spacing.md,
+    paddingTop: Spacing.md,
     gap: Spacing.md,
-    paddingBottom: Spacing.xl,
+  },
+  dayView: {
+    flex: 2,
+    minHeight: 260,
+  },
+  historyView: {
+    flex: 1,
+    minHeight: 160,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.surfaceBorder,
   },
 });
