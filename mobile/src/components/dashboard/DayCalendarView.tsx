@@ -18,6 +18,8 @@ interface DayCalendarViewProps {
   actuals: SmokingLog[];
   /** Up to 3 previous days' logs rendered as ghost/faded markers. */
   previousDays?: DayLog[];
+  /** Called when the user taps a non-ghost log block. */
+  onPressLog?: (log: SmokingLog) => void;
 }
 
 const MINUTE_HEIGHT = 2;
@@ -46,7 +48,7 @@ function minuteOffset(hour: number, minute: number): number {
  * @param actuals - Today's SmokingLog entries from useSmokingLogs.
  * @param previousDays - Optional array of DayLog for the previous 1–3 days.
  */
-export default function DayCalendarView({ projected, actuals, previousDays = [] }: DayCalendarViewProps) {
+export default function DayCalendarView({ projected, actuals, previousDays = [], onPressLog }: DayCalendarViewProps) {
   const scrollRef = useRef<ScrollView>(null);
   const maxAvg = Math.max(...projected.map((s) => s.avgCount), 0);
 
@@ -99,6 +101,7 @@ export default function DayCalendarView({ projected, actuals, previousDays = [] 
           logs={actuals}
           ghost={false}
           timelineLeft={HOUR_LABEL_WIDTH}
+          onPressLog={onPressLog}
         />
 
         {previousDays.slice(0, 3).map((day, idx) => (
