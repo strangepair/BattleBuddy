@@ -364,29 +364,33 @@ export default function SessionScreen() {
           <Ionicons name={muted ? 'mic-off' : 'mic-outline'} size={19} color={Colors.textPrimary} />
         </TouchableOpacity>
       )}
-      {/* developerModeAvailable is a build-time constant, so this render is
-          runtime-invariant; toggling only swaps the icon glyph and style. */}
-      {FeatureFlags.developerModeAvailable && (
-        <TouchableOpacity
-          style={[styles.dockBtn, developerMode && styles.devOnBtn]}
-          onPress={toggleDevMode}
-          activeOpacity={0.7}
-          accessibilityLabel={
-            developerMode
-              ? 'Developer mode on — switch back to companion mode'
-              : 'Developer mode off — switch to developer mode'
-          }
-          accessibilityState={{ selected: developerMode }}
-        >
-          <Ionicons
-            name={developerMode ? 'construct' : 'construct-outline'}
-            size={19}
-            color={Colors.textPrimary}
-          />
-        </TouchableOpacity>
-      )}
     </>
   );
+
+  const devModeRow = FeatureFlags.developerModeAvailable ? (
+    <View style={styles.devModeRow}>
+      <Text style={styles.devModeLabel}>Dev Mode</Text>
+      {/* developerModeAvailable is a build-time constant, so this render is
+          runtime-invariant; toggling only swaps the icon glyph and style. */}
+      <TouchableOpacity
+        style={[styles.dockBtn, developerMode && styles.devOnBtn]}
+        onPress={toggleDevMode}
+        activeOpacity={0.7}
+        accessibilityLabel={
+          developerMode
+            ? 'Developer mode on — switch back to companion mode'
+            : 'Developer mode off — switch to developer mode'
+        }
+        accessibilityState={{ selected: developerMode }}
+      >
+        <Ionicons
+          name={developerMode ? 'construct' : 'construct-outline'}
+          size={19}
+          color={Colors.textPrimary}
+        />
+      </TouchableOpacity>
+    </View>
+  ) : null;
 
   return (
     <View style={styles.container}>
@@ -465,6 +469,8 @@ export default function SessionScreen() {
               </TouchableOpacity>
             </View>
           )}
+
+          {devModeRow}
 
           {/* The unified dock. Audio never auto-enables; only the speaker
               tap turns it on. Buttons ride the thumb side. */}
@@ -555,6 +561,21 @@ const styles = StyleSheet.create({
   },
   dockBtnDisabled: {
     opacity: 0.4,
+  },
+  devModeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    backgroundColor: Colors.background,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.surfaceBorder,
+  },
+  devModeLabel: {
+    flex: 1,
+    fontSize: 13,
+    color: Colors.textSecondary,
   },
   sendGlyph: {
     color: Colors.textPrimary,
