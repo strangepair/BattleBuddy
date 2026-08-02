@@ -60,16 +60,20 @@ export default function MissionDashboardScreen() {
       .slice(0, 3);
   }, [historyLogs]);
 
-  const todayActivityEntries: ActivityLogEntry[] = useMemo(
-    () =>
-      mergedTodayLogs.map((l) => ({
+  const todayActivityEntries: ActivityLogEntry[] = useMemo(() => {
+    const todayDateStr = new Date().toLocaleDateString('en-CA');
+    return mergedTodayLogs
+      .filter((l) => {
+        const d = new Date(l.occurred_at);
+        return d.toLocaleDateString('en-CA') === todayDateStr;
+      })
+      .map((l) => ({
         type: 'cigarette' as const,
         id: l.id,
         occurred_at: l.occurred_at,
         metadata: l.metadata,
-      })),
-    [mergedTodayLogs],
-  );
+      }));
+  }, [mergedTodayLogs]);
 
   const { days, loadingInitial, loadingMore, hasMore, loadMore } =
     useActivityLog(todayActivityEntries);
