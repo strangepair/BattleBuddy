@@ -337,6 +337,7 @@ export default function SessionScreen() {
         disabled={!input.trim() || isStreaming}
         activeOpacity={0.7}
         accessibilityLabel="Send"
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
       >
         <Text style={styles.sendGlyph}>↑</Text>
       </TouchableOpacity>
@@ -346,6 +347,7 @@ export default function SessionScreen() {
         activeOpacity={0.7}
         accessibilityLabel={audioOn ? 'Turn audio off' : 'Turn audio on'}
         accessibilityState={{ selected: audioOn }}
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
       >
         <Ionicons
           name={audioOn ? 'volume-high' : 'volume-mute-outline'}
@@ -360,6 +362,7 @@ export default function SessionScreen() {
           activeOpacity={0.7}
           accessibilityLabel={muted ? 'Unmute microphone' : 'Mute microphone'}
           accessibilityState={{ selected: muted }}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
         >
           <Ionicons name={muted ? 'mic-off' : 'mic-outline'} size={19} color={Colors.textPrimary} />
         </TouchableOpacity>
@@ -540,9 +543,9 @@ const styles = StyleSheet.create({
     maxHeight: 120,
   },
   dockBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: Colors.surfaceLight,
     alignItems: 'center',
     justifyContent: 'center',
