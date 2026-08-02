@@ -87,7 +87,7 @@ export default function ActualsLayer({ logs, ghost = false, timelineLeft, ghostI
         );
 
         return ghost || !onPressLog ? (
-          <View key={log.id} style={blockStyle}>{inner}</View>
+          <View key={log.id} style={blockStyle} pointerEvents="none">{inner}</View>
         ) : (
           <TouchableOpacity
             key={log.id}

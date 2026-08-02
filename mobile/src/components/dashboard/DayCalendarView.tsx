@@ -97,13 +97,6 @@ export default function DayCalendarView({ projected, actuals, previousDays = [],
           pointerEvents="none"
         />
 
-        <ActualsLayer
-          logs={actuals}
-          ghost={false}
-          timelineLeft={HOUR_LABEL_WIDTH}
-          onPressLog={onPressLog}
-        />
-
         {previousDays.slice(0, 3).map((day, idx) => (
           <ActualsLayer
             key={day.date}
@@ -113,6 +106,13 @@ export default function DayCalendarView({ projected, actuals, previousDays = [],
             ghostIndex={idx}
           />
         ))}
+
+        <ActualsLayer
+          logs={actuals}
+          ghost={false}
+          timelineLeft={HOUR_LABEL_WIDTH}
+          onPressLog={onPressLog}
+        />
       </View>
     </ScrollView>
   );
