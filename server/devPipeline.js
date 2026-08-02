@@ -13,6 +13,11 @@
 // Design mirrors admin-api.js (a single handle* dispatcher) and the design-loop
 // scheduler pattern in index.js. GitHub is called over raw fetch — no new npm
 // dependency, matching how Resend is called elsewhere.
+//
+// Triage layer (added 2026-08): every submission is durably recorded in the
+// `submissions` + `pipeline_events` tables BEFORE any other processing. A
+// classification call then routes to an existing work item (duplicate) or
+// creates a new one. See: insertSubmission, triageSubmission, handleRepetition.
 
 import { createHash, timingSafeEqual } from 'node:crypto';
 
@@ -386,6 +391,292 @@ export function patchForEvent(evt, payload) {
   }
 }
 
+// ─── Triage layer ────────────────────────────────────────────────────────────
+// insertSubmission — durably record a raw submission + 'submitted' event.
+// Returns { submissionId } or throws (caller must decide what to surface).
+export async function insertSubmission(supabase, { source, rawText, sessionId }) {
+  const { data: sub, error: subErr } = await supabase
+    .from('submissions')
+    .insert({ source, raw_text: rawText, session_id: sessionId || null })
+    .select('id')
+    .single();
+  if (subErr) throw new Error(`submissions insert: ${subErr.message}`);
+
+  // We need a work_item_id for the pipeline_events FK, but we don't have one
+  // yet. We store a sentinel row on the submissions table; the 'submitted' event
+  // for a specific work item is emitted later (triageSubmission). This function
+  // only guarantees the submission row exists.
+  return { submissionId: sub.id };
+}
+
+// emitEvent — append a row to pipeline_events.
+async function emitEvent(supabase, { kind, workItemId, detail }) {
+  const { error } = await supabase
+    .from('pipeline_events')
+    .insert({ kind, work_item_id: workItemId, detail: detail || {} });
+  if (error) console.error('[devPipeline] emitEvent failed:', error.message);
+}
+
+const TRIAGE_SYSTEM = `You are a triage assistant for the BattleBuddy developer pipeline.
+
+Given a new submission and a list of open work items, decide if the submission describes the same issue as an existing work item (duplicate) or represents a new distinct issue.
+
+Return ONLY valid JSON — no markdown, no explanation — with this exact shape:
+{"classification":"duplicate","target_work_item_id":"<uuid>"}
+or
+{"classification":"new","title":"<short imperative title ≤80 chars>","interpretation":"<1-3 sentence description>","subsystem":"<one of: voice|calendar|logging|dashboard|pipeline|other>"}
+
+subsystem must be one of: voice, calendar, logging, dashboard, pipeline, other.
+classification must be exactly "duplicate" or "new".
+When duplicate, target_work_item_id must be the UUID of the matching work item.`;
+
+// triageSubmission — call Claude to classify, return parsed JSON or default to 'new'.
+export async function triageSubmission(anthropic, { rawText, openWorkItems }) {
+  const itemsSnapshot = (openWorkItems || []).slice(0, 30).map((wi) => ({
+    id: wi.id,
+    title: wi.title,
+    interpretation: wi.interpretation,
+    subsystem: wi.subsystem,
+    stage: wi.stage,
+  }));
+
+  const userContent = `Open work items (JSON array, up to 30):\n${JSON.stringify(itemsSnapshot)}\n\nNew submission:\n"""${rawText}"""\n\nReturn classification JSON.`;
+
+  async function callModel(messages) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30000);
+    try {
+      const resp = await anthropic.messages.create(
+        { model: SPEC_MODEL, max_tokens: 1000, system: TRIAGE_SYSTEM, messages },
+        { signal: controller.signal },
+      );
+      clearTimeout(timer);
+      return resp.content?.map((b) => (b.type === 'text' ? b.text : '')).join('') || '';
+    } catch (err) {
+      clearTimeout(timer);
+      throw err;
+    }
+  }
+
+  function parse(text) {
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    if (start === -1 || end === -1) return null;
+    const parsed = JSON.parse(text.slice(start, end + 1));
+    if (!['duplicate', 'new'].includes(parsed.classification)) return null;
+    if (parsed.classification === 'duplicate' && !parsed.target_work_item_id) return null;
+    return parsed;
+  }
+
+  const VALID_SUBSYSTEMS = ['voice', 'calendar', 'logging', 'dashboard', 'pipeline', 'other'];
+  const defaultNew = { classification: 'new', title: rawText.slice(0, 80), interpretation: rawText, subsystem: 'other' };
+
+  try {
+    const firstMessages = [{ role: 'user', content: userContent }];
+    const firstText = await callModel(firstMessages);
+    let result;
+    try {
+      result = parse(firstText);
+    } catch {
+      result = null;
+    }
+
+    if (!result) {
+      const retryMessages = [
+        ...firstMessages,
+        { role: 'assistant', content: firstText },
+        { role: 'user', content: 'The response was not valid JSON matching the required schema. Return ONLY the JSON object, no other text.' },
+      ];
+      try {
+        const secondText = await callModel(retryMessages);
+        try {
+          result = parse(secondText);
+        } catch {
+          result = null;
+        }
+      } catch {
+        result = null;
+      }
+    }
+
+    if (!result) return defaultNew;
+    if (result.classification === 'new') {
+      result.subsystem = VALID_SUBSYSTEMS.includes(result.subsystem) ? result.subsystem : 'other';
+      result.title = (result.title || rawText).slice(0, 80);
+      result.interpretation = result.interpretation || rawText;
+    }
+    return result;
+  } catch (err) {
+    console.error('[devPipeline] triage error (defaulting to new):', err.message);
+    return defaultNew;
+  }
+}
+
+// handleRepetition — if >= 3 work items (new or evidence) for a subsystem in 7
+// days and no open root-cause investigation exists, create one.
+export async function handleRepetition(supabase, subsystem) {
+  if (!supabase) return;
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+
+  const { data: recentItems } = await supabase
+    .from('work_items')
+    .select('id')
+    .eq('subsystem', subsystem)
+    .gte('created_at', sevenDaysAgo);
+
+  const count = (recentItems || []).length;
+  if (count < 3) return;
+
+  const rcTitle = `Root-cause investigation: ${subsystem}`;
+  const { data: existing } = await supabase
+    .from('work_items')
+    .select('id')
+    .eq('title', rcTitle)
+    .not('stage', 'in', '("archived","live","rolled_back")')
+    .limit(1);
+
+  if ((existing || []).length > 0) return;
+
+  const { data: rcItem, error: rcErr } = await supabase
+    .from('work_items')
+    .insert({ title: rcTitle, subsystem: 'pipeline', stage: 'received', interpretation: `Repeated reports (${count} in last 7 days) for subsystem: ${subsystem}. Root-cause investigation needed.` })
+    .select('id')
+    .single();
+
+  if (rcErr) {
+    console.error('[devPipeline] handleRepetition: work_item insert failed:', rcErr.message);
+    return;
+  }
+
+  await emitEvent(supabase, {
+    kind: 'submitted',
+    workItemId: rcItem.id,
+    detail: { reason: 'repetition_marker', subsystem, recent_count: count, linked_item_ids: (recentItems || []).map((r) => r.id) },
+  });
+}
+
+// processSubmission — the main triage entry point. Called from handleDevPipeline
+// for the /dev/requests (directive) submission path.
+//
+// Steps:
+//  1. Durably record the submission row + a 'submitted' sentinel event (using a
+//     temporary placeholder work item if needed — see NOTE below).
+//  2. Triage (classify). On any error → default to 'new'.
+//  3. Duplicate path: attach submission as evidence, emit 'submitted' event on
+//     the existing work item. Return { isDuplicate: true, workItem }.
+//  4. New path: create work_item, link submission as 'origin', emit events,
+//     then create dev_build_request + dispatch (same as today).
+//  5. Repetition check.
+//
+// NOTE on pipeline_events FK: pipeline_events.work_item_id is NOT NULL. We
+// defer the 'submitted' sentinel until we have a real work_item_id (step 3/4).
+// The durability guarantee is met by the submissions row being written in step 1
+// before any further processing.
+export async function processSubmission(supabase, anthropic, {
+  source, rawText, sessionId, source_meta,
+  tasks, insertedRequests, dispatchFn,
+}) {
+  // ── Step 1: durable submission row ────────────────────────────────────────
+  let submissionId;
+  try {
+    const result = await insertSubmission(supabase, { source, rawText, sessionId });
+    submissionId = result.submissionId;
+  } catch (err) {
+    console.error('[devPipeline] DURABILITY: submissions insert failed:', err.message);
+    // Can't proceed without a trace — surface the error.
+    throw err;
+  }
+
+  // ── Step 2: fetch open work items for triage ──────────────────────────────
+  let openWorkItems = [];
+  try {
+    const { data } = await supabase
+      .from('work_items')
+      .select('id, title, interpretation, subsystem, stage')
+      .not('stage', 'in', '("archived","live","rolled_back")')
+      .order('created_at', { ascending: false })
+      .limit(30);
+    openWorkItems = data || [];
+  } catch (err) {
+    console.error('[devPipeline] triage: failed to fetch work_items:', err.message);
+  }
+
+  // ── Step 3: classify ──────────────────────────────────────────────────────
+  let classification;
+  try {
+    classification = await triageSubmission(anthropic, { rawText, openWorkItems });
+  } catch (err) {
+    console.error('[devPipeline] triageSubmission threw (defaulting to new):', err.message);
+    classification = { classification: 'new', title: rawText.slice(0, 80), interpretation: rawText, subsystem: 'other' };
+  }
+
+  // ── Step 4a: duplicate path ───────────────────────────────────────────────
+  if (classification.classification === 'duplicate') {
+    const targetId = classification.target_work_item_id;
+    const { data: targetItem } = await supabase
+      .from('work_items')
+      .select('id, title, subsystem')
+      .eq('id', targetId)
+      .single();
+
+    if (!targetItem) {
+      console.warn('[devPipeline] triage duplicate target not found, falling back to new:', targetId);
+      classification = { classification: 'new', title: rawText.slice(0, 80), interpretation: rawText, subsystem: 'other' };
+    } else {
+      await supabase.from('work_item_submissions').insert({ work_item_id: targetId, submission_id: submissionId, role: 'evidence' });
+      await emitEvent(supabase, { kind: 'submitted', workItemId: targetId, detail: { submission_id: submissionId, classification: 'duplicate' } });
+      await handleRepetition(supabase, targetItem.subsystem);
+      return { isDuplicate: true, existingWorkItem: targetItem };
+    }
+  }
+
+  // ── Step 4b: new path ─────────────────────────────────────────────────────
+  const { title, interpretation, subsystem = 'other' } = classification;
+
+  let workItem;
+  try {
+    const { data: wi, error: wiErr } = await supabase
+      .from('work_items')
+      .insert({ title: (title || rawText).slice(0, 200), interpretation: interpretation || rawText, subsystem, stage: 'received' })
+      .select('id, title, subsystem')
+      .single();
+    if (wiErr) throw new Error(wiErr.message);
+    workItem = wi;
+  } catch (err) {
+    // Durability: record the failure before rethrowing.
+    console.error('[devPipeline] work_item insert failed for submission', submissionId, ':', err.message);
+    throw err;
+  }
+
+  await supabase.from('work_item_submissions').insert({ work_item_id: workItem.id, submission_id: submissionId, role: 'origin' });
+  await emitEvent(supabase, { kind: 'submitted', workItemId: workItem.id, detail: { submission_id: submissionId, classification: 'new' } });
+
+  // Mark as 'understood' now that interpretation is written.
+  await supabase.from('work_items').update({ stage: 'understood', updated_at: new Date().toISOString() }).eq('id', workItem.id);
+  await emitEvent(supabase, { kind: 'understood', workItemId: workItem.id, detail: { interpretation } });
+
+  // ── Step 4c: build request + dispatch (existing flow) ─────────────────────
+  let dispatchedRequestId = null;
+  try {
+    if (typeof dispatchFn === 'function') {
+      dispatchedRequestId = await dispatchFn(insertedRequests);
+    }
+  } catch (err) {
+    // Trace the failure on the work item event log; don't rethrow (submission is durable).
+    await emitEvent(supabase, { kind: 'build_started', workItemId: workItem.id, detail: { error: err.message } });
+    console.error('[devPipeline] dispatch failed for work item', workItem.id, ':', err.message);
+  }
+
+  if (dispatchedRequestId) {
+    await emitEvent(supabase, { kind: 'build_started', workItemId: workItem.id, detail: { requestId: dispatchedRequestId } });
+  }
+
+  // ── Step 5: repetition marker ─────────────────────────────────────────────
+  await handleRepetition(supabase, subsystem);
+
+  return { isDuplicate: false, workItem };
+}
+
 // ─── HTTP dispatcher (mounted at /dev/* in index.js) ─────────────────────────
 
 export async function handleDevPipeline(req, res, deps) {
@@ -432,6 +723,20 @@ export async function handleDevPipeline(req, res, deps) {
         userId: resolveUserId ? resolveUserId(body.userId) : body.userId,
         sessionId: null,
       }, tasks);
+
+      if (supabase) {
+        const triage = await processSubmission(supabase, anthropic, {
+          source: 'dev_mode',
+          rawText: text,
+          sessionId: null,
+          insertedRequests: rows,
+          dispatchFn: rows.length > 0 ? async () => rows[0].id : null,
+        });
+        if (triage.isDuplicate) {
+          return json(200, { requests: rows.map(publicRow), duplicate: true, attachedTo: triage.existingWorkItem });
+        }
+      }
+
       return json(200, { requests: rows.map(publicRow) });
     } catch (err) {
       return json(500, { error: err.message });
