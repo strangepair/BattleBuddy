@@ -166,7 +166,12 @@ export function useActivityLog(
   const today = todayISO();
   const accountStart = accountCreatedAt ?? today;
 
-  const todayBucket: DayBucket = { date: today, entries: todayEntries };
+  const todayOnlyEntries = todayEntries.filter((e) => {
+    const ts = entryTimestamp(e);
+    return ts ? isoDate(ts) === today : false;
+  });
+
+  const todayBucket: DayBucket = { date: today, entries: todayOnlyEntries };
 
   const allDays = (() => {
     if (historyBuckets.length === 0) return [todayBucket];
