@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Stack, router, useSegments } from 'expo-router';
-import AppDrawer from '../../src/components/drawer/AppDrawer';
 import { useUIStore } from '../../src/stores/uiStore';
 import { useOnboarding } from '../../src/hooks/useOnboarding';
 import { usePushSetup } from '../../src/hooks/usePushSetup';
@@ -17,10 +16,11 @@ import { useSessionStore, hydrateSessionStore } from '../../src/stores/sessionSt
 import { hydrateSettingsStore } from '../../src/stores/settingsStore';
 import { useAuthStore } from '../../src/stores/authStore';
 import { ApiConfig } from '../../src/config';
+import HamburgerMenu from '../../src/components/common/HamburgerMenu';
+import MenuOverlay from '../../src/components/common/MenuOverlay';
 
 export default function AppLayout() {
-  const drawerOpen = useUIStore((s) => s.drawerOpen);
-  const closeDrawer = useUIStore((s) => s.closeDrawer);
+  const closeMenu = useUIStore((s) => s.closeMenu);
   const { complete: onboardingComplete } = useOnboarding();
   const authUser = useAuthStore((s) => s.user);
   const authLoading = useAuthStore((s) => s.loading);
@@ -150,7 +150,7 @@ export default function AppLayout() {
   }, [authLoading, authUser, onboardingComplete]);
 
   const handleNavigate = useCallback((key: string) => {
-    closeDrawer();
+    closeMenu();
     switch (key) {
       case 'history':
         router.push('/history');
@@ -171,21 +171,18 @@ export default function AppLayout() {
         router.push('/insights');
         break;
     }
-  }, [closeDrawer]);
+  }, [closeMenu]);
 
   // Don't render drawer until onboarding state is known
   if (authLoading || onboardingComplete === null || !hydrated) return null;
 
   return (
-    <AppDrawer
-      open={drawerOpen}
-      onClose={closeDrawer}
-      onNavigate={handleNavigate}
-    >
+    <>
       <Stack
         screenOptions={{
           headerShown: false,
           contentStyle: { backgroundColor: Colors.background },
+          headerRight: () => <HamburgerMenu />,
         }}
       >
         <Stack.Screen name="index" />
@@ -210,6 +207,7 @@ export default function AppLayout() {
             on one screen. Replaced session-chat and session-voice. */}
         <Stack.Screen name="session" options={{ animation: 'none' }} />
       </Stack>
-    </AppDrawer>
+      <MenuOverlay onNavigate={handleNavigate} />
+    </>
   );
 }
