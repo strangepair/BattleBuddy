@@ -157,6 +157,19 @@ jobs:
             -H "content-type: application/json" -H "x-bb-status-token: $STATUS_TOKEN" \
             -d "{\"requestId\":\"$REQ_ID\",\"event\":\"pr_opened\",\"pr_url\":\"${{ steps.pr.outputs.url }}\",\"pr_number\":${{ steps.pr.outputs.num }},\"branch\":\"auto/dev-${REQ_ID}\"}" || true
 
+      # Crash net: the fence's Abort step only reports deliberate blocks. If
+      # anything upstream fails (checkout, prompt build, the Claude Code agent
+      # itself — e.g. the 96-second crash on 2026-08-01 that left a request
+      # stuck at "Under development" forever), nothing told the backend. This
+      # fires on ANY step failure not already reported by the fence, so the
+      # Dev tab always learns the run died.
+      - name: Callback run_failed → needs_attention
+        if: failure() && steps.fence.outputs.blocked != '1'
+        run: |
+          curl -sf -X POST "$SERVER_URL/dev/github/webhook" \
+            -H "content-type: application/json" -H "x-bb-status-token: $STATUS_TOKEN" \
+            -d "{\"requestId\":\"$REQ_ID\",\"event\":\"needs_attention\",\"error\":\"pipeline run failed before completion (agent crash or infra error) — Actions run ${GITHUB_RUN_ID}\"}" || true
+
       - name: Enable auto-merge
         # Full autonomy: merges automatically once ci.yml passes. Skipped on a
         # dry run or when the DEV_PIPELINE_AUTOMERGE repo variable is not 'true'.
