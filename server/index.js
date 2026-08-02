@@ -3192,6 +3192,162 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     }
   }
 
+  // ─── Pipeline management API ────────────────────────────────────────────────
+  // Server-internal routes for the pipeline data layer (migration 018).
+  // GET routes are guarded by the client token (same as /dev/*); the POST
+  // is also client-token guarded and is expected to be called only from server
+  // processes, never from the mobile app directly.
+
+  // GET /api/pipeline/work-items
+  // Returns work items with current stage, linked submission count, and the
+  // latest pipeline event for each item.
+  if (req.method === 'GET' && req.url.startsWith('/api/pipeline/work-items')) {
+    if (!checkClientToken(req)) return send401Unauthorized(res);
+    if (!supabase) {
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ work_items: [] }));
+    }
+    try {
+      const url = new URL(req.url, 'http://x');
+      const stage = url.searchParams.get('stage');
+      let query = supabase
+        .from('work_items')
+        .select('id, title, interpretation, subsystem, stage, created_at, updated_at, exception, parent_work_item_id')
+        .order('created_at', { ascending: false })
+        .limit(100);
+      if (stage) query = query.eq('stage', stage);
+      const { data: items, error: itemsErr } = await query;
+      if (itemsErr) throw new Error(itemsErr.message);
+
+      const ids = (items || []).map((i) => i.id);
+      let submissionCounts = {};
+      let latestEvents = {};
+
+      if (ids.length > 0) {
+        const [{ data: wis }, { data: evts }] = await Promise.all([
+          supabase
+            .from('work_item_submissions')
+            .select('work_item_id')
+            .in('work_item_id', ids),
+          supabase
+            .from('pipeline_events')
+            .select('work_item_id, id, kind, created_at, detail')
+            .in('work_item_id', ids)
+            .order('created_at', { ascending: false }),
+        ]);
+
+        for (const row of wis || []) {
+          submissionCounts[row.work_item_id] = (submissionCounts[row.work_item_id] || 0) + 1;
+        }
+        for (const evt of evts || []) {
+          if (!latestEvents[evt.work_item_id]) latestEvents[evt.work_item_id] = evt;
+        }
+      }
+
+      const result = (items || []).map((item) => ({
+        ...item,
+        submission_count: submissionCounts[item.id] || 0,
+        latest_event: latestEvents[item.id] || null,
+      }));
+
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ work_items: result }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  // GET /api/pipeline/releases
+  // Returns releases with their contained changes.
+  if (req.method === 'GET' && req.url.startsWith('/api/pipeline/releases')) {
+    if (!checkClientToken(req)) return send401Unauthorized(res);
+    if (!supabase) {
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ releases: [] }));
+    }
+    try {
+      const { data: rels, error: relsErr } = await supabase
+        .from('releases')
+        .select('id, version, status, notes, created_at')
+        .order('version', { ascending: false })
+        .limit(50);
+      if (relsErr) throw new Error(relsErr.message);
+
+      const relIds = (rels || []).map((r) => r.id);
+      let changesByRelease = {};
+
+      if (relIds.length > 0) {
+        const { data: chgs } = await supabase
+          .from('changes')
+          .select('id, work_item_id, branch, pr_number, flag_key, status, release_id, created_at')
+          .in('release_id', relIds)
+          .order('created_at', { ascending: true });
+        for (const chg of chgs || []) {
+          if (!changesByRelease[chg.release_id]) changesByRelease[chg.release_id] = [];
+          changesByRelease[chg.release_id].push(chg);
+        }
+      }
+
+      const result = (rels || []).map((rel) => ({
+        ...rel,
+        changes: changesByRelease[rel.id] || [],
+      }));
+
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ releases: result }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  // POST /api/pipeline/events
+  // Insert a pipeline_events row and broadcast a dashboard:pipeline-update event.
+  // Server-internal only — guarded by the client token.
+  if (req.method === 'POST' && req.url === '/api/pipeline/events') {
+    if (!checkClientToken(req)) return send401Unauthorized(res);
+    if (!supabase) {
+      res.writeHead(503, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'database not configured' }));
+    }
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const { kind, work_item_id, change_id, release_id, detail } = JSON.parse(body || '{}');
+      if (!kind || !work_item_id) {
+        res.writeHead(400, { ...CORS, 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'kind and work_item_id are required' }));
+      }
+      const row = {
+        kind,
+        work_item_id,
+        detail: detail || {},
+        ...(change_id ? { change_id } : {}),
+        ...(release_id ? { release_id } : {}),
+      };
+      const { data: inserted, error: insErr } = await supabase
+        .from('pipeline_events')
+        .insert(row)
+        .select('id, kind, work_item_id, change_id, release_id, detail, created_at')
+        .single();
+      if (insErr) throw new Error(insErr.message);
+
+      // Broadcast so any subscribed dashboard client can update without polling.
+      try {
+        broadcastToUser('pipeline', 'dashboard:pipeline-update', { event: inserted });
+      } catch (bErr) {
+        console.error('[pipeline/events] broadcast error:', bErr.message);
+      }
+
+      res.writeHead(201, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, event: inserted }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
   res.writeHead(404, CORS);
   res.end('Not found');
 });
