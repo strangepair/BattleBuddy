@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing, Typography } from '../../theme';
+import HamburgerMenu from './HamburgerMenu';
 
 interface ScreenHeaderProps {
   title: string;
@@ -23,7 +24,7 @@ export default function ScreenHeader({ title, right, onBack }: ScreenHeaderProps
         <Ionicons name="chevron-back" size={22} color={Colors.coral} />
       </TouchableOpacity>
       <Text style={styles.title} numberOfLines={1}>{title}</Text>
-      <View style={styles.rightSlot}>{right}</View>
+      <View style={styles.rightSlot}>{right ?? <HamburgerMenu />}</View>
     </View>
   );
 }

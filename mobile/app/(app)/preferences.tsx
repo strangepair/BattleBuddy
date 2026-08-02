@@ -16,6 +16,7 @@ import { useAuthStore } from '../../src/stores/authStore';
 import { useSettingsStore } from '../../src/stores/settingsStore';
 import { FeatureFlags } from '../../src/config';
 import { Colors, Spacing, Radii } from '../../src/theme';
+import HamburgerMenu from '../../src/components/common/HamburgerMenu';
 
 export default function PreferencesScreen() {
   // AUDIT: live – authStore reads from Supabase auth session
@@ -31,7 +32,7 @@ export default function PreferencesScreen() {
           <Text style={styles.backText}>← Back</Text>
         </TouchableOpacity>
         <Text style={styles.title}>Preferences</Text>
-        <View style={styles.spacer} />
+        <HamburgerMenu />
       </View>
 
       <ScrollView contentContainerStyle={styles.scroll}>
