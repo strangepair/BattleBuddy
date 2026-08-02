@@ -38,6 +38,9 @@ const STATUS_META: Record<
   deployed: { label: 'Deployed', color: Colors.success, bucket: 'done' },
   failed: { label: 'Failed', color: Colors.error, bucket: 'attention' },
   needs_attention: { label: 'Needs attention', color: Colors.error, bucket: 'attention' },
+  // Not a failure: triage recognised it as already-tracked work, so no build
+  // ran. Neutral colour and the 'done' bucket keep it out of the red pile.
+  duplicate: { label: 'Already tracked', color: Colors.textTertiary, bucket: 'done' },
 };
 
 const TARGET_LABEL: Record<string, string> = {
@@ -82,9 +85,15 @@ export default function DevScreen() {
     if (!text || submitting) return;
     setSubmitting(true);
     try {
-      await submitDirective({ userId, text });
+      const result = await submitDirective({ userId, text });
       setDirective('');
       await load();
+      if (result.duplicate && result.attachedTo) {
+        Alert.alert(
+          'Already tracked',
+          `That looks like the same issue as “${result.attachedTo.title}”. Attached as evidence — no new build was started.`,
+        );
+      }
     } catch (err) {
       Alert.alert('Could not submit', 'The build pipeline did not accept that directive. Try again.');
     } finally {
@@ -200,11 +209,6 @@ export default function DevScreen() {
                       {r.source === 'directive' ? 'from directive' : 'from conversation'}
                     </Text>
                   </View>
-                  {r.change_summary ? (
-                    <Text style={styles.changeSummary} numberOfLines={3} ellipsizeMode="tail">
-                      {r.change_summary}
-                    </Text>
-                  ) : null}
                   {r.error ? <Text style={styles.errorText}>{r.error}</Text> : null}
                   {r.pr_url ? (
                     <Text style={styles.prLink}>
@@ -294,7 +298,6 @@ const styles = StyleSheet.create({
   },
   targetText: { fontSize: 11, fontWeight: '600', color: Colors.textSecondary },
   sourceText: { fontSize: 12, color: Colors.textTertiary },
-  changeSummary: { fontSize: 12, color: Colors.textTertiary, lineHeight: 17 },
   errorText: { fontSize: 12, color: Colors.error, lineHeight: 16 },
   prLink: { fontSize: 13, fontWeight: '600', color: Colors.coral },
   archiveAction: {
