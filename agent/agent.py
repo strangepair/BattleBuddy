@@ -537,6 +537,8 @@ async def battlebuddy_session(ctx: agents.JobContext):
 
         async def on_user_turn_completed(self, turn_ctx, new_message):
             # Log the STT result so pipeline failures are visible in agent logs.
+            # An empty transcript means Deepgram produced no output — skip the
+            # LLM turn entirely rather than forwarding a blank message.
             try:
                 user_text = ""
                 if hasattr(new_message, 'text_content') and new_message.text_content:
@@ -552,9 +554,10 @@ async def battlebuddy_session(ctx: agents.JobContext):
                                 user_text = str(t)
                                 break
                 if user_text:
-                    print(f"[Agent] STT→LLM: user turn received ({len(user_text)} chars): {user_text[:120]!r}")
+                    print(f"[STT] Transcript received ({len(user_text)} chars): {user_text[:120]!r}")
                 else:
-                    print(f"[Agent] STT→LLM: user turn received but text is empty — message type: {type(new_message).__name__}")
+                    print(f"[STT] WARNING: empty transcript from Deepgram — skipping LLM turn (message type: {type(new_message).__name__})")
+                    return
             except Exception as e:
                 print(f"[Agent] STT→LLM logging error: {e}")
 
@@ -686,11 +689,12 @@ async def battlebuddy_session(ctx: agents.JobContext):
             print(f"[Agent] on_item error: {e}")
 
     print(f"[Agent] Starting session for {user_id} (session_id={session_id}, room={getattr(ctx.room, 'name', 'unknown')})")
+    _session_agent = SessionAgent()
     await session.start(
         room=ctx.room,
-        agent=SessionAgent(),
+        agent=_session_agent,
     )
-    print(f"[Agent] Session started — STT={type(session.stt).__name__}, LLM={type(session.llm).__name__}, TTS={type(session.tts).__name__}")
+    print(f"[Agent] Session started — STT={type(session.stt).__name__} (nova-3/multi), LLM={type(session.llm).__name__}, TTS={type(session.tts).__name__}")
 
     # Periodic save loop — runs every SAVE_INTERVAL_SECONDS, sends whatever we have
     async def periodic_save():
@@ -737,6 +741,14 @@ async def battlebuddy_session(ctx: agents.JobContext):
             asyncio.ensure_future(session.generate_reply(
                 instructions="Say exactly: 'I'm getting a lot of traffic right now. Hang tight — try again in a minute.' Do not say anything else."
             ))
+
+    @session.on("user_started_speaking")
+    def on_user_started_speaking(ev):
+        print(f"[STT] Audio detected — user started speaking")
+
+    @session.on("user_stopped_speaking")
+    def on_user_stopped_speaking(ev):
+        print(f"[STT] Audio endpoint — user stopped speaking; awaiting transcript")
 
     @session.on("agent_started_speaking")
     def on_agent_started_speaking(ev):
