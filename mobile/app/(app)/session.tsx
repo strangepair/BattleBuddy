@@ -16,6 +16,7 @@ import * as Haptics from 'expo-haptics';
 import PagerView from 'react-native-pager-view';
 import type { FeedCard } from '../../src/components/feed/FeedPager';
 import EntityBackground from '../../src/components/home/EntityBackground';
+import HamburgerMenu from '../../src/components/common/HamburgerMenu';
 import SessionHeader, { type SessionPhase } from '../../src/components/session/SessionHeader';
 import SegBar, { type SessionView } from '../../src/components/session/SegBar';
 import ConversationStream from '../../src/components/session/ConversationStream';
@@ -405,6 +406,9 @@ export default function SessionScreen() {
       />
       <View style={[styles.surface, { paddingTop: insets.top }]}>
         <SessionHeader mascotState={mascotState} phase={phase} />
+        <View style={styles.hamburgerSlot} pointerEvents="box-none">
+          <HamburgerMenu />
+        </View>
         <SegBar view={view} onChange={setView} />
 
         <KeyboardAvoidingView
@@ -511,6 +515,12 @@ const styles = StyleSheet.create({
   },
   surface: {
     flex: 1,
+  },
+  hamburgerSlot: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    zIndex: 10,
   },
   body: {
     flex: 1,

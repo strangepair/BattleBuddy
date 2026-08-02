@@ -6,6 +6,7 @@ import { ApiConfig } from '../../src/config';
 import { Colors, Spacing, Radii } from '../../src/theme';
 import { useAuthStore } from '../../src/stores/authStore';
 import { getAuthToken } from '../../src/services/supabase';
+import HamburgerMenu from '../../src/components/common/HamburgerMenu';
 
 const VOICES = [
   { id: 'aura-2-arcas-en', name: 'Arcas', style: 'Calm male' },
@@ -74,7 +75,7 @@ export default function VoiceSettingsScreen() {
           <Text style={styles.backText}>← Back</Text>
         </TouchableOpacity>
         <Text style={styles.title}>Buddy's Voice</Text>
-        <View style={styles.spacer} />
+        <HamburgerMenu />
       </View>
 
       <Text style={styles.subtitle}>
