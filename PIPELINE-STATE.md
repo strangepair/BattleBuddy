@@ -423,9 +423,12 @@ hard outage. What this exposed, continuing the guard catalog:
 7. Audit why auto-merge branch deletion left 45 stale branches.
 8. When app #2 onboards: extract control plane to its own repo, move bot
    identity from PATs to a GitHub App, define pipeline.yml manifest.
-9. Merge the agent-CI-gate PR ONLY AFTER voice-fix 84c54095 deploys (main's
-   agent.py must import cleanly first or the new gate blocks every queued
-   PR), then add `agent (compile · import)` to required contexts.
+9. DONE 2026-08-03 21:0x UTC: voice-fix 84c54095 deployed (PR #115, agent
+   re-registered with LiveKit 20:57:39Z), agent-CI-gate PR #116 merged, and
+   `agent (compile · import)` added to required contexts. Found in passing:
+   agent/tests/test_deduplication.py imports `agent.utils`, which has never
+   existed (PR #101 wrote tests against an imagined module layout) — repair
+   before promoting the pytest job to required.
 10. Submit directives for guards 8–10 (post-deploy boot verification,
     evidence-first root cause, intake verification) after the queue clears
     the parked menu-cut item (559ffc0c — restore to pending post-voice-fix).
