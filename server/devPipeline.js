@@ -1136,7 +1136,12 @@ export async function handleDevPipeline(req, res, deps) {
         },
         `manual resubmit (${plan})`,
       );
-      return json(200, { ok: true, plan });
+      const { data: updatedRow } = await supabase
+        .from('dev_build_requests')
+        .select('*')
+        .eq('id', id)
+        .single();
+      return json(200, { ok: true, plan, item: updatedRow ?? null });
     } catch (err) {
       await applyFailure(
         supabase,
