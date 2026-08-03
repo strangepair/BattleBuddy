@@ -405,8 +405,16 @@ export default function SessionScreen() {
         center={{ x: width / 2, y: height * 0.3 }}
       />
       <View style={[styles.surface, { paddingTop: insets.top }]}>
-        <SessionHeader mascotState={mascotState} phase={phase} />
-        <View style={styles.hamburgerSlot} pointerEvents="box-none">
+        {/* The menu button sits in the header's row, on the orb's outboard
+            side, so it lands on the same baseline as the orb and inside the
+            safe area. It must stay a SIBLING of SessionHeader, never a child:
+            launch-gate.test.tsx asserts SessionHeader contains zero
+            interactive controls — a control inside its animated subtree is
+            what crashed builds 51/53 at launch. */}
+        <View style={[styles.headerRow, hand === 'left' && styles.headerRowLeftHand]}>
+          <View style={styles.headerFill}>
+            <SessionHeader mascotState={mascotState} phase={phase} />
+          </View>
           <HamburgerMenu />
         </View>
         <SegBar view={view} onChange={setView} />
@@ -516,11 +524,23 @@ const styles = StyleSheet.create({
   surface: {
     flex: 1,
   },
-  hamburgerSlot: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    zIndex: 10,
+  // Normal-flow row, so it inherits surface's paddingTop (the safe-area inset)
+  // instead of being an absolute overlay pinned to the screen's physical top —
+  // that pin is what put the button behind the status bar and out of the
+  // tappable frame. row-reverse in left-hand mode keeps the button beside the
+  // orb, which SessionHeader moves to the leading edge for that layout.
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingRight: 14,
+  },
+  headerRowLeftHand: {
+    flexDirection: 'row-reverse',
+    paddingRight: 0,
+    paddingLeft: 14,
+  },
+  headerFill: {
+    flex: 1,
   },
   body: {
     flex: 1,
