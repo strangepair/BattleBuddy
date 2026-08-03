@@ -1,9 +1,16 @@
 name: Deploy
 
 # Runs on every push to main (i.e. after a PR auto-merges). Path-filtered so
-# only the affected target(s) deploy: Railway (server/agent), Supabase
-# (migrations), and EAS→TestFlight (mobile). Reports status back to the backend
-# so the Dev tab flips Under development → Deploying → Deployed.
+# only the affected target(s) deploy: Railway (server/agent) and Supabase
+# (migrations). Reports status back to the backend so the Dev tab flips
+# Under development → Deploying → Deployed.
+#
+# The mobile (EAS→TestFlight) build moved to mobile-release.yml, which
+# serialises builds into a batch train. Two consequences here:
+#   - server-only deploys no longer queue behind a ~5 min EAS build
+#   - this workflow does NOT report 'deployed' for a mobile-touching change;
+#     the release does, once the build carrying that commit finishes. Reporting
+#     here would mark the row deployed before its build had even started.
 
 on:
   push:
@@ -93,41 +100,23 @@ jobs:
           fi
           for f in $FILES; do echo ">> $f"; psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -f "$f"; done
 
-  mobile:
-    needs: detect
-    if: needs.detect.outputs.mobile == 'true'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: mobile
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 20 }
-      - run: npm i -g eas-cli
-      - run: npm ci
-      - name: Build iOS (EAS cloud) + submit to TestFlight
-        # Submission credentials (ASC API key) are stored server-side in EAS —
-        # every prior TestFlight build used them (the "Team (Expo)" tester
-        # group is EAS Submit's marker). --non-interactive reuses the stored
-        # key, so no .p8 material lives in this repo's secrets. If EAS ever
-        # loses the key, re-add explicit --asc-api-key-* flags here.
-        env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
-        run: |
-          eas build --platform ios --profile production --non-interactive --wait
-          eas submit --platform ios --profile production --non-interactive --latest
-
   report:
-    needs: [detect, railway, supabase, mobile]
-    if: always() && needs.detect.outputs.reqid != ''
+    needs: [detect, railway, supabase]
+    # Mobile-touching changes are completed by the release train, not here —
+    # except when a server/supabase job actually failed, which is still ours to
+    # report. Anything this misses, the stage-2 reconciler repairs from GitHub.
+    if: >-
+      always() && needs.detect.outputs.reqid != ''
+      && (needs.detect.outputs.mobile != 'true'
+          || needs.railway.result == 'failure'
+          || needs.supabase.result == 'failure')
     runs-on: ubuntu-latest
     steps:
       - name: Report deployed / failed
         run: |
           # Any needed job that failed → deploy_failed; skipped jobs don't count.
           FAIL=0
-          for r in "${{ needs.railway.result }}" "${{ needs.supabase.result }}" "${{ needs.mobile.result }}"; do
+          for r in "${{ needs.railway.result }}" "${{ needs.supabase.result }}"; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then FAIL=1; fi
           done
           if [ "$FAIL" = "1" ]; then EVT="deploy_failed"; else EVT="deployed"; fi

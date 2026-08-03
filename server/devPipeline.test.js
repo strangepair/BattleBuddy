@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dedupeKey, looksForbidden, patchForEvent, isPipelineEnabled, collapseNearDuplicates, generateProductRequests, insertRequests, insertSubmission, triageSubmission, handleRepetition, processSubmission, classifyFailure, failureSignature, retryDelayMs, applyFailure, runDevBuildWorker, resubmitPlan, RESUBMITTABLE } from './devPipeline.js';
+import { dedupeKey, looksForbidden, patchForEvent, isPipelineEnabled, collapseNearDuplicates, generateProductRequests, insertRequests, insertSubmission, triageSubmission, handleRepetition, processSubmission, classifyFailure, failureSignature, retryDelayMs, applyFailure, runDevBuildWorker, resubmitPlan, RESUBMITTABLE, extractReleaseEntries, buildChangelog, recordRelease } from './devPipeline.js';
 
 test('dedupeKey is stable and target-scoped', () => {
   const a = dedupeKey('ui', 'Make the greeting warmer!');
@@ -520,6 +520,9 @@ function makeSelfHealSupabase(seed = {}) {
   const store = {
     dev_build_requests: seed.dev_build_requests ?? [],
     pipeline_alerts: seed.pipeline_alerts ?? [],
+    releases: seed.releases ?? [],
+    changes: seed.changes ?? [],
+    work_items: seed.work_items ?? [],
   };
 
   const table = (name) => {
@@ -797,4 +800,108 @@ test('only stuck requests are resubmittable', () => {
   assert.deepEqual(RESUBMITTABLE, ['failed', 'needs_attention']);
   assert.ok(!RESUBMITTABLE.includes('building'), 'an in-flight build must not be double-dispatched');
   assert.ok(!RESUBMITTABLE.includes('deployed'));
+});
+
+// ─── Release train ───────────────────────────────────────────────────────────
+
+const commit = (subject, requestId, sha) => ({
+  sha,
+  commit: { message: requestId ? `${subject}\n\nDev-Request-Id: ${requestId}\n` : subject },
+});
+
+test('extractReleaseEntries reads request ids and squash PR numbers', () => {
+  const entries = extractReleaseEntries([
+    commit('auto: fix the voice timeout (#62)', '758e028b-84b3-4f41-b331-4eda57dc6d24', 'aaa'),
+    commit('chore: tidy docs (#72)', null, 'bbb'),
+  ]);
+
+  assert.equal(entries.length, 2);
+  assert.equal(entries[0].requestId, '758e028b-84b3-4f41-b331-4eda57dc6d24');
+  assert.equal(entries[0].prNumber, 62);
+  assert.equal(entries[0].title, 'auto: fix the voice timeout', 'PR suffix stripped from the title');
+  assert.equal(entries[1].requestId, null, 'a hand-made PR still gets an entry');
+  assert.equal(entries[1].prNumber, 72);
+});
+
+test('extractReleaseEntries de-duplicates a request that appears twice', () => {
+  const id = '758e028b-84b3-4f41-b331-4eda57dc6d24';
+  const entries = extractReleaseEntries([
+    commit('auto: fix voice (#62)', id, 'aaa'),
+    commit('auto: fix voice (#62)', id, 'bbb'),
+  ]);
+  assert.equal(entries.length, 1, 'one change, not two');
+});
+
+test('buildChangelog headlines the build and pluralises correctly', () => {
+  assert.equal(buildChangelog(92, [{ title: 'a' }]).headline, 'Build 92 — 1 change');
+  assert.equal(buildChangelog(92, [{ title: 'a' }, { title: 'b' }]).headline, 'Build 92 — 2 changes');
+  assert.equal(buildChangelog(92, []).headline, 'Build 92 — 0 changes');
+});
+
+test('recordRelease groups a batched build and marks every carried request deployed', async () => {
+  const idA = '11111111-1111-4111-8111-111111111111';
+  const idB = '22222222-2222-4222-8222-222222222222';
+  const sb = makeSelfHealSupabase({
+    dev_build_requests: [
+      { id: idA, status: 'deploying', history: [], attempts: 0 },
+      { id: idB, status: 'failed', history: [], attempts: 0, error: 'stale' },
+    ],
+    releases: [{ id: 'rel-old', version: 91, build_number: 91, head_sha: 'old-sha' }],
+  });
+
+  const result = await recordRelease(sb, {
+    buildNumber: 92,
+    headSha: 'new-sha',
+    fetchCommits: async (base, head) => {
+      assert.equal(base, 'old-sha', 'range starts at the last released head');
+      assert.equal(head, 'new-sha');
+      return [
+        commit('auto: first change (#101)', idA, 'c1'),
+        commit('auto: second change (#102)', idB, 'c2'),
+      ];
+    },
+  });
+
+  assert.equal(result.reused, false);
+  assert.equal(result.entries.length, 2, 'one build carried two changes');
+  assert.equal(result.release.changelog.headline, 'Build 92 — 2 changes');
+
+  for (const row of sb._store.dev_build_requests) {
+    assert.equal(row.status, 'deployed', `${row.id} must be completed by the release`);
+    assert.equal(row.release_id, result.release.id);
+  }
+  // Includes the row that had been sitting in 'failed' — the release is truth.
+  assert.equal(sb._store.changes.length, 2, 'a changes row per PR');
+  assert.equal(sb._store.changes[0].status, 'deployed');
+});
+
+test('recordRelease is idempotent when the workflow retries its callback', async () => {
+  const sb = makeSelfHealSupabase({
+    releases: [{ id: 'rel-92', version: 92, build_number: 92, head_sha: 'new-sha' }],
+  });
+
+  let fetched = false;
+  const result = await recordRelease(sb, {
+    buildNumber: 92,
+    headSha: 'new-sha',
+    fetchCommits: async () => { fetched = true; return []; },
+  });
+
+  assert.equal(result.reused, true, 'the existing release is returned');
+  assert.equal(fetched, false, 'no second GitHub call');
+  assert.equal(sb._store.releases.length, 1, 'no duplicate release row');
+});
+
+test('recordRelease handles the very first build with no prior release', async () => {
+  const sb = makeSelfHealSupabase({});
+  const result = await recordRelease(sb, {
+    buildNumber: 92,
+    headSha: 'first-sha',
+    fetchCommits: async (base) => {
+      assert.equal(base, null, 'no base sha on the first release');
+      return [commit('feat: initial (#1)', null, 'c1')];
+    },
+  });
+  assert.equal(result.release.version, 92);
+  assert.equal(result.release.base_sha, null);
 });

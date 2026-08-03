@@ -1,0 +1,79 @@
+name: Mobile release train
+
+# ONE EAS/TestFlight build at a time, batching whatever accumulates.
+#
+# The train is GitHub Actions concurrency, not a scheduler we wrote. A run
+# entering a busy concurrency group goes *pending*, and any previously pending
+# run in that group is cancelled. With cancel-in-progress: false that gives:
+#
+#   idle + a mobile change lands  -> builds immediately (zero added latency)
+#   build running + N more merges -> each supersedes the previous pending run,
+#                                    so exactly ONE pending run survives
+#   build finishes                -> the survivor starts, checks out current
+#                                    main HEAD, and therefore carries ALL the
+#                                    changes that merged during the last build
+#   nothing pending               -> drains to idle
+#
+# The batch window self-paces to build duration. Serialising here also removes
+# the resubmit concurrency-bypass collision by construction.
+#
+# Superseded pending runs never execute, so they never post a callback. That is
+# intended: completion is recorded by the RELEASE, which marks every request in
+# the build's commit range as deployed. deploy.yml deliberately does not report
+# 'deployed' for mobile-touching changes for the same reason.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/**'
+
+concurrency:
+  group: mobile-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm i -g eas-cli
+      - run: npm ci
+
+      - name: Build iOS (EAS cloud) + submit to TestFlight
+        id: eas
+        # Submission credentials (ASC API key) are stored server-side in EAS —
+        # --non-interactive reuses the stored key, so no .p8 material lives in
+        # this repo's secrets. Unchanged from deploy.yml's original mobile job.
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          eas build --platform ios --profile production --non-interactive --wait
+          eas submit --platform ios --profile production --non-interactive --latest
+          # Ask EAS what it actually built rather than scraping log text.
+          BUILD_NUMBER=$(eas build:list --platform ios --limit 1 --json --non-interactive \
+            | jq -r '.[0].buildNumber // empty')
+          echo "build_number=${BUILD_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Record release
+        if: success()
+        # NOT best-effort: unlike the legacy `curl ... || true` callbacks, this
+        # retries. If it still fails, the stage-2 reconciler repairs the rows —
+        # correctness never depends on this call landing.
+        run: |
+          BN='${{ steps.eas.outputs.build_number }}'
+          [ -n "$BN" ] || BN=null
+          curl -sS --retry 3 --retry-all-errors --max-time 30 -X POST \
+            "${{ secrets.BB_SERVER_URL }}/dev/release/complete" \
+            -H "content-type: application/json" \
+            -H "x-bb-status-token: ${{ secrets.BB_STATUS_WEBHOOK_TOKEN }}" \
+            -d "{\"buildNumber\":${BN},\"headSha\":\"${{ github.sha }}\"}"

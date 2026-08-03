@@ -392,6 +392,143 @@ async function rerunDeploy(row) {
   );
 }
 
+
+// ─── Release train ───────────────────────────────────────────────────────────
+//
+// mobile-release.yml serialises EAS builds, so one build can carry many merges.
+// A superseded pending run never executes and never posts a callback, so the
+// release is what marks every request it carried as deployed. Everything here
+// is idempotent: a retried callback for the same build reuses its release.
+
+/** Pull Dev-Request-Ids and squash-merge PR numbers out of a commit list. */
+export function extractReleaseEntries(commits) {
+  const entries = [];
+  const seen = new Set();
+  for (const c of commits || []) {
+    const message = (c.commit && c.commit.message) || c.message || '';
+    const sha = c.sha || null;
+    const subject = message.split('\n')[0];
+    const idMatch = message.match(/^Dev-Request-Id:\s*([0-9a-fA-F-]{36})\s*$/m);
+    const prMatch = subject.match(/\(#(\d+)\)\s*$/);
+    const requestId = idMatch ? idMatch[1].toLowerCase() : null;
+    const prNumber = prMatch ? Number(prMatch[1]) : null;
+    const title = subject.replace(/\s*\(#\d+\)\s*$/, '').trim();
+    // Merge commits of the same PR can appear twice; key on the strongest id.
+    const key = requestId || (prNumber ? `pr-${prNumber}` : sha);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    entries.push({ requestId, prNumber, title, sha });
+  }
+  return entries;
+}
+
+/** "Build N — M changes", plus a line per change. */
+export function buildChangelog(version, entries) {
+  return {
+    headline: `Build ${version} — ${entries.length} change${entries.length === 1 ? '' : 's'}`,
+    items: entries.map((e) => ({ title: e.title, pr_number: e.prNumber, request_id: e.requestId })),
+  };
+}
+
+/** Commits between the last released head and this one. */
+async function githubCompareCommits(baseSha, headSha) {
+  if (!baseSha) {
+    const res = await githubJson(`https://api.github.com/repos/${GITHUB_REPO}/commits/${headSha}`);
+    return [await res.json()];
+  }
+  const res = await githubJson(
+    `https://api.github.com/repos/${GITHUB_REPO}/compare/${baseSha}...${headSha}`,
+  );
+  const data = await res.json();
+  return data.commits || [];
+}
+
+async function upsertChange(supabase, { prNumber, title, mergeSha, requestId, releaseId }) {
+  const { data: existing } = await supabase
+    .from('changes').select('id').eq('pr_number', prNumber).limit(1);
+  const patch = {
+    title, merge_sha: mergeSha, release_id: releaseId,
+    dev_build_request_id: requestId || null, status: 'deployed',
+  };
+  if ((existing || []).length > 0) {
+    await supabase.from('changes').update(patch).eq('pr_number', prNumber);
+    return;
+  }
+  const { error } = await supabase.from('changes').insert({ pr_number: prNumber, ...patch });
+  // A concurrent writer may have won the unique index; that is fine.
+  if (error && !/duplicate key|23505/i.test(error.message || '')) {
+    console.error('[devPipeline] upsertChange failed:', error.message);
+  }
+}
+
+/**
+ * Record one completed build as a release and mark everything it carried.
+ * `fetchCommits` is injected so this is testable without GitHub.
+ */
+export async function recordRelease(supabase, { buildNumber, headSha, fetchCommits }) {
+  const getCommits = fetchCommits || githubCompareCommits;
+
+  // Idempotent: the workflow retries this callback.
+  if (buildNumber != null) {
+    const { data: already } = await supabase
+      .from('releases').select('*').eq('build_number', buildNumber).limit(1);
+    if ((already || []).length > 0) {
+      return { release: already[0], entries: [], reused: true };
+    }
+  }
+
+  const { data: prev } = await supabase
+    .from('releases').select('head_sha, version')
+    .not('head_sha', 'is', null)
+    .order('version', { ascending: false })
+    .limit(1);
+  const baseSha = (prev || [])[0] ? (prev || [])[0].head_sha : null;
+
+  const commits = await getCommits(baseSha, headSha);
+  const entries = extractReleaseEntries(commits);
+
+  let version = buildNumber;
+  if (version == null) {
+    const { data: top } = await supabase
+      .from('releases').select('version').order('version', { ascending: false }).limit(1);
+    version = ((top || [])[0] ? (top || [])[0].version : 0) + 1;
+  }
+
+  const changelog = buildChangelog(version, entries);
+  const { data: rel, error } = await supabase.from('releases').insert({
+    version,
+    build_number: buildNumber,
+    head_sha: headSha,
+    base_sha: baseSha,
+    status: 'live',
+    changelog,
+    notes: changelog.headline,
+    completed_at: new Date().toISOString(),
+  }).select('*').single();
+  if (error) throw new Error(`releases insert: ${error.message}`);
+
+  for (const e of entries) {
+    if (e.requestId) {
+      await supabase.from('dev_build_requests').update({
+        release_id: rel.id,
+        status: 'deployed',
+        deploy_status: 'ok',
+        next_retry_at: null,
+        error: null,
+        updated_at: new Date().toISOString(),
+      }).eq('id', e.requestId);
+    }
+    if (e.prNumber) {
+      await upsertChange(supabase, {
+        prNumber: e.prNumber, title: e.title, mergeSha: e.sha,
+        requestId: e.requestId, releaseId: rel.id,
+      });
+    }
+  }
+
+  return { release: rel, entries, reused: false };
+}
+
 // ─── Failure classification + circuit breaker ────────────────────────────────
 //
 // Order matters: terminal wins over everything. A scope-fence violation that
@@ -1151,6 +1288,29 @@ export async function handleDevPipeline(req, res, deps) {
         'resubmit',
       );
       return json(502, { error: err.message });
+    }
+  }
+
+  // POST /dev/release/complete — a finished EAS build reports what it shipped.
+  if (req.method === 'POST' && path === '/dev/release/complete') {
+    if (!checkStatusToken(req)) return json(401, { error: 'unauthorized' });
+    if (!supabase) return json(503, { error: 'no database' });
+    const body = await readBody(req);
+    const headSha = (body.headSha || '').toString();
+    if (!headSha) return json(400, { error: 'headSha required' });
+    const buildNumber = body.buildNumber == null ? null : Number(body.buildNumber);
+    try {
+      const result = await recordRelease(supabase, { buildNumber, headSha });
+      return json(200, {
+        ok: true,
+        releaseId: result.release.id,
+        version: result.release.version,
+        changes: result.entries.length,
+        reused: result.reused,
+      });
+    } catch (err) {
+      console.error('[devPipeline] recordRelease failed:', err.message);
+      return json(500, { error: err.message });
     }
   }
 
