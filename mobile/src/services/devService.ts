@@ -154,10 +154,11 @@ export async function archiveRequest(id: string): Promise<boolean> {
 
 /** Ask the pipeline to try a stuck request again. `plan` is 'rerun_deploy'
     when the code already merged and only the deploy failed, otherwise
-    'redispatch_build'. Returns ok:false with a reason the caller can show. */
+    'redispatch_build'. Returns ok:false with a reason the caller can show.
+    On success, `item` contains the updated request row from the server. */
 export async function resubmitRequest(
   id: string,
-): Promise<{ ok: boolean; plan?: string; error?: string }> {
+): Promise<{ ok: boolean; plan?: string; item?: DevRequest; error?: string }> {
   try {
     const res = await fetch(`${ApiConfig.DEV_URL}/dev/requests/${encodeURIComponent(id)}/resubmit`, {
       method: 'POST',
@@ -165,7 +166,7 @@ export async function resubmitRequest(
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) return { ok: false, error: body.error ?? `resubmit failed: ${res.status}` };
-    return { ok: true, plan: body.plan };
+    return { ok: true, plan: body.plan, item: body.item ?? undefined };
   } catch (err) {
     return { ok: false, error: 'Could not reach the pipeline.' };
   }
