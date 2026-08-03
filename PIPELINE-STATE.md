@@ -351,6 +351,54 @@ up tracked either way.
 The same fact is why the reconciler repairs the stale rows automatically: the
 server can write them even though a chat session cannot.
 
+## Incident 2026-08-03 — voice crash-loop postmortem (guards 7–11)
+
+Voice was hard-dead from 2026-08-01 19:28 UTC to 2026-08-03 evening: PR #62
+added `@server.prewarm` to agent/agent.py — an attribute that does not exist
+on livekit-agents 1.6.2's AgentServer — so bb-agent crash-looped at import
+and never registered with LiveKit. Five subsequent pipeline "fixes"
+(#64/#75/#76/#85/#107) patched STT/transcript/audio layers without once
+reading the agent's boot logs; the crash was the first five lines of
+`railway logs --service bb-agent --lines 250`. Fix: directive request
+`84c54095` (pure deletion of the block). Mike perceived the break as "around
+PR 48" — the same morning's timeout regression (#49–#61) blurred into the
+hard outage. What this exposed, continuing the guard catalog:
+
+7. **Every target area ships gated or not at all.** agent/ had ZERO CI —
+   required contexts covered only mobile and server, so an import-time crash
+   merged green five more times. Guard: `agent (compile · import)` job in
+   ci.yml + required context (this PR); platform rule for pipeline.yml — an
+   area with no boot/import gate is not a valid build target. agent/tests/
+   existed but never ran anywhere; they now run as a non-blocking job,
+   promoted to required once green history exists.
+8. **"Deploy green" must mean "process alive."** Railway restarted the
+   crash-looping container for two days with zero signal into the pipeline.
+   Guard (to build): post-deploy boot verification per service — bb-agent =
+   "registered worker" line within N minutes, bb-server = /health 200 —
+   failure auto-creates an exception card. Natural home: Submission 5's
+   health-signal path.
+9. **Runtime evidence before generated fixes.** Defect-report submissions
+   produced five plausible-but-blind forward patches. Guard (to build): the
+   triage path for "X is broken" reports must attach service logs / health
+   signals to the work item BEFORE a builder is dispatched, and repetition
+   root-cause items get an Investigator agent with log access — never a
+   code-writing agent patching from the report text alone.
+10. **Intake integrity end-to-end.** A repository_dispatch fired directly at
+    autobuild (bypassing /dev/directive) produced an untracked, Dev-tab-
+    invisible build (caught and cancelled same day, 2026-08-03). Guard (to
+    build): autobuild's first step verifies the requestId has a
+    dev_build_requests row via the status webhook; unknown ids abort before
+    the agent runs.
+11. **The human-exception surface is a product, not a page.** Decision
+    (Mike, 2026-08-03): the platform's end state is every future app being
+    continuously designed/developed from the front end of the user-facing
+    app itself (dev mode first); anything requiring human dev involvement —
+    PRs, issues, escalations, exception cards — lands in a dedicated backend
+    web admin site (to be built). Today's /admin console and the Dev tab are
+    its seeds; exception cards (Submission 3) and that site are the same
+    surface at different maturities. Spec it as its own numbered submission
+    once Submissions 4–6 land.
+
 ## Next actions
 
 1. Mike: run the duplicate-submission test above from the app. It is now a real
@@ -375,3 +423,11 @@ server can write them even though a chat session cannot.
 7. Audit why auto-merge branch deletion left 45 stale branches.
 8. When app #2 onboards: extract control plane to its own repo, move bot
    identity from PATs to a GitHub App, define pipeline.yml manifest.
+9. Merge the agent-CI-gate PR ONLY AFTER voice-fix 84c54095 deploys (main's
+   agent.py must import cleanly first or the new gate blocks every queued
+   PR), then add `agent (compile · import)` to required contexts.
+10. Submit directives for guards 8–10 (post-deploy boot verification,
+    evidence-first root cause, intake verification) after the queue clears
+    the parked menu-cut item (559ffc0c — restore to pending post-voice-fix).
+11. Promote `agent tests (pytest · non-blocking)` to a required context once
+    it shows a green history on real PRs.
