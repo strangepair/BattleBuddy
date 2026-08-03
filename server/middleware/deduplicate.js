@@ -14,6 +14,11 @@ export const LOG_DEDUP_WINDOW_SECONDS = parseInt(
   10,
 );
 
+export const ACTIVITY_DEDUP_WINDOW_SECONDS = parseInt(
+  process.env.ACTIVITY_DEDUP_WINDOW_SECONDS || '60',
+  10,
+);
+
 /**
  * Look for an existing client_events row with the same user_id and event_type
  * whose created_at falls within the last LOG_DEDUP_WINDOW_SECONDS seconds.
@@ -39,6 +44,37 @@ export async function findDuplicate(supabase, userId, eventType, windowSeconds =
 
   if (error) {
     console.error('[deduplicate] query error:', error.message);
+    return null;
+  }
+
+  return data || null;
+}
+
+/**
+ * Look for an existing activities row with the same user_id and activity_name
+ * whose created_at falls within the last ACTIVITY_DEDUP_WINDOW_SECONDS seconds.
+ *
+ * @param {object} supabase   - Supabase client
+ * @param {string} userId
+ * @param {string} activityName
+ * @param {number} [windowSeconds] - override the default window (for testing)
+ * @returns {Promise<object|null>} existing row or null if none found
+ */
+export async function findActivityDuplicate(supabase, userId, activityName, windowSeconds = ACTIVITY_DEDUP_WINDOW_SECONDS) {
+  const cutoff = new Date(Date.now() - windowSeconds * 1000).toISOString();
+
+  const { data, error } = await supabase
+    .from('activities')
+    .select('id, user_id, activity_name, start_time, created_at')
+    .eq('user_id', userId)
+    .eq('activity_name', activityName)
+    .gte('created_at', cutoff)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[deduplicate] activities query error:', error.message);
     return null;
   }
 

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { findDuplicate } from './deduplicate.js';
+import { findDuplicate, findActivityDuplicate } from './deduplicate.js';
 
 function makeSupabase(rows) {
   return {
@@ -114,4 +114,90 @@ test('findDuplicate — returns null on supabase query error', async () => {
 
   const result = await findDuplicate(supabase, 'user-a', 'voice_output_failure', 90);
   assert.equal(result, null);
+});
+
+// ─── findActivityDuplicate — activities table ─────────────────────────────────
+
+function makeActivitiesSupabase(rows) {
+  return {
+    from(table) {
+      if (table !== 'activities') throw new Error(`unexpected table: ${table}`);
+      return {
+        select() { return this; },
+        eq() { return this; },
+        gte() { return this; },
+        order() { return this; },
+        limit() { return this; },
+        async maybeSingle() {
+          return { data: rows[0] || null, error: null };
+        },
+      };
+    },
+  };
+}
+
+function makeActivitiesSupabaseMultiName(rowsByName) {
+  return {
+    from(table) {
+      if (table !== 'activities') throw new Error(`unexpected table: ${table}`);
+      const state = { filters: [] };
+      const chain = {
+        select() { return this; },
+        eq(col, val) { state.filters.push([col, val]); return this; },
+        gte() { return this; },
+        order() { return this; },
+        limit() { return this; },
+        async maybeSingle() {
+          const nameFilter = state.filters.find(([col]) => col === 'activity_name');
+          const name = nameFilter ? nameFilter[1] : null;
+          const rows = rowsByName[name] || [];
+          return { data: rows[0] || null, error: null };
+        },
+      };
+      return chain;
+    },
+  };
+}
+
+// Scenario 1: duplicate within 60 s — blocked
+test('findActivityDuplicate — returns existing row when one exists within 60s window', async () => {
+  const existing = {
+    id: 'act-1',
+    user_id: 'user-a',
+    activity_name: 'gym',
+    start_time: new Date().toISOString(),
+    created_at: new Date().toISOString(),
+  };
+  const supabase = makeActivitiesSupabase([existing]);
+
+  const result = await findActivityDuplicate(supabase, 'user-a', 'gym', 60);
+  assert.deepEqual(result, existing);
+});
+
+// Scenario 2: same type at 61 s — allowed (no row within window)
+test('findActivityDuplicate — returns null when no row exists within 60s window (61s ago)', async () => {
+  const supabase = makeActivitiesSupabase([]);
+
+  const result = await findActivityDuplicate(supabase, 'user-a', 'gym', 60);
+  assert.equal(result, null);
+});
+
+// Scenario 3: different activity name within 60 s — allowed
+test('findActivityDuplicate — different activity names are not deduplicated against each other', async () => {
+  const rowsByName = {
+    gym: [{
+      id: 'act-1',
+      user_id: 'user-a',
+      activity_name: 'gym',
+      start_time: new Date().toISOString(),
+      created_at: new Date().toISOString(),
+    }],
+  };
+  const supabase = makeActivitiesSupabaseMultiName(rowsByName);
+
+  const gymResult = await findActivityDuplicate(supabase, 'user-a', 'gym', 60);
+  const walkResult = await findActivityDuplicate(supabase, 'user-a', 'walk', 60);
+
+  assert.equal(gymResult.id, 'act-1', 'gym within window is found');
+  assert.equal(walkResult, null, 'walk (different type) within window is not blocked');
 });
