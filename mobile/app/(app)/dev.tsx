@@ -15,15 +15,26 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import Swipeable from 'react-native-gesture-handler/Swipeable';
 import { router, useFocusEffect } from 'expo-router';
 import { useAuthStore } from '../../src/stores/authStore';
+import { useSettingsStore } from '../../src/stores/settingsStore';
 import {
   listRequests,
   submitDirective,
   archiveRequest,
+  fetchWorkItems,
+  fetchReleases,
+  fetchDigest,
   type DevRequest,
   type DevRequestStatus,
+  type WorkItem,
+  type Release,
+  type ExceptionItem,
 } from '../../src/services/devService';
 import { Colors, Spacing, Radii } from '../../src/theme';
 import { PRDetailView } from '../../src/components/dev/PRDetailView';
+import { AiDigest } from '../../src/components/pipeline/AiDigest';
+import { WorkItemCard } from '../../src/components/pipeline/WorkItemCard';
+import { ReleaseGroup } from '../../src/components/pipeline/ReleaseGroup';
+import { ExceptionCard } from '../../src/components/pipeline/ExceptionCard';
 
 // Map internal statuses → the buckets/labels the user asked for.
 const STATUS_META: Record<
@@ -50,9 +61,50 @@ const TARGET_LABEL: Record<string, string> = {
   prompt: 'Prompt',
 };
 
+function deriveExceptions(workItems: WorkItem[]): ExceptionItem[] {
+  return workItems
+    .filter((i) => i.exception)
+    .map((i) => {
+      let parsed: { body?: string; defaultAction?: string; deadlineIso?: string } = {};
+      try {
+        parsed = typeof i.exception === 'string' ? JSON.parse(i.exception) : ((i.exception as unknown) as typeof parsed);
+      } catch {
+        parsed = {};
+      }
+      const now = new Date();
+      const fallbackDeadline = new Date(now.getTime() + 48 * 60 * 60 * 1000).toISOString();
+      return {
+        id: i.id,
+        title: i.title,
+        body: parsed.body ?? 'This work item requires your input before proceeding.',
+        defaultAction: parsed.defaultAction ?? 'Pipeline will proceed with best-guess interpretation.',
+        deadlineIso: parsed.deadlineIso ?? fallbackDeadline,
+      };
+    });
+}
+
+function deriveChangeRef(workItemId: string | null | undefined, releases: Release[]): string | undefined {
+  if (!workItemId) return undefined;
+  for (const rel of releases) {
+    for (const chg of rel.changes) {
+      if (chg.work_item_id === workItemId) {
+        if (chg.pr_number) return `PR #${chg.pr_number}`;
+        if (chg.branch) return chg.branch;
+        if (chg.flag_key) return chg.flag_key;
+      }
+    }
+  }
+  return undefined;
+}
+
 export default function DevScreen() {
   const userId = useAuthStore((s) => s.user?.id ?? null);
+  const developerMode = useSettingsStore((s) => s.developerMode);
+
   const [requests, setRequests] = useState<DevRequest[]>([]);
+  const [workItems, setWorkItems] = useState<WorkItem[]>([]);
+  const [releases, setReleases] = useState<Release[]>([]);
+  const [digest, setDigest] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<DevRequest | null>(null);
@@ -62,8 +114,16 @@ export default function DevScreen() {
   const swipeableRefs = useRef<Record<string, Swipeable | null>>({});
 
   const load = useCallback(async () => {
-    const list = await listRequests(userId);
+    const [list, items, rels, dig] = await Promise.all([
+      listRequests(userId),
+      fetchWorkItems(),
+      fetchReleases(),
+      fetchDigest(),
+    ]);
     setRequests(list);
+    setWorkItems(items);
+    setReleases(rels);
+    setDigest(dig);
     setLoading(false);
   }, [userId]);
 
@@ -91,7 +151,7 @@ export default function DevScreen() {
       if (result.duplicate && result.attachedTo) {
         Alert.alert(
           'Already tracked',
-          `That looks like the same issue as “${result.attachedTo.title}”. Attached as evidence — no new build was started.`,
+          `That looks like the same issue as "${result.attachedTo.title}". Attached as evidence — no new build was started.`,
         );
       }
     } catch (err) {
@@ -110,6 +170,26 @@ export default function DevScreen() {
       Alert.alert('Archive failed', 'Could not archive this request. Please try again.');
     }
   }, []);
+
+  const exceptions = deriveExceptions(workItems);
+
+  // Group work items under their release. Items with no matching release go
+  // into an "Unassigned" group rendered last.
+  const releaseWorkItemMap: Map<string, WorkItem[]> = new Map();
+  const unassignedItems: WorkItem[] = [];
+
+  for (const item of workItems) {
+    let assigned = false;
+    for (const rel of releases) {
+      if (rel.changes.some((c) => c.work_item_id === item.id)) {
+        if (!releaseWorkItemMap.has(rel.id)) releaseWorkItemMap.set(rel.id, []);
+        releaseWorkItemMap.get(rel.id)!.push(item);
+        assigned = true;
+        break;
+      }
+    }
+    if (!assigned) unassignedItems.push(item);
+  }
 
   return (
     <SafeAreaView style={styles.container}>
@@ -162,63 +242,141 @@ export default function DevScreen() {
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.sectionHeader}>CHANGES</Text>
-
         {loading ? (
-          <ActivityIndicator color={Colors.coral} style={{ marginTop: Spacing.xl }} />
-        ) : requests.filter((r) => showArchived ? r.archived : !r.archived).length === 0 ? (
-          <Text style={styles.empty}>
-            No build requests yet. Turn on Developer mode, have a conversation about a change,
-            or send a directive above.
-          </Text>
+          <Text style={styles.empty}>Loading pipeline data…</Text>
         ) : (
-          [...requests]
-            .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-            .filter((r) => showArchived ? r.archived : !r.archived)
-            .map((r) => {
-            const meta = STATUS_META[r.status] ?? STATUS_META.pending;
-            const renderRightActions = () => (
-              <TouchableOpacity
-                style={styles.archiveAction}
-                onPress={() => onArchive(r.id)}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.archiveActionText}>Archive</Text>
-              </TouchableOpacity>
-            );
-            return (
-              <Swipeable
-                key={r.id}
-                ref={(ref) => { swipeableRefs.current[r.id] = ref; }}
-                renderRightActions={renderRightActions}
-                overshootRight={false}
-                friction={2}
-              >
-                <TouchableOpacity style={styles.card} onPress={() => setSelectedRequest(r)} activeOpacity={0.75}>
-                  <View style={styles.cardTop}>
-                    <Text style={styles.cardTitle} numberOfLines={2}>{r.title}</Text>
-                    <View style={[styles.badge, { borderColor: meta.color }]}>
-                      <Text style={[styles.badgeText, { color: meta.color }]}>{meta.label}</Text>
-                    </View>
-                  </View>
-                  <View style={styles.cardMeta}>
-                    <View style={styles.targetPill}>
-                      <Text style={styles.targetText}>{TARGET_LABEL[r.target] ?? r.target}</Text>
-                    </View>
-                    <Text style={styles.sourceText}>
-                      {r.source === 'directive' ? 'from directive' : 'from conversation'}
-                    </Text>
-                  </View>
-                  {r.error ? <Text style={styles.errorText}>{r.error}</Text> : null}
-                  {r.pr_url ? (
-                    <Text style={styles.prLink}>
-                      View PR{r.pr_number ? ` #${r.pr_number}` : ''} ›
-                    </Text>
-                  ) : null}
-                </TouchableOpacity>
-              </Swipeable>
-            );
-          })
+          <>
+            <AiDigest digest={digest} />
+
+            {exceptions.length > 0 ? (
+              <View style={styles.exceptionsSection}>
+                <Text style={styles.sectionHeader}>NEEDS YOUR INPUT</Text>
+                {exceptions.map((ex) => (
+                  <ExceptionCard
+                    key={ex.id}
+                    title={ex.title}
+                    body={ex.body}
+                    defaultAction={ex.defaultAction}
+                    deadlineIso={ex.deadlineIso}
+                  />
+                ))}
+              </View>
+            ) : null}
+
+            <Text style={styles.sectionHeader}>WORK ITEMS</Text>
+
+            {workItems.length === 0 ? (
+              <Text style={styles.empty}>
+                No work items yet — submissions will appear here.
+              </Text>
+            ) : (
+              <>
+                {releases.length === 0 ? (
+                  <Text style={styles.empty}>No releases yet.</Text>
+                ) : null}
+
+                {releases.map((rel) => {
+                  const items = releaseWorkItemMap.get(rel.id) ?? [];
+                  if (items.length === 0) return null;
+                  return (
+                    <ReleaseGroup
+                      key={rel.id}
+                      releaseLabel={`v${rel.version}`}
+                      releasedAt={rel.created_at}
+                    >
+                      {items.map((item) => (
+                        <WorkItemCard
+                          key={item.id}
+                          title={item.title}
+                          status={item.stage}
+                          evidenceCount={item.submission_count}
+                          changeRef={deriveChangeRef(item.id, releases)}
+                        />
+                      ))}
+                    </ReleaseGroup>
+                  );
+                })}
+
+                {unassignedItems.length > 0 ? (
+                  <ReleaseGroup
+                    releaseLabel="Unassigned"
+                    releasedAt={unassignedItems[0].created_at}
+                  >
+                    {unassignedItems.map((item) => (
+                      <WorkItemCard
+                        key={item.id}
+                        title={item.title}
+                        status={item.stage}
+                        evidenceCount={item.submission_count}
+                        changeRef={deriveChangeRef(item.id, releases)}
+                      />
+                    ))}
+                  </ReleaseGroup>
+                ) : null}
+              </>
+            )}
+
+            {developerMode ? (
+              <View style={styles.plumbingSection}>
+                <Text style={styles.sectionHeader}>CHANGES (PLUMBING)</Text>
+
+                {requests.filter((r) => showArchived ? r.archived : !r.archived).length === 0 ? (
+                  <Text style={styles.empty}>
+                    No build requests yet. Turn on Developer mode, have a conversation about a change,
+                    or send a directive above.
+                  </Text>
+                ) : (
+                  [...requests]
+                    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                    .filter((r) => showArchived ? r.archived : !r.archived)
+                    .map((r) => {
+                    const meta = STATUS_META[r.status] ?? STATUS_META.pending;
+                    const renderRightActions = () => (
+                      <TouchableOpacity
+                        style={styles.archiveAction}
+                        onPress={() => onArchive(r.id)}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={styles.archiveActionText}>Archive</Text>
+                      </TouchableOpacity>
+                    );
+                    return (
+                      <Swipeable
+                        key={r.id}
+                        ref={(ref) => { swipeableRefs.current[r.id] = ref; }}
+                        renderRightActions={renderRightActions}
+                        overshootRight={false}
+                        friction={2}
+                      >
+                        <TouchableOpacity style={styles.card} onPress={() => setSelectedRequest(r)} activeOpacity={0.75}>
+                          <View style={styles.cardTop}>
+                            <Text style={styles.cardTitle} numberOfLines={2}>{r.title}</Text>
+                            <View style={[styles.badge, { borderColor: meta.color }]}>
+                              <Text style={[styles.badgeText, { color: meta.color }]}>{meta.label}</Text>
+                            </View>
+                          </View>
+                          <View style={styles.cardMeta}>
+                            <View style={styles.targetPill}>
+                              <Text style={styles.targetText}>{TARGET_LABEL[r.target] ?? r.target}</Text>
+                            </View>
+                            <Text style={styles.sourceText}>
+                              {r.source === 'directive' ? 'from directive' : 'from conversation'}
+                            </Text>
+                          </View>
+                          {r.error ? <Text style={styles.errorText}>{r.error}</Text> : null}
+                          {r.pr_url ? (
+                            <Text style={styles.prLink}>
+                              View PR{r.pr_number ? ` #${r.pr_number}` : ''} ›
+                            </Text>
+                          ) : null}
+                        </TouchableOpacity>
+                      </Swipeable>
+                    );
+                  })
+                )}
+              </View>
+            ) : null}
+          </>
         )}
       </ScrollView>
       <PRDetailView request={selectedRequest} onDismiss={() => setSelectedRequest(null)} />
@@ -272,7 +430,9 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     marginBottom: Spacing.sm,
   },
-  empty: { fontSize: 14, color: Colors.textTertiary, lineHeight: 20, marginTop: Spacing.sm },
+  exceptionsSection: { marginBottom: Spacing.md },
+  plumbingSection: { marginTop: Spacing.lg },
+  empty: { fontSize: 14, color: Colors.textTertiary, lineHeight: 20, marginTop: Spacing.sm, marginBottom: Spacing.md },
   card: {
     backgroundColor: Colors.surface,
     borderRadius: Radii.md,

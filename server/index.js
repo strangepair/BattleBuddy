@@ -3355,6 +3355,74 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     }
   }
 
+  // GET /api/pipeline/digest
+  // Returns a short plain-English summary (≤ 120 words) of recent pipeline
+  // activity and anything needing attention. Never errors — returns a safe
+  // fallback string when tables are empty or the database is unavailable.
+  if (req.method === 'GET' && req.url === '/api/pipeline/digest') {
+    if (!checkClientToken(req)) return send401Unauthorized(res);
+    if (!supabase) {
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ digest: 'No pipeline activity yet.' }));
+    }
+    try {
+      const [{ data: items }, { data: rels }] = await Promise.all([
+        supabase
+          .from('work_items')
+          .select('id, title, stage, subsystem, exception')
+          .order('updated_at', { ascending: false })
+          .limit(20),
+        supabase
+          .from('releases')
+          .select('id, version, status, created_at')
+          .order('created_at', { ascending: false })
+          .limit(5),
+      ]);
+
+      const workItems = items || [];
+      const releases = rels || [];
+
+      if (workItems.length === 0 && releases.length === 0) {
+        res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ digest: 'No pipeline activity yet.' }));
+      }
+
+      const exceptionItems = workItems.filter((i) => i.exception);
+      const activeItems = workItems.filter((i) => ['received', 'understood', 'building'].includes(i.stage));
+      const doneItems = workItems.filter((i) => i.stage === 'done');
+      const latestRelease = releases[0];
+
+      const parts = [];
+      if (latestRelease) {
+        parts.push(`Latest release: v${latestRelease.version} (${latestRelease.status}).`);
+      }
+      if (activeItems.length > 0) {
+        parts.push(`${activeItems.length} work item${activeItems.length === 1 ? '' : 's'} in progress.`);
+      }
+      if (doneItems.length > 0) {
+        parts.push(`${doneItems.length} item${doneItems.length === 1 ? '' : 's'} completed recently.`);
+      }
+      if (exceptionItems.length > 0) {
+        parts.push(`${exceptionItems.length} item${exceptionItems.length === 1 ? ' requires' : 's require'} your input.`);
+        const titles = exceptionItems.slice(0, 2).map((i) => `"${i.title}"`).join(', ');
+        parts.push(`Needs attention: ${titles}.`);
+      } else {
+        parts.push('No exceptions — pipeline is running autonomously.');
+      }
+      if (workItems.length > 0 && activeItems.length === 0 && exceptionItems.length === 0) {
+        parts.push('All tracked work is resolved.');
+      }
+
+      const digest = parts.join(' ').slice(0, 700);
+
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ digest }));
+    } catch (err) {
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ digest: 'No pipeline activity yet.' }));
+    }
+  }
+
   res.writeHead(404, CORS);
   res.end('Not found');
 });

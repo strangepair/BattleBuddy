@@ -145,3 +145,87 @@ export async function archiveRequest(id: string): Promise<boolean> {
     return false;
   }
 }
+
+export interface WorkItem {
+  id: string;
+  title: string;
+  stage: string;
+  subsystem?: string | null;
+  interpretation?: string | null;
+  exception?: string | null;
+  parent_work_item_id?: string | null;
+  submission_count: number;
+  latest_event?: {
+    id: string;
+    kind: string;
+    detail?: Record<string, unknown>;
+    created_at: string;
+  } | null;
+  created_at: string;
+  updated_at?: string | null;
+}
+
+export interface Release {
+  id: string;
+  version: string;
+  status: string;
+  notes?: string | null;
+  created_at: string;
+  changes: Array<{
+    id: string;
+    work_item_id?: string | null;
+    branch?: string | null;
+    pr_number?: number | null;
+    flag_key?: string | null;
+    status: string;
+    release_id: string;
+    created_at: string;
+  }>;
+}
+
+export interface ExceptionItem {
+  id: string;
+  title: string;
+  body: string;
+  defaultAction: string;
+  deadlineIso: string;
+}
+
+export async function fetchWorkItems(): Promise<WorkItem[]> {
+  try {
+    const res = await fetch(`${ApiConfig.DEV_URL}/api/pipeline/work-items`, {
+      headers: authHeaders(),
+    });
+    if (!res.ok) return [];
+    const json = await res.json();
+    return json.work_items ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchReleases(): Promise<Release[]> {
+  try {
+    const res = await fetch(`${ApiConfig.DEV_URL}/api/pipeline/releases`, {
+      headers: authHeaders(),
+    });
+    if (!res.ok) return [];
+    const json = await res.json();
+    return json.releases ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchDigest(): Promise<string> {
+  try {
+    const res = await fetch(`${ApiConfig.DEV_URL}/api/pipeline/digest`, {
+      headers: authHeaders(),
+    });
+    if (!res.ok) return '';
+    const json = await res.json();
+    return json.digest ?? '';
+  } catch {
+    return '';
+  }
+}
