@@ -1,4 +1,5 @@
 import { ApiConfig } from '../config';
+import { getAuthToken } from './supabase';
 
 // Single source of truth for "how many sessions/reports does this user have,
 // and what's their streak/resist-rate" — History, Analytics, and Goals all
@@ -98,8 +99,11 @@ export function formatCount(count: number, noun: string): string {
 
 async function fetchEvents(userId: string, eventTypes: string, limit: number): Promise<any[]> {
   try {
+    const token = await getAuthToken();
+    if (!token) return [];
     const res = await fetch(
       `${ApiConfig.CHAT_URL}/events?userId=${encodeURIComponent(userId)}&eventTypes=${eventTypes}&limit=${limit}`,
+      { headers: { Authorization: `Bearer ${token}` } },
     );
     if (!res.ok) return [];
     const data = await res.json();

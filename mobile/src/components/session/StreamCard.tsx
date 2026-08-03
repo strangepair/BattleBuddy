@@ -5,7 +5,6 @@ import BreathingCard from './BreathingCard';
 import HoursHeatmap from '../journey/HoursHeatmap';
 import { useAuthStore } from '../../stores/authStore';
 import {
-  fetchJourney,
   fetchStatsAll,
   heatmapFromStatsAll,
   formatGapMs,
@@ -86,7 +85,7 @@ function InlineVideoCard({
 
 function HeatmapCard() {
   const userId = useAuthStore((s) => s.user?.id ?? null);
-  const [data, setData] = useState<HeatmapData | null>(null);
+  const [data, setData] = useState<HeatmapData | null | 'empty'>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -96,8 +95,7 @@ function HeatmapCard() {
       if (live) {
         setData(heatmapFromStatsAll(live));
       } else {
-        const j = await fetchJourney(userId);
-        if (!cancelled) setData(j.heatmap);
+        setData('empty');
       }
     })();
     return () => {
@@ -107,7 +105,13 @@ function HeatmapCard() {
 
   return (
     <CardShell title="Your hours" sub="Urges by time of day — what Buddy watches for you">
-      {data ? <HoursHeatmap data={data} /> : <Text style={styles.loading}>loading…</Text>}
+      {data === null ? (
+        <Text style={styles.loading}>loading…</Text>
+      ) : data === 'empty' ? (
+        <Text style={styles.loading}>Not enough data yet</Text>
+      ) : (
+        <HoursHeatmap data={data} />
+      )}
     </CardShell>
   );
 }
