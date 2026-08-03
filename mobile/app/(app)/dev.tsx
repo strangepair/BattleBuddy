@@ -108,6 +108,7 @@ export default function DevScreen() {
   const [showArchived, setShowArchived] = useState(false);
   const [resubmitting, setResubmitting] = useState<string | null>(null);
   const swipeableRefs = useRef<Record<string, Swipeable | null>>({});
+  const isSwipingMap = useRef<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
     const [list, wis, rels, dg] = await Promise.all([
@@ -201,8 +202,11 @@ export default function DevScreen() {
     setRequests((prev) => prev.map((r) => r.id === id ? { ...r, archived: true } : r));
     const ok = await archiveRequest(id);
     if (!ok) {
+      isSwipingMap.current[id] = false;
       setRequests((prev) => prev.map((r) => r.id === id ? { ...r, archived: false } : r));
       Alert.alert('Archive failed', 'Could not archive this request. Please try again.');
+    } else {
+      isSwipingMap.current[id] = false;
     }
   }, []);
 
@@ -396,8 +400,14 @@ export default function DevScreen() {
                     renderRightActions={renderRightActions}
                     overshootRight={false}
                     friction={2}
+                    onSwipeableWillOpen={() => { isSwipingMap.current[r.id] = true; }}
+                    onSwipeableClose={() => { isSwipingMap.current[r.id] = false; }}
                   >
-                    <TouchableOpacity style={styles.card} onPress={() => setSelectedRequest(r)} activeOpacity={0.75}>
+                    <TouchableOpacity
+                      style={styles.card}
+                      onPress={() => { if (!isSwipingMap.current[r.id]) setSelectedRequest(r); }}
+                      activeOpacity={0.75}
+                    >
                       <View style={styles.cardTop}>
                         <Text style={styles.cardTitle} numberOfLines={2}>{r.title}</Text>
                         <View style={[styles.badge, { borderColor: meta.color }]}>
