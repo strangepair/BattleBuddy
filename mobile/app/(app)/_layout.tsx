@@ -151,18 +151,6 @@ export default function AppLayout() {
   const handleNavigate = useCallback((key: MenuKey) => {
     closeMenu();
     switch (key) {
-      case 'history':
-        router.push('/history');
-        break;
-      case 'analytics':
-        router.push('/analytics');
-        break;
-      case 'goals':
-        router.push('/goals');
-        break;
-      case 'routines':
-        router.push('/routines');
-        break;
       case 'preferences':
         router.push('/preferences');
         break;
@@ -197,10 +185,6 @@ export default function AppLayout() {
         <Stack.Screen name="reset-password" options={{ animation: 'fade' }} />
         <Stack.Screen name="onboarding" options={{ animation: 'fade' }} />
         <Stack.Screen name="disclaimer" options={{ animation: 'slide_from_right' }} />
-        <Stack.Screen name="history" options={{ animation: 'slide_from_right' }} />
-        <Stack.Screen name="analytics" options={{ animation: 'slide_from_right' }} />
-        <Stack.Screen name="goals" options={{ animation: 'slide_from_right' }} />
-        <Stack.Screen name="routines" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="preferences" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="voice-settings" options={{ animation: 'slide_from_right' }} />
         <Stack.Screen name="insights" options={{ animation: 'slide_from_right' }} />

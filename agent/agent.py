@@ -209,23 +209,6 @@ async def send_to_context_agent(user_id, messages, session_id=None, is_session_e
 server = AgentServer()
 
 
-@server.prewarm
-async def prewarm(proc):
-    try:
-        async with aiohttp.ClientSession() as http:
-            resp = await http.get(
-                f"{SERVER_URL}/livekit/agent-config-ping",
-                headers=auth_headers(),
-                timeout=aiohttp.ClientTimeout(total=5),
-            )
-            if resp.status in (401, 403):
-                logger.critical(
-                    "TRIPWIRE: agent-config route returned %s – voice will be broken until auth is fixed.",
-                    resp.status,
-                )
-    except Exception as exc:
-        logger.critical("TRIPWIRE: agent-config request failed at startup: %s", exc)
-
 
 @server.rtc_session(agent_name="battlebuddy")
 async def battlebuddy_session(ctx: agents.JobContext):
