@@ -16,7 +16,7 @@ import { useSessionStore, hydrateSessionStore } from '../../src/stores/sessionSt
 import { hydrateSettingsStore } from '../../src/stores/settingsStore';
 import { useAuthStore } from '../../src/stores/authStore';
 import { ApiConfig } from '../../src/config';
-import MenuOverlay from '../../src/components/common/MenuOverlay';
+import MenuOverlay, { type MenuKey } from '../../src/components/common/MenuOverlay';
 
 export default function AppLayout() {
   const closeMenu = useUIStore((s) => s.closeMenu);
@@ -148,7 +148,7 @@ export default function AppLayout() {
     setTimeout(() => router.replace(target!), 0);
   }, [authLoading, authUser, onboardingComplete]);
 
-  const handleNavigate = useCallback((key: string) => {
+  const handleNavigate = useCallback((key: MenuKey) => {
     closeMenu();
     switch (key) {
       case 'history':
@@ -172,6 +172,12 @@ export default function AppLayout() {
       case 'dev':
         router.push('/dev');
         break;
+      default: {
+        // Exhaustiveness guard: a MenuKey with no case above would ship as a
+        // menu row that does nothing when tapped. Fail typecheck instead.
+        const unhandled: never = key;
+        return unhandled;
+      }
     }
   }, [closeMenu]);
 

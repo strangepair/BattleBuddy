@@ -5,8 +5,21 @@ import { Colors, Spacing } from '../../theme';
 import { useUIStore } from '../../stores/uiStore';
 import { FeatureFlags } from '../../config';
 
+// The union is this menu's contract with the router: handleNavigate in
+// app/(app)/_layout.tsx switches exhaustively over it, so an item added here
+// without a route there is a typecheck failure rather than a row that does
+// nothing when tapped.
+export type MenuKey =
+  | 'history'
+  | 'insights'
+  | 'analytics'
+  | 'goals'
+  | 'routines'
+  | 'preferences'
+  | 'dev';
+
 interface MenuItem {
-  key: string;
+  key: MenuKey;
   label: string;
   icon: ComponentProps<typeof Ionicons>['name'];
 }
@@ -28,7 +41,7 @@ const ITEMS: MenuItem[] = [
 const DEV_ITEM: MenuItem = { key: 'dev', label: 'Build Pipeline', icon: 'cube-outline' };
 
 interface MenuOverlayProps {
-  onNavigate: (key: string) => void;
+  onNavigate: (key: MenuKey) => void;
 }
 
 export default function MenuOverlay({ onNavigate }: MenuOverlayProps) {
