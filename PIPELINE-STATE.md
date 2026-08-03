@@ -5,7 +5,7 @@ Source of truth for the Developer-mode pipeline's evolution into a general
 or a headless pipeline agent — should be able to resume from this file alone.
 Update this file whenever a numbered submission lands or a decision changes.
 
-Last updated: 2026-08-02 ~17:15 UTC (Claude chat session, working with Mike).
+Last updated: 2026-08-03 ~01:30 UTC (Claude chat session, working with Mike).
 
 ## Vision
 
@@ -212,6 +212,102 @@ same-numbered files touching one object would apply in an order nobody chose.
 `server/tests/migration-safety.test.js` now fails CI on duplicate numbers, and
 every migration must be idempotent (that guard predates this, from PR #77).
 
+## Submission 7 — build-train batch releases + GitHub-truth reconciliation
+
+Approved by Mike 2026-08-03. Replaces per-PR mobile builds with a build train,
+and makes the app's pipeline view a faithful mirror of GitHub rather than a
+parallel ledger that drifts.
+
+### Why: the drift is structural, not incidental
+
+Every status callback in `deploy.yml` and `autobuild.yml` is `curl -sf ... || true`
+(3 in each). A transient failure drops that transition PERMANENTLY — no retry,
+nothing notices. Transitions also only exist if a workflow posts one, so a
+cancelled, crashed or superseded run posts nothing, and `ci.yml`'s report job is
+gated on a `Dev-Request-Id` trailer so hand-made PRs post nothing at all.
+
+Push-only delivery + best-effort + no reconciler = guaranteed drift. That is
+what made "Rebuild build-pipeline screen" read in-flight 16 h after it shipped,
+and merged rows read failed. **Correctness must never depend on delivery.**
+
+### The build train (mechanism — do not replace with a custom scheduler)
+
+GitHub Actions concurrency already implements this. When a run enters a busy
+concurrency group it goes *pending*, and **any previously pending run in that
+group is cancelled**. With `cancel-in-progress: false` that yields exactly the
+train:
+
+- idle + mobile change lands -> runs immediately (zero latency)
+- build running + N more merges -> each supersedes the previous pending run, so
+  exactly ONE pending run survives
+- build finishes -> the survivor starts, checks out current main HEAD, and
+  therefore carries ALL accumulated changes
+- nothing pending -> drains to idle
+
+The batch window self-paces to build duration. One build at a time also
+permanently removes the resubmit concurrency-bypass collision.
+
+**Consequence that must be handled:** a superseded pending run never executes,
+so its `report` job never fires and its row would sit in `deploying` forever.
+Release grouping is therefore the completion mechanism, not garnish — the
+release marks every carried request deployed.
+
+### Reconciliation (the correctness backbone)
+
+GitHub is read as truth; the DB is a projection. ONE pure `deriveState(pr,
+checks, release) -> patch` is used by both the reconcile tick and (later)
+webhooks, so the paths cannot disagree.
+
+Tick (~60 s, beside `runDevBuildWorker`):
+1. list PRs updated since a cursor (`state=all`, sorted by `updated`)
+2. map PR -> request id from `headRefName` matching `^auto/dev-(<uuid>)$`,
+   falling back to the `Dev-Request-Id` trailer. This is a STATELESS re-link:
+   orphaned rows and orphaned PRs both recover from scratch.
+3. derive: open -> `in_review`; merged + released -> `deployed` + `release_id`;
+   merged, unreleased -> `deploying`; closed unmerged -> `superseded`; CI from
+   the check suite
+4. patch only on difference (no history spam)
+5. upsert the matching `changes` row; pull the `work_item` stage along
+6. orphan detection: `building` with no branch/PR after a grace period ->
+   `needs_attention` with a real reason
+
+**Precedence rule:** GitHub wins for anything GitHub knows about. Local-only
+states (`pending`, `duplicate`, scope-fence `needs_attention`) survive only
+while no PR exists. That is what stops a merged row reading failed.
+
+**Webhooks are a latency optimisation, not the mechanism** (stage 6, optional).
+Reconcile-first needs no new secret and no repo-settings change, and converges
+even when delivery fails — which is today's actual bug.
+
+### work_items sync is stages 1+2, not a separate task
+
+Nothing writes `changes` or `releases` — grep every `.from(...)` in
+`devPipeline.js` and only `work_items` is touched, at intake. `changes` is the
+missing join between `work_items` and `dev_build_requests`. Populating it IS the
+sync.
+
+### Stages
+
+| # | Scope | Gate |
+|---|-------|------|
+| 1 | Build train + releases grouping: `mobile-release.yml` (concurrency `mobile-release`), migration 022, `/dev/release/complete`, changelog "Build N — M changes" | touches `.github/**` -> direct PR, outside the autobuild fence |
+| 2 | Reconciler: GitHub-as-truth tick, `deriveState`, `changes`/`work_items` projection, orphan detection, stale-row repair | server-only |
+| 3 | Expedite flag: `expedite boolean`, dispatch under a UNIQUE concurrency group so it bypasses the train | trade-off: two concurrent EAS builds; EAS remote autoIncrement is atomic |
+| 4 | Live status: broadcast reconciler transitions over the existing SSE (`registerSseClient` in `server/broadcast.js`) instead of polling | — |
+| 5 | Merge queue (rebase+retest before landing) | **NEEDS MIKE**: Workflows-scoped token + branch-protection change. Do not attempt silently. |
+| 6 | Optional GitHub webhooks (`pull_request`, `workflow_run`, `check_suite`) into the same `deriveState` | needs a webhook secret |
+
+### Traceability note
+
+`dev_build_requests` is service-only RLS, so a chat session cannot insert rows
+directly. The Railway server holds the service-role key and writes these tables,
+so per-stage rows are created THROUGH a server path, and the stage-2 reconciler
+adopts any `Dev-Request-Id`-trailered commit on its first tick. Every stage ends
+up tracked either way.
+
+The same fact is why the reconciler repairs the stale rows automatically: the
+server can write them even though a chat session cannot.
+
 ## Next actions
 
 1. Mike: run the duplicate-submission test above from the app. It is now a real
@@ -220,12 +316,12 @@ every migration must be idempotent (that guard predates this, from PR #77).
 2. Dispatch Submission 3 (pipeline screen rebuild) after that passes.
 3. Submissions 4 -> 5 -> 6 in order; before 6, verify dispatch-metadata cap
    behaviour (promptGuard.js) still holds with the card context block.
-4. Reconcile the stale `dev_build_requests` rows that still read failed /
-   needs_attention for work that actually shipped: `758e028b` (PR #62, build
-   72), `08f6ba57` (PR #73), `a43d0e91` (PR #74, build 79), `cf741fe7` (PR #59).
-   All four merged and deployed; the red is an artifact of the old
-   non-idempotent migration failing the deploy job AFTER the real work
-   succeeded. Needs the service-role key (these tables are service-only RLS).
+4. Stale rows `758e028b` (PR #62, build 72), `08f6ba57` (PR #73), `a43d0e91`
+   (PR #74, build 79), `cf741fe7` (PR #59) still read failed / needs_attention
+   for work that actually shipped — an artifact of the old non-idempotent
+   migration failing the deploy job AFTER the real work succeeded. Submission 7
+   stage 2's reconciler repairs these automatically on its first tick (the
+   server holds the service-role key); no manual key handover needed.
 5. Store the Supabase service-role key as a GitHub Actions secret and confirm it
    in Railway env, so no future session needs it handed over:
    `gh secret set SUPABASE_SERVICE_ROLE_KEY --repo strangepair/BattleBuddy < <file>`.
