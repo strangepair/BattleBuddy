@@ -170,3 +170,70 @@ export async function resubmitRequest(
     return { ok: false, error: 'Could not reach the pipeline.' };
   }
 }
+
+export interface WorkItem {
+  id: string;
+  title: string;
+  stage: string;
+  subsystem?: string | null;
+  exception?: string | null;
+  submission_count: number;
+  latest_event?: { kind: string; created_at: string } | null;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface Release {
+  id: string;
+  version: string;
+  status: string;
+  notes?: string | null;
+  created_at: string;
+  changes: Array<{
+    id: string;
+    work_item_id?: string | null;
+    branch?: string | null;
+    pr_number?: number | null;
+    flag_key?: string | null;
+    status: string;
+  }>;
+}
+
+export async function fetchWorkItems(): Promise<WorkItem[]> {
+  try {
+    const res = await fetch(`${ApiConfig.DEV_URL}/api/pipeline/work-items`, {
+      headers: authHeaders(),
+    });
+    if (!res.ok) return [];
+    const json = await res.json();
+    return json.work_items ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchReleases(): Promise<Release[]> {
+  try {
+    const res = await fetch(`${ApiConfig.DEV_URL}/api/pipeline/releases`, {
+      headers: authHeaders(),
+    });
+    if (!res.ok) return [];
+    const json = await res.json();
+    return json.releases ?? [];
+  } catch {
+    return [];
+  }
+}
+
+export async function fetchDigest(): Promise<string> {
+  try {
+    const res = await fetch(`${ApiConfig.DEV_URL}/api/pipeline/digest`, {
+      headers: authHeaders(),
+    });
+    if (!res.ok) return '';
+    const json = await res.json();
+    return json.digest ?? '';
+  } catch {
+    return '';
+  }
+}

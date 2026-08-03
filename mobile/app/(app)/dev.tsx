@@ -15,18 +15,27 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import Swipeable from 'react-native-gesture-handler/Swipeable';
 import { router, useFocusEffect } from 'expo-router';
 import { useAuthStore } from '../../src/stores/authStore';
+import { useSettingsStore } from '../../src/stores/settingsStore';
 import {
   listRequests,
   submitDirective,
   archiveRequest,
   resubmitRequest,
+  fetchWorkItems,
+  fetchReleases,
+  fetchDigest,
   type DevRequest,
   type DevRequestStatus,
+  type WorkItem,
+  type Release,
 } from '../../src/services/devService';
 import { Colors, Spacing, Radii } from '../../src/theme';
 import { PRDetailView } from '../../src/components/dev/PRDetailView';
+import { AiDigest } from '../../src/components/pipeline/AiDigest';
+import { WorkItemCard } from '../../src/components/pipeline/WorkItemCard';
+import { ReleaseGroup } from '../../src/components/pipeline/ReleaseGroup';
+import { ExceptionCard } from '../../src/components/pipeline/ExceptionCard';
 
-// Map internal statuses → the buckets/labels the user asked for.
 const STATUS_META: Record<
   DevRequestStatus,
   { label: string; color: string; bucket: 'active' | 'done' | 'queued' | 'attention' }
@@ -39,8 +48,6 @@ const STATUS_META: Record<
   deployed: { label: 'Deployed', color: Colors.success, bucket: 'done' },
   failed: { label: 'Failed', color: Colors.error, bucket: 'attention' },
   needs_attention: { label: 'Needs attention', color: Colors.error, bucket: 'attention' },
-  // Not a failure: triage recognised it as already-tracked work, so no build
-  // ran. Neutral colour and the 'done' bucket keep it out of the red pile.
   duplicate: { label: 'Already tracked', color: Colors.textTertiary, bucket: 'done' },
 };
 
@@ -51,12 +58,48 @@ const TARGET_LABEL: Record<string, string> = {
   prompt: 'Prompt',
 };
 
-// Statuses a human may retry from — mirrors RESUBMITTABLE on the server.
 const RESUBMITTABLE_STATUSES: DevRequestStatus[] = ['failed', 'needs_attention'];
+
+interface ExceptionItem {
+  id: string;
+  title: string;
+  body: string;
+  defaultAction: string;
+  deadlineIso: string;
+}
+
+function parseException(wi: WorkItem): ExceptionItem | null {
+  if (!wi.exception) return null;
+  let parsed: Record<string, string> = {};
+  try {
+    parsed = typeof wi.exception === 'string' ? JSON.parse(wi.exception) : wi.exception;
+  } catch {
+    return {
+      id: wi.id,
+      title: wi.title,
+      body: typeof wi.exception === 'string' ? wi.exception : '',
+      defaultAction: 'Proceed with best available information',
+      deadlineIso: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
+    };
+  }
+  return {
+    id: wi.id,
+    title: parsed.title ?? wi.title,
+    body: parsed.body ?? '',
+    defaultAction: parsed.defaultAction ?? 'Proceed with best available information',
+    deadlineIso: parsed.deadlineIso ?? new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
+  };
+}
 
 export default function DevScreen() {
   const userId = useAuthStore((s) => s.user?.id ?? null);
+  const developerMode = useSettingsStore((s) => s.developerMode);
+
   const [requests, setRequests] = useState<DevRequest[]>([]);
+  const [workItems, setWorkItems] = useState<WorkItem[]>([]);
+  const [releases, setReleases] = useState<Release[]>([]);
+  const [digest, setDigest] = useState<string>('');
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<DevRequest | null>(null);
@@ -67,12 +110,19 @@ export default function DevScreen() {
   const swipeableRefs = useRef<Record<string, Swipeable | null>>({});
 
   const load = useCallback(async () => {
-    const list = await listRequests(userId);
+    const [list, wis, rels, dg] = await Promise.all([
+      listRequests(userId),
+      fetchWorkItems(),
+      fetchReleases(),
+      fetchDigest(),
+    ]);
     setRequests(list);
+    setWorkItems(wis);
+    setReleases(rels);
+    setDigest(dg);
     setLoading(false);
   }, [userId]);
 
-  // Refresh whenever the screen gains focus (and once on mount).
   useFocusEffect(
     useCallback(() => {
       load();
@@ -96,7 +146,7 @@ export default function DevScreen() {
       if (result.duplicate && result.attachedTo) {
         Alert.alert(
           'Already tracked',
-          `That looks like the same issue as “${result.attachedTo.title}”. Attached as evidence — no new build was started.`,
+          `That looks like the same issue as "${result.attachedTo.title}". Attached as evidence — no new build was started.`,
         );
       }
     } catch (err) {
@@ -134,6 +184,35 @@ export default function DevScreen() {
     }
   }, []);
 
+  const exceptions: ExceptionItem[] = workItems
+    .map(parseException)
+    .filter((e): e is ExceptionItem => e !== null);
+
+  const workItemsByReleaseId: Record<string, WorkItem[]> = {};
+  const unreleasedItems: WorkItem[] = [];
+  for (const wi of workItems) {
+    const change = releases
+      .flatMap((r) => r.changes.map((c) => ({ releaseId: r.id, workItemId: c.work_item_id })))
+      .find((c) => c.workItemId === wi.id);
+    if (change) {
+      if (!workItemsByReleaseId[change.releaseId]) workItemsByReleaseId[change.releaseId] = [];
+      workItemsByReleaseId[change.releaseId].push(wi);
+    } else {
+      unreleasedItems.push(wi);
+    }
+  }
+
+  const changeRefForItem = (wi: WorkItem): string | undefined => {
+    for (const rel of releases) {
+      const ch = rel.changes.find((c) => c.work_item_id === wi.id);
+      if (ch) {
+        if (ch.pr_number) return `PR #${ch.pr_number}`;
+        if (ch.branch) return ch.branch;
+      }
+    }
+    return undefined;
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
@@ -142,10 +221,10 @@ export default function DevScreen() {
         </TouchableOpacity>
         <Text style={styles.title}>Build pipeline</Text>
         <View style={styles.archiveToggle}>
-          <Text style={styles.archiveLabel}>Archived</Text>
+          <Text style={styles.archiveLabel}>DEV</Text>
           <Switch
-            value={showArchived}
-            onValueChange={setShowArchived}
+            value={developerMode}
+            onValueChange={(v) => useSettingsStore.getState().setDeveloperMode(v)}
             trackColor={{ false: Colors.surfaceBorder, true: Colors.coral }}
             thumbColor="#fff"
           />
@@ -156,114 +235,195 @@ export default function DevScreen() {
         contentContainerStyle={styles.scroll}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.coral} />}
       >
-        <Text style={styles.blurb}>
-          Developer mode is recording your conversations and turning them into changes
-          that build and deploy automatically. Type a directive below to request one directly.
-        </Text>
+        <AiDigest digest={digest} />
 
-        <View style={styles.composer}>
-          <TextInput
-            style={styles.input}
-            placeholder="e.g. Make the greeting warmer and shorter"
-            placeholderTextColor={Colors.textTertiary}
-            value={directive}
-            onChangeText={setDirective}
-            multiline
-            editable={!submitting}
-          />
-          <TouchableOpacity
-            style={[styles.submitBtn, (!directive.trim() || submitting) && styles.submitBtnDisabled]}
-            onPress={onSubmit}
-            disabled={!directive.trim() || submitting}
-            activeOpacity={0.8}
-          >
-            {submitting ? (
-              <ActivityIndicator color="#fff" size="small" />
-            ) : (
-              <Text style={styles.submitText}>Send to pipeline</Text>
-            )}
-          </TouchableOpacity>
+        {exceptions.length > 0 ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionHeader}>NEEDS ATTENTION</Text>
+            {exceptions.map((ex) => (
+              <ExceptionCard
+                key={ex.id}
+                title={ex.title}
+                body={ex.body}
+                defaultAction={ex.defaultAction}
+                deadlineIso={ex.deadlineIso}
+              />
+            ))}
+          </View>
+        ) : null}
+
+        <View style={styles.section}>
+          <Text style={styles.sectionHeader}>WORK ITEMS</Text>
+          {loading ? (
+            <Text style={styles.empty}>Loading…</Text>
+          ) : workItems.length === 0 ? (
+            <Text style={styles.empty}>No work items yet — submissions will appear here.</Text>
+          ) : (
+            <>
+              {releases.map((rel) => {
+                const relItems = workItemsByReleaseId[rel.id];
+                if (!relItems || relItems.length === 0) return null;
+                return (
+                  <ReleaseGroup
+                    key={rel.id}
+                    releaseLabel={rel.version}
+                    releasedAt={rel.created_at}
+                  >
+                    {relItems.map((wi) => (
+                      <WorkItemCard
+                        key={wi.id}
+                        title={wi.title}
+                        status={wi.stage}
+                        evidenceCount={wi.submission_count}
+                        changeRef={changeRefForItem(wi)}
+                      />
+                    ))}
+                  </ReleaseGroup>
+                );
+              })}
+              {unreleasedItems.length > 0 ? (
+                <View style={styles.unreleasedGroup}>
+                  <Text style={styles.unreleasedLabel}>UNRELEASED</Text>
+                  {unreleasedItems.map((wi) => (
+                    <WorkItemCard
+                      key={wi.id}
+                      title={wi.title}
+                      status={wi.stage}
+                      evidenceCount={wi.submission_count}
+                      changeRef={changeRefForItem(wi)}
+                    />
+                  ))}
+                </View>
+              ) : null}
+            </>
+          )}
         </View>
 
-        <Text style={styles.sectionHeader}>CHANGES</Text>
+        {!loading && releases.length === 0 ? (
+          <Text style={styles.empty}>No releases yet.</Text>
+        ) : null}
 
-        {loading ? (
-          <ActivityIndicator color={Colors.coral} style={{ marginTop: Spacing.xl }} />
-        ) : requests.filter((r) => showArchived ? r.archived : !r.archived).length === 0 ? (
-          <Text style={styles.empty}>
-            No build requests yet. Turn on Developer mode, have a conversation about a change,
-            or send a directive above.
-          </Text>
-        ) : (
-          [...requests]
-            .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-            .filter((r) => showArchived ? r.archived : !r.archived)
-            .map((r) => {
-            const meta = STATUS_META[r.status] ?? STATUS_META.pending;
-            const renderRightActions = () => (
+        {developerMode ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionHeader}>PLUMBING — PIPELINE REQUESTS</Text>
+            <Text style={styles.blurb}>
+              Developer mode is recording your conversations and turning them into changes
+              that build and deploy automatically. Type a directive below to request one directly.
+            </Text>
+
+            <View style={styles.composer}>
+              <TextInput
+                style={styles.input}
+                placeholder="e.g. Make the greeting warmer and shorter"
+                placeholderTextColor={Colors.textTertiary}
+                value={directive}
+                onChangeText={setDirective}
+                multiline
+                editable={!submitting}
+              />
               <TouchableOpacity
-                style={styles.archiveAction}
-                onPress={() => onArchive(r.id)}
-                activeOpacity={0.85}
+                style={[styles.submitBtn, (!directive.trim() || submitting) && styles.submitBtnDisabled]}
+                onPress={onSubmit}
+                disabled={!directive.trim() || submitting}
+                activeOpacity={0.8}
               >
-                <Text style={styles.archiveActionText}>Archive</Text>
+                {submitting ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Text style={styles.submitText}>Send to pipeline</Text>
+                )}
               </TouchableOpacity>
-            );
-            return (
-              <Swipeable
-                key={r.id}
-                ref={(ref) => { swipeableRefs.current[r.id] = ref; }}
-                renderRightActions={renderRightActions}
-                overshootRight={false}
-                friction={2}
-              >
-                <TouchableOpacity style={styles.card} onPress={() => setSelectedRequest(r)} activeOpacity={0.75}>
-                  <View style={styles.cardTop}>
-                    <Text style={styles.cardTitle} numberOfLines={2}>{r.title}</Text>
-                    <View style={[styles.badge, { borderColor: meta.color }]}>
-                      <Text style={[styles.badgeText, { color: meta.color }]}>{meta.label}</Text>
-                    </View>
-                  </View>
-                  <View style={styles.cardMeta}>
-                    <View style={styles.targetPill}>
-                      <Text style={styles.targetText}>{TARGET_LABEL[r.target] ?? r.target}</Text>
-                    </View>
-                    <Text style={styles.sourceText}>
-                      {r.source === 'directive' ? 'from directive' : 'from conversation'}
-                    </Text>
-                  </View>
-                  {r.error ? <Text style={styles.errorText}>{r.error}</Text> : null}
-                  {r.next_retry_at ? (
-                    <Text style={styles.retryText}>
-                      Retrying automatically{r.attempts ? ` (attempt ${r.attempts + 1})` : ''}…
-                    </Text>
-                  ) : null}
-                  {r.pr_url ? (
-                    <Text style={styles.prLink}>
-                      View PR{r.pr_number ? ` #${r.pr_number}` : ''} ›
-                    </Text>
-                  ) : null}
-                  {RESUBMITTABLE_STATUSES.includes(r.status) && !r.next_retry_at ? (
-                    <TouchableOpacity
-                      style={styles.resubmitBtn}
-                      onPress={() => onResubmit(r.id)}
-                      disabled={resubmitting === r.id}
-                      hitSlop={8}
-                    >
-                      {resubmitting === r.id ? (
-                        <ActivityIndicator color={Colors.coral} size="small" />
-                      ) : (
-                        <Text style={styles.resubmitText}>
-                          Resubmit{r.attempts ? ` · ${r.attempts} attempt${r.attempts === 1 ? '' : 's'}` : ''}
+            </View>
+
+            <View style={styles.archiveRowToggle}>
+              <Text style={styles.archiveLabel}>Archived</Text>
+              <Switch
+                value={showArchived}
+                onValueChange={setShowArchived}
+                trackColor={{ false: Colors.surfaceBorder, true: Colors.coral }}
+                thumbColor="#fff"
+              />
+            </View>
+
+            {loading ? (
+              <ActivityIndicator color={Colors.coral} style={{ marginTop: Spacing.xl }} />
+            ) : requests.filter((r) => showArchived ? r.archived : !r.archived).length === 0 ? (
+              <Text style={styles.empty}>
+                No build requests yet. Turn on Developer mode, have a conversation about a change,
+                or send a directive above.
+              </Text>
+            ) : (
+              [...requests]
+                .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                .filter((r) => showArchived ? r.archived : !r.archived)
+                .map((r) => {
+                const meta = STATUS_META[r.status] ?? STATUS_META.pending;
+                const renderRightActions = () => (
+                  <TouchableOpacity
+                    style={styles.archiveAction}
+                    onPress={() => onArchive(r.id)}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.archiveActionText}>Archive</Text>
+                  </TouchableOpacity>
+                );
+                return (
+                  <Swipeable
+                    key={r.id}
+                    ref={(ref) => { swipeableRefs.current[r.id] = ref; }}
+                    renderRightActions={renderRightActions}
+                    overshootRight={false}
+                    friction={2}
+                  >
+                    <TouchableOpacity style={styles.card} onPress={() => setSelectedRequest(r)} activeOpacity={0.75}>
+                      <View style={styles.cardTop}>
+                        <Text style={styles.cardTitle} numberOfLines={2}>{r.title}</Text>
+                        <View style={[styles.badge, { borderColor: meta.color }]}>
+                          <Text style={[styles.badgeText, { color: meta.color }]}>{meta.label}</Text>
+                        </View>
+                      </View>
+                      <View style={styles.cardMeta}>
+                        <View style={styles.targetPill}>
+                          <Text style={styles.targetText}>{TARGET_LABEL[r.target] ?? r.target}</Text>
+                        </View>
+                        <Text style={styles.sourceText}>
+                          {r.source === 'directive' ? 'from directive' : 'from conversation'}
                         </Text>
-                      )}
+                      </View>
+                      {r.error ? <Text style={styles.errorText}>{r.error}</Text> : null}
+                      {r.next_retry_at ? (
+                        <Text style={styles.retryText}>
+                          Retrying automatically{r.attempts ? ` (attempt ${r.attempts + 1})` : ''}…
+                        </Text>
+                      ) : null}
+                      {r.pr_url ? (
+                        <Text style={styles.prLink}>
+                          View PR{r.pr_number ? ` #${r.pr_number}` : ''} ›
+                        </Text>
+                      ) : null}
+                      {RESUBMITTABLE_STATUSES.includes(r.status) && !r.next_retry_at ? (
+                        <TouchableOpacity
+                          style={styles.resubmitBtn}
+                          onPress={() => onResubmit(r.id)}
+                          disabled={resubmitting === r.id}
+                          hitSlop={8}
+                        >
+                          {resubmitting === r.id ? (
+                            <ActivityIndicator color={Colors.coral} size="small" />
+                          ) : (
+                            <Text style={styles.resubmitText}>
+                              Resubmit{r.attempts ? ` · ${r.attempts} attempt${r.attempts === 1 ? '' : 's'}` : ''}
+                            </Text>
+                          )}
+                        </TouchableOpacity>
+                      ) : null}
                     </TouchableOpacity>
-                  ) : null}
-                </TouchableOpacity>
-              </Swipeable>
-            );
-          })
-        )}
+                  </Swipeable>
+                );
+              })
+            )}
+          </View>
+        ) : null}
       </ScrollView>
       <PRDetailView request={selectedRequest} onDismiss={() => setSelectedRequest(null)} />
     </SafeAreaView>
@@ -287,8 +447,16 @@ const styles = StyleSheet.create({
   archiveToggle: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   archiveLabel: { fontSize: 12, color: Colors.textSecondary, fontWeight: '500' },
   scroll: { paddingHorizontal: Spacing.md, paddingTop: Spacing.lg, paddingBottom: Spacing.xxl },
+  section: { marginBottom: Spacing.lg },
+  sectionHeader: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.textTertiary,
+    letterSpacing: 1,
+    marginBottom: Spacing.sm,
+  },
   blurb: { fontSize: 13, color: Colors.textSecondary, lineHeight: 18, marginBottom: Spacing.md },
-  composer: { marginBottom: Spacing.xl },
+  composer: { marginBottom: Spacing.md },
   input: {
     backgroundColor: Colors.surface,
     borderRadius: Radii.md,
@@ -309,14 +477,22 @@ const styles = StyleSheet.create({
   },
   submitBtnDisabled: { opacity: 0.5 },
   submitText: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  sectionHeader: {
-    fontSize: 12,
+  archiveRowToggle: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: Spacing.sm },
+  empty: { fontSize: 14, color: Colors.textTertiary, lineHeight: 20, marginTop: Spacing.sm },
+  unreleasedGroup: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radii.md,
+    overflow: 'hidden',
+    marginBottom: Spacing.sm,
+    padding: Spacing.sm,
+  },
+  unreleasedLabel: {
+    fontSize: 10,
     fontWeight: '700',
     color: Colors.textTertiary,
     letterSpacing: 1,
-    marginBottom: Spacing.sm,
+    marginBottom: Spacing.xs,
   },
-  empty: { fontSize: 14, color: Colors.textTertiary, lineHeight: 20, marginTop: Spacing.sm },
   card: {
     backgroundColor: Colors.surface,
     borderRadius: Radii.md,
