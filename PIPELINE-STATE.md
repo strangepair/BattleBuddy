@@ -340,6 +340,65 @@ Two invariants worth keeping:
    under `if: always()` so a failed build fails its batch instead of stranding it
    in `deploying` forever.
 
+### Stage 2 — SHIPPED (GitHub-truth reconciler)
+
+Traceability id `ba7765f8-a4b7-4f99-acbc-9d09d8cf4263`.
+
+`server/devReconcile.js`, a 60 s tick beside `runDevBuildWorker`. It asks GitHub
+what is true and patches the difference. Stateless by construction: it re-derives
+everything every tick, so it repairs rows that drifted before it existed, rows
+that drift while it is down, and rows nobody ever told it about.
+
+**One derivation.** `deriveState()` is pure and is the only place a status is
+decided. Stage 6's webhooks call the same function with the same argument shape,
+so a webhook and a tick cannot disagree about the same PR.
+
+| GitHub says | derived |
+|---|---|
+| no PR | nothing — local-only states survive |
+| open, checks running | `in_review` |
+| open, checks green | `merging` (waiting on auto-merge) |
+| open, checks red | `failed` + `checks_status: failed` |
+| closed, never merged | `superseded` |
+| merged, Deploy run absent or running | `deploying` |
+| merged, Deploy run success | `deployed` |
+| merged, Deploy run failed | `failed` — **unless** a later successful main deploy carries it |
+| merged, touches `mobile/` | `deploying` until a release carrying it is `live` |
+
+**The rule that repairs the four stale rows.** `deploy.yml` deploys main
+WHOLESALE — `railway up` from a fresh checkout, `psql` over every migration
+file — so a later successful deploy of main means the earlier code is live no
+matter what its own run concluded. `758e028b` (#62) and `a43d0e91` (#74) had
+successful deploys and simply lost their callback; `cf741fe7` (#59) and
+`08f6ba57` (#73) failed their own deploy on the old non-idempotent migration
+AFTER the real work had succeeded. Both classes derive to `deployed`.
+
+The same rule settles a run that was CANCELLED rather than failed — Deploy #103
+(`63772c8e`, PR #109) was superseded while pending in the `deploy-main` group and
+so reported nothing at all. That is the drift mechanism operating in the repo
+today, not a hypothetical.
+
+**Precedence.** GitHub wins for anything GitHub knows about. `pending`,
+`duplicate` and a scope-fence `needs_attention` survive only while no PR exists —
+they are decisions GitHub never saw.
+
+**Adoption is how "every change is tracked" holds.** A PR with no row (a hand
+edit, an agent branch, the PRs shipping this submission) gets one, `source =
+'github'`, id reused from an `auto/dev-<uuid>` branch when there is one. Bounded:
+14-day window, 5 adoptions per tick.
+
+**Projection.** Each reconciled row upserts its `changes` row and pulls its
+`work_item` stage along — that IS the work-items sync, and it is what finally
+fills `changes`, empty since 018 because nothing wrote it. A row that already
+agrees gets only `reconciled_at`, never a history entry.
+
+**Orphans.** `building` with no branch and no PR after 30 minutes becomes
+`needs_attention` with a real reason (the Autobuild run died before it could
+push, so autobuild's own crash-net never fired).
+
+Not gated on `DEV_PIPELINE_ENABLED`: repairing state is correct even while
+dispatching is paused. `DEV_RECONCILE_ENABLED=false` is the kill switch.
+
 ### Traceability note
 
 `dev_build_requests` is service-only RLS, so a chat session cannot insert rows
@@ -423,9 +482,12 @@ hard outage. What this exposed, continuing the guard catalog:
 7. Audit why auto-merge branch deletion left 45 stale branches.
 8. When app #2 onboards: extract control plane to its own repo, move bot
    identity from PATs to a GitHub App, define pipeline.yml manifest.
-9. Merge the agent-CI-gate PR ONLY AFTER voice-fix 84c54095 deploys (main's
-   agent.py must import cleanly first or the new gate blocks every queued
-   PR), then add `agent (compile · import)` to required contexts.
+9. DONE 2026-08-03 21:0x UTC: voice-fix 84c54095 deployed (PR #115, agent
+   re-registered with LiveKit 20:57:39Z), agent-CI-gate PR #116 merged, and
+   `agent (compile · import)` added to required contexts. Found in passing:
+   agent/tests/test_deduplication.py imports `agent.utils`, which has never
+   existed (PR #101 wrote tests against an imagined module layout) — repair
+   before promoting the pytest job to required.
 10. Submit directives for guards 8–10 (post-deploy boot verification,
     evidence-first root cause, intake verification) after the queue clears
     the parked menu-cut item (559ffc0c — restore to pending post-voice-fix).

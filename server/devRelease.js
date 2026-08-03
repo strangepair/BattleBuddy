@@ -207,8 +207,9 @@ export async function linkReleaseContents(supabase, release) {
  * it is the join between a work item and the PR that implements it, and the
  * releases view on the Dev screen reads it.
  */
-export async function upsertChangeForRequest(supabase, request, releaseId) {
+export async function upsertChangeForRequest(supabase, request, releaseId, status) {
   const patch = {
+    ...(status ? { status } : {}),
     dev_request_id: request.id,
     work_item_id: request.work_item_id || null,
     title: request.title || null,
@@ -231,7 +232,7 @@ export async function upsertChangeForRequest(supabase, request, releaseId) {
   }
   const { data: inserted, error } = await supabase
     .from('changes')
-    .insert({ ...patch, status: 'merged' })
+    .insert({ status: 'merged', ...patch })
     .select('id')
     .single();
   if (error) {
