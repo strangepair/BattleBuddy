@@ -77,9 +77,18 @@ interface VoiceSessionProps {
   onError: (message: string) => void;
   /** Called when audio output fails to start within 5 s of a bot turn. */
   onVoiceFailed?: () => void;
+  /**
+   * Called with the final STT transcript text when the user finishes speaking.
+   * The parent (session.tsx) routes this through handleUserTurn so the voice
+   * path and the text-input path share the exact same agent-response pipeline
+   * (URGE_RE detection, sendMessage → streamChatTurn).
+   * Without this callback, addUserMessage would append the bubble to the stream
+   * but the agent would never receive the transcript and would never reply.
+   */
+  onTranscript?: (text: string) => void;
 }
 
-export default function VoiceSession({ muted, onAudioLevel, onError, onVoiceFailed }: VoiceSessionProps) {
+export default function VoiceSession({ muted, onAudioLevel, onError, onVoiceFailed, onTranscript }: VoiceSessionProps) {
   const [token, setToken] = useState<string | null>(null);
   const [wsUrl, setWsUrl] = useState<string | null>(null);
   const setMascotState = useSessionStore((s) => s.setMascotState);
@@ -150,7 +159,11 @@ export default function VoiceSession({ muted, onAudioLevel, onError, onVoiceFail
   return (
     <LiveKitRoom serverUrl={wsUrl} token={token} connect audio video={false}>
       <RoomStatus onAudioLevel={onAudioLevel} onVoiceFailed={onVoiceFailed} />
-      <TranscriptCapture />
+      {/* TranscriptCapture receives onTranscript so final user STT results are
+          routed through the parent's handleUserTurn (same as the text path)
+          rather than only written to the store via addUserMessage. This is the
+          critical link: without onTranscript the agent never sees the speech. */}
+      <TranscriptCapture onTranscript={onTranscript} />
       <MuteControl muted={muted} />
     </LiveKitRoom>
   );
@@ -168,9 +181,10 @@ function MuteControl({ muted }: { muted: boolean }) {
   return null;
 }
 
-function TranscriptCapture() {
+function TranscriptCapture({ onTranscript }: { onTranscript?: (text: string) => void }) {
   const room = useRoomContext();
-  const addUserMessage = useSessionStore((s) => s.addUserMessage);
+  // addAssistantMsg/updateAssistantMsg handle agent-side transcript bubbles.
+  // User-side transcripts are routed through onTranscript (see below).
   const addAssistantMsg = useSessionStore((s) => s.addAssistantMessage);
   const updateAssistantMsg = useSessionStore((s) => s.updateAssistantMessage);
   const lastAgentMsgId = useRef<string | null>(null);
@@ -207,8 +221,15 @@ function TranscriptCapture() {
           updateAssistantMsg(lastAgentMsgId.current, text);
         }
       } else if (isFinal) {
-        console.log(`[VOICE] User transcript captured: "${text.slice(0, 80)}"`);
-        addUserMessage(text);
+        // Final user transcript: route through the parent's handleUserTurn
+        // callback so the voice path uses the SAME agent-response pipeline as
+        // typed messages (URGE_RE detection → sendMessage → streamChatTurn).
+        // handleUserTurn calls addUserMessage internally, so the bubble appears
+        // in the stream AND the agent receives the transcript and replies.
+        console.log(`[VOICE] User transcript captured — routing to agent: "${text.slice(0, 80)}"`);
+        if (onTranscript) {
+          onTranscript(text);
+        }
       }
     };
 
@@ -217,7 +238,7 @@ function TranscriptCapture() {
     return () => {
       room.off(RoomEvent.TranscriptionReceived, handler);
     };
-  }, [room, addUserMessage, addAssistantMsg, updateAssistantMsg]);
+  }, [room, addAssistantMsg, updateAssistantMsg, onTranscript]);
 
   return null;
 }
