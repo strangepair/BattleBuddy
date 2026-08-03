@@ -16,7 +16,6 @@ import { useSessionStore, hydrateSessionStore } from '../../src/stores/sessionSt
 import { hydrateSettingsStore } from '../../src/stores/settingsStore';
 import { useAuthStore } from '../../src/stores/authStore';
 import { ApiConfig } from '../../src/config';
-import HamburgerMenu from '../../src/components/common/HamburgerMenu';
 import MenuOverlay from '../../src/components/common/MenuOverlay';
 
 export default function AppLayout() {
@@ -170,6 +169,9 @@ export default function AppLayout() {
       case 'insights':
         router.push('/insights');
         break;
+      case 'dev':
+        router.push('/dev');
+        break;
     }
   }, [closeMenu]);
 
@@ -182,7 +184,6 @@ export default function AppLayout() {
         screenOptions={{
           headerShown: false,
           contentStyle: { backgroundColor: Colors.background },
-          headerRight: () => <HamburgerMenu />,
         }}
       >
         <Stack.Screen name="index" />

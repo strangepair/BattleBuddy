@@ -3,6 +3,7 @@ import { Modal, View, Text, TouchableOpacity, StyleSheet, Pressable } from 'reac
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Spacing } from '../../theme';
 import { useUIStore } from '../../stores/uiStore';
+import { FeatureFlags } from '../../config';
 
 interface MenuItem {
   key: string;
@@ -19,6 +20,13 @@ const ITEMS: MenuItem[] = [
   { key: 'preferences', label: 'Preferences', icon: 'settings-outline' },
 ];
 
+// The build-pipeline dashboard. Gated the same way as the "Build pipeline
+// (Dev)" row in preferences.tsx: on the build-time availability flag (which
+// defaults on), never on the developerMode toggle — the dashboard is a
+// read-only view of recorded build requests, so reaching it must not depend
+// on the conversation being in dev mode.
+const DEV_ITEM: MenuItem = { key: 'dev', label: 'Build Pipeline', icon: 'cube-outline' };
+
 interface MenuOverlayProps {
   onNavigate: (key: string) => void;
 }
@@ -26,6 +34,7 @@ interface MenuOverlayProps {
 export default function MenuOverlay({ onNavigate }: MenuOverlayProps) {
   const menuOpen = useUIStore((s) => s.menuOpen);
   const closeMenu = useUIStore((s) => s.closeMenu);
+  const items = FeatureFlags.developerModeAvailable ? [...ITEMS, DEV_ITEM] : ITEMS;
 
   return (
     <Modal
@@ -45,7 +54,7 @@ export default function MenuOverlay({ onNavigate }: MenuOverlayProps) {
           </View>
 
           <View style={styles.items}>
-            {ITEMS.map(({ key, label, icon }) => (
+            {items.map(({ key, label, icon }) => (
               <TouchableOpacity
                 key={key}
                 style={styles.item}
