@@ -175,9 +175,10 @@ export function useActivityLog(
 
   const allDays = (() => {
     if (historyBuckets.length === 0) return [todayBucket];
+    const newestHistory = historyBuckets[0]?.date ?? today;
     const oldestLoaded = historyBuckets[historyBuckets.length - 1]?.date ?? today;
     const fillFrom = hasMore ? oldestLoaded : accountStart;
-    const historyFilled = fillEmptyDays(historyBuckets, fillFrom, oldestLoaded);
+    const historyFilled = fillEmptyDays(historyBuckets, fillFrom, newestHistory);
     return [todayBucket, ...historyFilled];
   })();
 
