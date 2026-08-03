@@ -337,6 +337,8 @@ async def battlebuddy_session(ctx: agents.JobContext):
     class SessionAgent(Agent):
         def __init__(self):
             super().__init__(instructions=system_prompt)
+            from agent.utils.deduplication import EventDeduplicator
+            self._event_dedup = EventDeduplicator()
 
         @function_tool()
         async def check_dev_mode(self):
@@ -436,6 +438,9 @@ async def battlebuddy_session(ctx: agents.JobContext):
         @function_tool()
         async def log_event(self, event_type: str, occurred_at: str = "", notes: str = "", trigger: str = "", location: str = ""):
             """Log a smoking or urge event the user just told you about. event_type is one of: cigarette, urge_resisted, urge_gave_in, milestone. ALWAYS leave occurred_at empty for 'right now' — the server stamps the authoritative current time; never compute 'now' yourself. Only pass occurred_at when back-dating, as the user's LOCAL wall-clock time exactly as they said it (e.g. '2026-07-29T16:43:00') — no timezone conversion, no UTC offset. trigger: optional short label for what triggered the event (e.g. 'after coffee', 'stress'). location: optional short label for where it happened (e.g. 'car', 'garage'). When the user explicitly requests logging ('log', 'log that', 'log it', 'log my ...') with a discernible event type, call this tool immediately — do NOT ask a confirmation question first. Only ask a clarifying question when no event type can be inferred. For ambiguous slip disclosures where the user has NOT explicitly requested logging, confirm first. Confirm back what you logged in one short line."""
+            if self._event_dedup.should_skip(event_type):
+                print(f"[Agent] log_event {event_type} deduplicated — skipping backend call")
+                return json.dumps({"ok": True, "deduplicated": True})
             try:
                 metadata: dict = {"source": "voice"}
                 if notes:
@@ -461,6 +466,7 @@ async def battlebuddy_session(ctx: agents.JobContext):
                     )
                     data = await resp.json()
                     print(f"[Agent] log_event {event_type} for {user_id}: {data}")
+                    self._event_dedup.record(event_type)
                     return json.dumps(data)
             except Exception as e:
                 print(f"[Agent] log_event failed: {e}")
