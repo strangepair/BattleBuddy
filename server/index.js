@@ -47,6 +47,7 @@ import { jsonrepair } from 'jsonrepair';
 import { broadcastToUser, registerSseClient } from './broadcast.js';
 import { broadcastDashboard } from './broadcastDashboard.js';
 import { findDuplicate, findActivityDuplicate } from './middleware/deduplicate.js';
+import { listSessions } from './controllers/sessionsController.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -3420,6 +3421,36 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     } catch (err) {
       res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ digest: 'No pipeline activity yet.' }));
+    }
+  }
+
+  if (req.method === 'GET' && req.url.startsWith('/api/sessions')) {
+    if (!supabase) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Session store not configured' }));
+    }
+    try {
+      const authHeader = req.headers['authorization'] || '';
+      const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+      if (!token) return send401(res, 401, 'Missing credentials');
+      const { data: userData, error: authErr } = await supabase.auth.getUser(token);
+      if (authErr || !userData?.user) return send401(res, 401, 'Invalid token');
+      const userId = userData.user.id;
+
+      const url = new URL(req.url, 'http://localhost');
+      const before = url.searchParams.get('before') || new Date().toISOString();
+      const limit = url.searchParams.get('limit') || '20';
+
+      const result = await listSessions(supabase, userId, { before, limit });
+      if (result.error) {
+        res.writeHead(result.status, { ...CORS, 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: result.error }));
+      }
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ sessions: result.sessions, nextCursor: result.nextCursor }));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
     }
   }
 
