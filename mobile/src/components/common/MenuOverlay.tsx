@@ -10,11 +10,7 @@ import { FeatureFlags } from '../../config';
 // without a route there is a typecheck failure rather than a row that does
 // nothing when tapped.
 export type MenuKey =
-  | 'history'
   | 'insights'
-  | 'analytics'
-  | 'goals'
-  | 'routines'
   | 'preferences'
   | 'dev';
 
@@ -25,11 +21,7 @@ interface MenuItem {
 }
 
 const ITEMS: MenuItem[] = [
-  { key: 'history',     label: 'History',     icon: 'time-outline' },
   { key: 'insights',    label: 'Insights',    icon: 'sparkles-outline' },
-  { key: 'analytics',   label: 'Analytics',   icon: 'pulse-outline' },
-  { key: 'goals',       label: 'Goals',       icon: 'flag-outline' },
-  { key: 'routines',    label: 'Routines',    icon: 'repeat-outline' },
   { key: 'preferences', label: 'Preferences', icon: 'settings-outline' },
 ];
 
