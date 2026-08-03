@@ -1,6 +1,6 @@
-import { useRef, useEffect } from 'react';
-import { ScrollView, View, Text, StyleSheet } from 'react-native';
-import { Colors, Spacing } from '../../theme';
+import { useRef, useEffect, useState, useCallback } from 'react';
+import { ScrollView, View, Text, StyleSheet, Pressable } from 'react-native';
+import { Colors, Spacing, Radii } from '../../theme';
 import ProjectedRoutineLayer from './ProjectedRoutineLayer';
 import ActualsLayer from './ActualsLayer';
 import type { HourSlot } from '../../hooks/useRoutineProjection';
@@ -38,6 +38,11 @@ function minuteOffset(hour: number, minute: number): number {
   return (hour * 60 + minute) * MINUTE_HEIGHT;
 }
 
+function getNowScrollTarget(): number {
+  const now = new Date();
+  return Math.max(0, minuteOffset(now.getHours(), now.getMinutes()) - 80);
+}
+
 /**
  * DayCalendarView renders a vertically scrollable minute-level 24-hour timeline.
  *
@@ -52,13 +57,24 @@ function minuteOffset(hour: number, minute: number): number {
  */
 export default function DayCalendarView({ projected, actuals, previousDays = [], onPressLog, onPressSlot }: DayCalendarViewProps) {
   const scrollRef = useRef<ScrollView>(null);
+  const [scrollY, setScrollY] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
   const maxAvg = Math.max(...projected.map((s) => s.avgCount), 0);
 
   useEffect(() => {
-    const now = new Date();
-    const offset = minuteOffset(now.getHours(), now.getMinutes());
-    const scrollTo = Math.max(0, offset - 80);
-    scrollRef.current?.scrollTo({ y: scrollTo, animated: false });
+    scrollRef.current?.scrollTo({ y: getNowScrollTarget(), animated: false });
+  }, []);
+
+  const handleScroll = useCallback((e: { nativeEvent: { contentOffset: { y: number } } }) => {
+    setScrollY(e.nativeEvent.contentOffset.y);
+  }, []);
+
+  const handleLayout = useCallback((e: { nativeEvent: { layout: { height: number } } }) => {
+    setViewportHeight(e.nativeEvent.layout.height);
+  }, []);
+
+  const jumpToNow = useCallback(() => {
+    scrollRef.current?.scrollTo({ y: getNowScrollTarget(), animated: true });
   }, []);
 
   const hours = Array.from({ length: 24 }, (_, i) => i);
@@ -66,12 +82,18 @@ export default function DayCalendarView({ projected, actuals, previousDays = [],
   const nowMinute = new Date().getMinutes();
   const nowOffset = minuteOffset(nowHour, nowMinute);
 
+  const nowVisible = viewportHeight > 0 && nowOffset >= scrollY && nowOffset <= scrollY + viewportHeight;
+  const showJumpToNow = !nowVisible;
+
   return (
+    <View style={styles.wrapper} onLayout={handleLayout}>
     <ScrollView
       ref={scrollRef}
       style={styles.scroll}
       contentContainerStyle={styles.container}
       showsVerticalScrollIndicator={true}
+      onScroll={handleScroll}
+      scrollEventThrottle={100}
     >
       <Text style={styles.sectionLabel}>TODAY'S TIMELINE</Text>
       <View style={[styles.timeline, { height: TOTAL_MINUTES * MINUTE_HEIGHT }]}>
@@ -117,12 +139,47 @@ export default function DayCalendarView({ projected, actuals, previousDays = [],
         />
       </View>
     </ScrollView>
+    {showJumpToNow && (
+      <Pressable
+        style={styles.jumpToNowBtn}
+        onPress={jumpToNow}
+        accessibilityLabel="Jump to now"
+        accessibilityRole="button"
+      >
+        <Text style={styles.jumpToNowText}>Now</Text>
+      </Pressable>
+    )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  wrapper: {
+    flex: 1,
+    position: 'relative',
+  },
   scroll: {
     flex: 1,
+  },
+  jumpToNowBtn: {
+    position: 'absolute',
+    bottom: Spacing.md,
+    right: Spacing.md,
+    backgroundColor: Colors.stateIdle,
+    borderRadius: Radii.full,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  jumpToNowText: {
+    color: Colors.textPrimary,
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
   container: {
     paddingBottom: Spacing.lg,
