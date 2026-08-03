@@ -280,6 +280,9 @@ function publicRow(r) {
     error: r.error,
     archived: r.archived ?? false,
     changeSummary: r.change_summary ?? null,
+    attempts: r.attempts ?? 0,
+    failure_class: r.failure_class ?? null,
+    next_retry_at: r.next_retry_at ?? null,
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -332,6 +335,61 @@ async function dispatchBuild(request) {
     const body = await res.text().catch(() => '');
     throw new Error(`github dispatch ${res.status}: ${body.slice(0, 200)}`);
   }
+}
+
+// ─── Manual resubmit ─────────────────────────────────────────────────────────
+
+/** Statuses a human is allowed to retry from. */
+export const RESUBMITTABLE = ['failed', 'needs_attention'];
+
+/**
+ * Which action actually un-sticks this request.
+ *
+ * A deploy failure means the code is already merged — regenerating it would
+ * write the same change twice. Re-running the Deploy workflow for the merge
+ * commit is the only correct repair. Everything else (checks failed, stale
+ * branch, dispatch never landed) needs a fresh build off current main.
+ */
+export function resubmitPlan(row) {
+  if (!row) return null;
+  if (row.deploy_status === 'failed' && row.pr_number) return 'rerun_deploy';
+  return 'redispatch_build';
+}
+
+async function githubJson(url, init) {
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) throw new Error('GITHUB_TOKEN not set');
+  const res = await fetch(url, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      ...(init && init.headers),
+    },
+  });
+  if (!res.ok) throw new Error(`github ${res.status} for ${url.split('/repos/')[1] || url}`);
+  return res;
+}
+
+/** Re-run the Deploy workflow for the merge commit of this request's PR. */
+async function rerunDeploy(row) {
+  const prRes = await githubJson(`https://api.github.com/repos/${GITHUB_REPO}/pulls/${row.pr_number}`);
+  const pr = await prRes.json();
+  const sha = pr.merge_commit_sha;
+  if (!sha) throw new Error('PR has no merge commit yet — nothing to redeploy');
+
+  const runsRes = await githubJson(
+    `https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/deploy.yml/runs?head_sha=${sha}&per_page=1`,
+  );
+  const runs = await runsRes.json();
+  const runId = runs.workflow_runs && runs.workflow_runs[0] && runs.workflow_runs[0].id;
+  if (!runId) throw new Error(`no Deploy run found for merge commit ${sha.slice(0, 7)}`);
+
+  await githubJson(
+    `https://api.github.com/repos/${GITHUB_REPO}/actions/runs/${runId}/rerun-failed-jobs`,
+    { method: 'POST' },
+  );
 }
 
 // ─── Failure classification + circuit breaker ────────────────────────────────
@@ -1042,6 +1100,53 @@ export async function handleDevPipeline(req, res, deps) {
       .eq('id', id);
     if (patchErr) return json(500, { error: patchErr.message });
     return json(200, { ok: true });
+  }
+
+  // POST /dev/requests/:id/resubmit — human "try again" for a stuck request.
+  // The auto-retry loop deliberately refuses terminal failures (scope fence,
+  // destructive migration); this is the escape hatch for when the underlying
+  // cause has been fixed by hand.
+  if (req.method === 'POST' && path.startsWith('/dev/requests/') && path.endsWith('/resubmit')) {
+    if (!checkClientToken(req)) return json(401, { error: 'unauthorized' });
+    if (!supabase) return json(404, { error: 'not found' });
+    const id = decodeURIComponent(path.slice('/dev/requests/'.length, -'/resubmit'.length));
+
+    const { data: row } = await supabase.from('dev_build_requests').select('*').eq('id', id).single();
+    if (!row) return json(404, { error: 'not found' });
+    if (!RESUBMITTABLE.includes(row.status)) {
+      return json(409, { error: `cannot resubmit a request that is ${row.status}` });
+    }
+
+    const plan = resubmitPlan(row);
+    try {
+      if (plan === 'rerun_deploy') await rerunDeploy(row);
+      else await dispatchBuild(row);
+
+      // A human resubmitting is asserting the underlying fault is fixed, so
+      // the breaker for this signature reopens the road for its siblings too.
+      await resolveAlert(supabase, row.failure_signature);
+      await setStatus(
+        supabase,
+        id,
+        {
+          status: plan === 'rerun_deploy' ? 'deploying' : 'building',
+          attempts: (row.attempts ?? 0) + 1,
+          next_retry_at: null,
+          error: null,
+        },
+        `manual resubmit (${plan})`,
+      );
+      return json(200, { ok: true, plan });
+    } catch (err) {
+      await applyFailure(
+        supabase,
+        id,
+        { status: 'failed', error: String(err.message).slice(0, 300) },
+        'manual resubmit failed',
+        'resubmit',
+      );
+      return json(502, { error: err.message });
+    }
   }
 
   // POST /dev/pause — runtime kill switch (admin only).

@@ -19,6 +19,7 @@ import {
   listRequests,
   submitDirective,
   archiveRequest,
+  resubmitRequest,
   type DevRequest,
   type DevRequestStatus,
 } from '../../src/services/devService';
@@ -50,6 +51,9 @@ const TARGET_LABEL: Record<string, string> = {
   prompt: 'Prompt',
 };
 
+// Statuses a human may retry from — mirrors RESUBMITTABLE on the server.
+const RESUBMITTABLE_STATUSES: DevRequestStatus[] = ['failed', 'needs_attention'];
+
 export default function DevScreen() {
   const userId = useAuthStore((s) => s.user?.id ?? null);
   const [requests, setRequests] = useState<DevRequest[]>([]);
@@ -59,6 +63,7 @@ export default function DevScreen() {
   const [directive, setDirective] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [resubmitting, setResubmitting] = useState<string | null>(null);
   const swipeableRefs = useRef<Record<string, Swipeable | null>>({});
 
   const load = useCallback(async () => {
@@ -100,6 +105,24 @@ export default function DevScreen() {
       setSubmitting(false);
     }
   }, [directive, submitting, userId, load]);
+
+  const onResubmit = useCallback(async (id: string) => {
+    if (resubmitting) return;
+    setResubmitting(id);
+    const result = await resubmitRequest(id);
+    setResubmitting(null);
+    if (!result.ok) {
+      Alert.alert('Could not resubmit', result.error ?? 'The pipeline refused that request.');
+      return;
+    }
+    await load();
+    Alert.alert(
+      'Resubmitted',
+      result.plan === 'rerun_deploy'
+        ? 'The code was already merged, so the deploy is being re-run.'
+        : 'A fresh build has been dispatched from current main.',
+    );
+  }, [resubmitting, load]);
 
   const onArchive = useCallback(async (id: string) => {
     swipeableRefs.current[id]?.close();
@@ -210,10 +233,31 @@ export default function DevScreen() {
                     </Text>
                   </View>
                   {r.error ? <Text style={styles.errorText}>{r.error}</Text> : null}
+                  {r.next_retry_at ? (
+                    <Text style={styles.retryText}>
+                      Retrying automatically{r.attempts ? ` (attempt ${r.attempts + 1})` : ''}…
+                    </Text>
+                  ) : null}
                   {r.pr_url ? (
                     <Text style={styles.prLink}>
                       View PR{r.pr_number ? ` #${r.pr_number}` : ''} ›
                     </Text>
+                  ) : null}
+                  {RESUBMITTABLE_STATUSES.includes(r.status) && !r.next_retry_at ? (
+                    <TouchableOpacity
+                      style={styles.resubmitBtn}
+                      onPress={() => onResubmit(r.id)}
+                      disabled={resubmitting === r.id}
+                      hitSlop={8}
+                    >
+                      {resubmitting === r.id ? (
+                        <ActivityIndicator color={Colors.coral} size="small" />
+                      ) : (
+                        <Text style={styles.resubmitText}>
+                          Resubmit{r.attempts ? ` · ${r.attempts} attempt${r.attempts === 1 ? '' : 's'}` : ''}
+                        </Text>
+                      )}
+                    </TouchableOpacity>
                   ) : null}
                 </TouchableOpacity>
               </Swipeable>
@@ -299,6 +343,17 @@ const styles = StyleSheet.create({
   targetText: { fontSize: 11, fontWeight: '600', color: Colors.textSecondary },
   sourceText: { fontSize: 12, color: Colors.textTertiary },
   errorText: { fontSize: 12, color: Colors.error, lineHeight: 16 },
+  retryText: { fontSize: 12, color: Colors.textTertiary, marginTop: 4 },
+  resubmitBtn: {
+    marginTop: Spacing.sm,
+    alignSelf: 'flex-start',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: Radii.sm,
+    borderWidth: 1,
+    borderColor: Colors.coral,
+  },
+  resubmitText: { fontSize: 13, fontWeight: '600', color: Colors.coral },
   prLink: { fontSize: 13, fontWeight: '600', color: Colors.coral },
   archiveAction: {
     backgroundColor: Colors.error,
