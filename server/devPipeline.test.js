@@ -535,7 +535,7 @@ function makeSelfHealSupabase(seed = {}) {
     let limitN = null;
 
     const self = {
-      select(_cols, opt) { mode = 'select'; if (opt && opt.head) head = true; return self; },
+      select(_cols, opt) { if (opt && opt.head) head = true; return self; },
       insert(rows) { mode = 'insert'; insertRows = Array.isArray(rows) ? rows : [rows]; return self; },
       update(p) { mode = 'update'; patch = p; return self; },
       eq(c, v) { preds.push((r) => r[c] === v); return self; },
@@ -563,15 +563,20 @@ function makeSelfHealSupabase(seed = {}) {
         };
 
         if (mode === 'insert') {
+          const stored = [];
           for (const row of insertRows) {
             // Mirrors the partial unique index: one OPEN alert per signature.
             if (name === 'pipeline_alerts'
               && store.pipeline_alerts.some((a) => a.signature === row.signature && !a.resolved_at)) {
               return Promise.resolve({ data: null, error: { message: 'duplicate key value violates unique constraint' } }).then(resolve);
             }
-            store[name].push({ id: `id-${store[name].length + 1}`, resolved_at: null, ...row });
+            const base = name === 'pipeline_alerts' ? { resolved_at: null } : {};
+            const saved = { id: `${name}-${store[name].length + 1}`, ...base, ...row };
+            store[name].push(saved);
+            stored.push(saved);
           }
-          return Promise.resolve({ data: insertRows, error: null }).then(resolve);
+          const out = single ? { data: stored[0] || null, error: null } : { data: stored, error: null };
+          return Promise.resolve(out).then(resolve);
         }
 
         if (mode === 'update') {
