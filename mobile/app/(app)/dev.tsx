@@ -167,7 +167,25 @@ export default function DevScreen() {
     }
     const submittedAt = new Date().toISOString();
     setRequests((prev) =>
-      prev.map((r) => r.id === id ? { ...r, status: 'pending', updated_at: submittedAt } : r),
+      prev.map((r) =>
+        r.id === id
+          ? { ...(result.item ?? r), status: result.item?.status ?? 'pending', updated_at: submittedAt }
+          : r,
+      ),
+    );
+    setWorkItems((prev) =>
+      prev.map((wi) => {
+        const linked = requests.find((r) => r.id === id);
+        if (!linked) return wi;
+        const isLinked = wi.title === linked.title || wi.subsystem === linked.target;
+        if (!isLinked) return wi;
+        return {
+          ...wi,
+          stage: result.plan === 'rerun_deploy' ? 'deploying' : 'building',
+          latest_event: { kind: result.plan === 'rerun_deploy' ? 'deploy_started' : 'build_started', created_at: submittedAt },
+          updated_at: submittedAt,
+        };
+      }),
     );
     await load();
     Alert.alert(
@@ -176,7 +194,7 @@ export default function DevScreen() {
         ? 'The code was already merged, so the deploy is being re-run.'
         : 'A fresh build has been dispatched from current main.',
     );
-  }, [resubmitting, load]);
+  }, [resubmitting, requests, load]);
 
   const onArchive = useCallback(async (id: string) => {
     swipeableRefs.current[id]?.close();
