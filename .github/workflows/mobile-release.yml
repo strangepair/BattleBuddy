@@ -1,0 +1,124 @@
+name: Mobile Release
+
+# The build train. ONE mobile/EAS build at a time; mobile merges that land while
+# a build is running ride the NEXT build together.
+#
+# GitHub Actions concurrency already implements a train exactly — no custom
+# scheduler, no cron, no queue table:
+#
+#   idle + a mobile change lands  -> starts immediately (zero added latency)
+#   build running + N more merges -> each new run supersedes the previously
+#                                    PENDING run, so exactly ONE pending run
+#                                    survives
+#   build finishes                -> the survivor starts, checks out current
+#                                    main, and therefore carries ALL the changes
+#                                    that accumulated while the last one ran
+#   nothing pending               -> drains back to idle
+#
+# The batch window self-paces to the build duration. Serialisation is also what
+# permanently kills the resubmit collision: two EAS builds can no longer race
+# for the same TestFlight build number.
+#
+# CONSEQUENCE that release grouping exists to handle: a superseded pending run
+# never executes, so it never reports anything. Completion therefore cannot be
+# "my own run finished" — it is "a release that carried me went live". That is
+# what /dev/release/complete records, and what the stage-2 reconciler rebuilds
+# from the Actions API if a callback is ever lost.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/**'
+  workflow_dispatch:
+    inputs:
+      expedite_request_id:
+        description: 'dev_build_requests id to build alone, bypassing the train'
+        required: false
+        default: ''
+
+concurrency:
+  # On a push `github.event.inputs` is null, so every pushed build shares the
+  # single 'train' group. An expedited dispatch names a request id and therefore
+  # gets a group of its own — it bypasses the train and builds alongside it.
+  group: mobile-release-${{ github.event.inputs.expedite_request_id || 'train' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      SERVER_URL: ${{ secrets.BB_SERVER_URL }}
+      STATUS_TOKEN: ${{ secrets.BB_STATUS_WEBHOOK_TOKEN }}
+      EXPEDITE_ID: ${{ github.event.inputs.expedite_request_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Open the release BEFORE building so the app can show "Build N assembling"
+      # with the changes it carries. The server works out which requests are in
+      # this build from the commits since the last release, so this call needs no
+      # payload beyond the run identity.
+      #
+      # Retried rather than fire-and-forget: a dropped transition used to be
+      # permanent. It still does not FAIL the build if the server is unreachable
+      # — the stage-2 reconciler rebuilds releases from the Actions API — but
+      # three tries turns "usually lost" into "almost never lost".
+      - name: Open release
+        run: |
+          BODY=$(printf '{"run_id":"%s","run_number":%s,"commit_sha":"%s","expedite_request_id":"%s"}' \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_NUMBER" "$GITHUB_SHA" "$EXPEDITE_ID")
+          for attempt in 1 2 3; do
+            if curl -sf --max-time 20 -X POST "$SERVER_URL/dev/release/start" \
+                 -H "content-type: application/json" \
+                 -H "x-bb-status-token: $STATUS_TOKEN" \
+                 -d "$BODY"; then
+              echo "release opened on attempt $attempt"; exit 0
+            fi
+            sleep $(( attempt * 5 ))
+          done
+          echo "::warning::could not open the release row; the reconciler will backfill it"
+
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - name: Install toolchain
+        working-directory: mobile
+        run: |
+          npm i -g eas-cli
+          npm ci
+
+      - name: Build iOS (EAS cloud) + submit to TestFlight
+        working-directory: mobile
+        # Submission credentials (ASC API key) are stored server-side in EAS —
+        # every prior TestFlight build used them (the "Team (Expo)" tester group
+        # is EAS Submit's marker). --non-interactive reuses the stored key, so no
+        # .p8 material lives in this repo's secrets. If EAS ever loses the key,
+        # re-add explicit --asc-api-key-* flags here.
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          eas build --platform ios --profile production --non-interactive --wait
+          eas submit --platform ios --profile production --non-interactive --latest
+
+      # always(): a failed build must close the release too, otherwise every
+      # request it carried sits in `deploying` forever — the exact drift this
+      # submission exists to remove.
+      - name: Close release
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then STATUS="live"; else STATUS="failed"; fi
+          BODY=$(printf '{"run_id":"%s","run_number":%s,"commit_sha":"%s","status":"%s","error":"%s"}' \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_NUMBER" "$GITHUB_SHA" "$STATUS" \
+            "EAS build/submit ${{ job.status }} — Actions run $GITHUB_RUN_ID")
+          for attempt in 1 2 3; do
+            if curl -sf --max-time 20 -X POST "$SERVER_URL/dev/release/complete" \
+                 -H "content-type: application/json" \
+                 -H "x-bb-status-token: $STATUS_TOKEN" \
+                 -d "$BODY"; then
+              echo "release closed ($STATUS) on attempt $attempt"; exit 0
+            fi
+            sleep $(( attempt * 5 ))
+          done
+          echo "::warning::could not close the release row; the reconciler will backfill it"
