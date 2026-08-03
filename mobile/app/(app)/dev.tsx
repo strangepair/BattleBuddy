@@ -165,6 +165,10 @@ export default function DevScreen() {
       Alert.alert('Could not resubmit', result.error ?? 'The pipeline refused that request.');
       return;
     }
+    const submittedAt = new Date().toISOString();
+    setRequests((prev) =>
+      prev.map((r) => r.id === id ? { ...r, status: 'pending', updated_at: submittedAt } : r),
+    );
     await load();
     Alert.alert(
       'Resubmitted',
