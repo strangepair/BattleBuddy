@@ -46,6 +46,12 @@ export interface DevRequest {
   branch?: string | null;
   deploy_status?: string | null;
   error?: string | null;
+  /** How many dispatch attempts this request has had (auto-retry + manual). */
+  attempts?: number;
+  /** 'transient' | 'stale_branch' | 'terminal' — null until a failure lands. */
+  failure_class?: string | null;
+  /** When the auto-retry loop will pick this up; null means it never will. */
+  next_retry_at?: string | null;
   archived?: boolean;
   created_at: string;
   updated_at?: string;
@@ -143,5 +149,24 @@ export async function archiveRequest(id: string): Promise<boolean> {
     return res.ok;
   } catch {
     return false;
+  }
+}
+
+/** Ask the pipeline to try a stuck request again. `plan` is 'rerun_deploy'
+    when the code already merged and only the deploy failed, otherwise
+    'redispatch_build'. Returns ok:false with a reason the caller can show. */
+export async function resubmitRequest(
+  id: string,
+): Promise<{ ok: boolean; plan?: string; error?: string }> {
+  try {
+    const res = await fetch(`${ApiConfig.DEV_URL}/dev/requests/${encodeURIComponent(id)}/resubmit`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: body.error ?? `resubmit failed: ${res.status}` };
+    return { ok: true, plan: body.plan };
+  } catch (err) {
+    return { ok: false, error: 'Could not reach the pipeline.' };
   }
 }
