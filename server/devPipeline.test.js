@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dedupeKey, looksForbidden, patchForEvent, isPipelineEnabled, collapseNearDuplicates, generateProductRequests, insertRequests, insertSubmission, triageSubmission, handleRepetition, processSubmission, classifyFailure, failureSignature, retryDelayMs, applyFailure, runDevBuildWorker } from './devPipeline.js';
+import { dedupeKey, looksForbidden, patchForEvent, isPipelineEnabled, collapseNearDuplicates, generateProductRequests, insertRequests, insertSubmission, triageSubmission, handleRepetition, processSubmission, classifyFailure, failureSignature, retryDelayMs, applyFailure, runDevBuildWorker, resubmitPlan, RESUBMITTABLE } from './devPipeline.js';
 
 test('dedupeKey is stable and target-scoped', () => {
   const a = dedupeKey('ui', 'Make the greeting warmer!');
@@ -770,4 +770,31 @@ test('worker retry pass ignores terminal failures entirely', async () => {
 
   assert.equal(dispatched, 0, 'a scope-fence/destructive failure must never be auto-retried');
   assert.equal(sb._store.dev_build_requests[0].status, 'failed');
+});
+
+// ─── Manual resubmit routing ─────────────────────────────────────────────────
+
+test('resubmitPlan re-runs the deploy when the code already merged', () => {
+  // The change is on main; regenerating it would write the same edit twice.
+  assert.equal(
+    resubmitPlan({ status: 'failed', deploy_status: 'failed', pr_number: 77 }),
+    'rerun_deploy',
+  );
+});
+
+test('resubmitPlan rebuilds when CI failed or the branch went stale', () => {
+  assert.equal(resubmitPlan({ status: 'failed', checks_status: 'failed', pr_number: 77 }), 'redispatch_build');
+  assert.equal(resubmitPlan({ status: 'failed', failure_class: 'stale_branch', pr_number: 77 }), 'redispatch_build');
+  assert.equal(resubmitPlan({ status: 'failed' }), 'redispatch_build', 'no PR yet → fresh build');
+});
+
+test('resubmitPlan will not re-run a deploy it cannot locate', () => {
+  // deploy_status failed but no PR number: there is no merge commit to find.
+  assert.equal(resubmitPlan({ status: 'failed', deploy_status: 'failed' }), 'redispatch_build');
+});
+
+test('only stuck requests are resubmittable', () => {
+  assert.deepEqual(RESUBMITTABLE, ['failed', 'needs_attention']);
+  assert.ok(!RESUBMITTABLE.includes('building'), 'an in-flight build must not be double-dispatched');
+  assert.ok(!RESUBMITTABLE.includes('deployed'));
 });
