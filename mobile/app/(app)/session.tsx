@@ -455,11 +455,18 @@ export default function SessionScreen() {
           {/* Voice rides above the dock, in the same conversation. */}
           {audioOn && (
             <>
+              {/* onTranscript wires the STT output from the LiveKit room back into
+                  handleUserTurn — the same function the text input uses — so a
+                  completed voice transcript triggers URGE_RE detection, addUserMessage,
+                  and streamChatTurn (agent response generation) identically to a typed
+                  message. This is the missing link that caused "mic hears but agent
+                  never replies". */}
               <VoiceSession
                 muted={muted}
                 onAudioLevel={setAudioLevel}
                 onError={handleVoiceError}
                 onVoiceFailed={handleVoiceFailed}
+                onTranscript={handleUserTurn}
               />
               <VoiceBand audioLevel={audioLevel} mascotState={mascotState} muted={muted} />
             </>
