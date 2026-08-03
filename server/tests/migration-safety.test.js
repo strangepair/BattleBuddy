@@ -31,6 +31,33 @@ function sqlFiles() {
 }
 
 describe('migration safety', () => {
+  // Two agents working in parallel both grabbed 019 on 2026-08-02
+  // (019_dev_build_requests_change_summary + 019_dev_build_requests_duplicate_status).
+  // Those two happened to be independent, so the deploy's `ls | sort` order was
+  // harmless — but two files sharing a number that touch the same object apply
+  // in an order nobody chose. Numbers must be unique per directory.
+  it('no two migrations in a directory share a numeric prefix', () => {
+    const violations = [];
+    for (const dir of DIRS) {
+      if (!fs.existsSync(dir)) continue;
+      const byPrefix = new Map();
+      for (const file of fs.readdirSync(dir).filter(f => f.endsWith('.sql'))) {
+        const m = file.match(/^(\d+)_/);
+        if (!m) continue;               // date-stamped files (20260702_…) are exempt
+        const prefix = m[1];
+        if (!byPrefix.has(prefix)) byPrefix.set(prefix, []);
+        byPrefix.get(prefix).push(file);
+      }
+      for (const [prefix, files] of byPrefix) {
+        if (files.length > 1) {
+          violations.push(`${dir}: ${files.length} migrations numbered ${prefix} — ${files.sort().join(', ')}`);
+        }
+      }
+    }
+    assert.deepEqual(violations, [],
+      'Duplicate migration numbers (pick the next free number):\n' + violations.join('\n'));
+  });
+
   it('no migration file contains destructive-SQL trigger words', () => {
     const violations = [];
     for (const full of sqlFiles()) {
