@@ -5,7 +5,7 @@ Source of truth for the Developer-mode pipeline's evolution into a general
 or a headless pipeline agent — should be able to resume from this file alone.
 Update this file whenever a numbered submission lands or a decision changes.
 
-Last updated: 2026-08-02 ~00:30 UTC (Claude chat session, working with Mike).
+Last updated: 2026-08-02 ~17:15 UTC (Claude chat session, working with Mike).
 
 ## Vision
 
@@ -28,7 +28,7 @@ is built inside BattleBuddy with deliberately generic naming.
 |---|-------|--------|
 | 1 | Data layer: submissions, work_items, work_item_submissions, changes, releases, pipeline_events + /api/pipeline routes + backfill | **MERGED** PR #69, deployed |
 | 2 | Triage: durability-first intake, dedup classification (claude-sonnet-4-6), repetition escalation marker, never-stall fallbacks | **MERGED** PR #71, deployed |
-| 3 | Pipeline screen rebuild: work-item cards, release groups, AI digest, exception cards ("Needs your input", default + deadline), Plumbing view behind DEV toggle | PENDING — dispatch next |
+| 3 | Pipeline screen rebuild: work-item cards, release groups, AI digest, exception cards ("Needs your input", default + deadline), Plumbing view behind DEV toggle | PENDING — dispatch next. Its gate (the duplicate-submission test) is now a REAL gate as of PR #83; see "Duplicate-submission gate" below. |
 | 4 | Per-change feature flags: feature_flags table, server cache + realtime invalidation, isEnabled(flag, userHash), wi_{id}_{slug} naming rule in build prompt, flag-debt nightly job | PENDING |
 | 5 | Rollback cards (new work_item linked to original, flag unset = instant rollback, health-signal auto path wired to voice_failure_logs) + Refine-this flow (child work item, parent context, flag reuse on supersede) | PENDING |
 | 6 | Ask BattleBuddy action on every card: session with work-item context block, tools refine_work_item / rollback_change / resolve_exception / correct_interpretation. MUST respect dispatch metadata cap (summarize diff, cap submissions at 10) | PENDING |
@@ -101,17 +101,138 @@ These are the framework's reusable invariants — each incident maps to a guard:
   start; backboard.railway.com was added to Mike's allowlist and becomes
   reachable in sessions started after that change.
 
+## Self-heal (2026-08-02) — the pipeline recovers without a human
+
+Shipped so the pipeline "just runs". All three landed green.
+
+| PR | What |
+|----|------|
+| #83 | Duplicate path is a real gate: a duplicate submission parks its pre-created `dev_build_requests` row in terminal status `duplicate` (so `runDevBuildWorker`, which only picks up `pending`, never dispatches a redundant build), and `submitDirective` returns `duplicate`/`attachedTo` so the Dev screen names the existing work item. |
+| #86 | Classified auto-retry + circuit breaker (migration 020). |
+| #93 | Manual resubmit endpoint + Resubmit button. |
+
+**Retry policy — classified, never blanket.** `classifyFailure()` in
+`server/devPipeline.js`:
+
+- `transient` (ETIMEDOUT / ECONNRESET / network unreachable / dispatch 5xx /
+  npm / onnxruntime): retry up to 2x, exponential backoff from `DEV_RETRY_BASE_MS`.
+- `stale_branch` (merge conflict, "not mergeable (dirty)", add/add): regenerate
+  once — autobuild branches from current main, so a re-dispatch resolves the
+  conflict by construction.
+- `terminal` (scope fence, protected path, destructive migration, forbidden,
+  988 safety marker): never auto-retried.
+
+Two rules that must survive refactors: **terminal is matched first** (a
+scope-fence failure that mentions a timeout must not be retried), and
+**anything unrecognised falls through to terminal** (a pipeline that retries
+what it doesn't understand burns build minutes and hides the fault).
+
+**Circuit breaker.** `failureSignature(stage, error)` normalises away uuids, run
+numbers and paths so repeats collapse onto one key. At `DEV_BREAKER_THRESHOLD`
+(default 3) rows sharing a signature: retries stop, rows escalate to
+`needs_attention`, and ONE `pipeline_alerts` row is raised. Enforced by a
+partial unique index (`unique (signature) where resolved_at is null`), not by
+application logic, so concurrent worker ticks cannot double-alert. A later
+success — or a manual resubmit — resolves the alert. This is the guard that
+would have caught the IPv6 `SUPABASE_DB_URL` break after row one.
+
+**Manual resubmit.** `POST /dev/requests/:id/resubmit` (client-token auth,
+mirrors the archive route). Routes by classification: a *deploy* failure re-runs
+the Deploy workflow for that PR's merge commit (the code already merged —
+regenerating would write the same change twice); everything else re-dispatches a
+build. Only `failed` / `needs_attention` are resubmittable, so an in-flight
+build cannot be double-dispatched. The button is hidden while `next_retry_at` is
+set, so a human cannot race the auto-retry worker.
+
+## Duplicate-submission gate (Submission 3's entry test)
+
+Run from the **Dev / Build pipeline screen's directive box** ("Send to
+pipeline") — NOT the dev-mode chat toggle. Only `POST /dev/directive` runs
+triage; `/dev/capture` (the transcript path) does not.
+
+1. Submit a symptom, e.g. "Voice mode goes silent partway through a session."
+   Expect: classified `new`, work item created, build dispatched.
+2. Submit the same symptom in different words, e.g. "The buddy stops talking
+   mid-conversation in voice."
+
+Pass = stored instantly (durable `submissions` row before any classification),
+classified `duplicate`, attached as `evidence`, **no build dispatched**, and the
+app names the existing item. Criteria 4 and 5 were NOT implemented until PR #83;
+before that a duplicate still shipped a redundant build and the app said
+nothing. Criteria 1–3 are only observable with the service-role key until
+Submission 3 ships the screen that renders them.
+
+## Working rules for agents and debugging sessions
+
+**Agent/debug work runs REMOTE-ONLY.** On Mike's machine the repo working tree
+is large and dirty, and local git/filesystem commands (`git status`, `git diff`,
+`git log`, `ls`/`find`/`grep` over the tree, anything touching the macOS
+keychain) have wedged sessions indefinitely with no timeout. Every change in
+this file's Self-heal table was authored and landed without a single local git
+command, using only:
+
+- `gh api repos/:owner/:repo/git/{blobs,trees,commits,refs}` to create branches
+  and commits (never `git push`)
+- `gh api repos/:owner/:repo/contents/...` to read files at a ref
+- `gh pr create` / `gh pr merge` / `gh run list` / `gh api .../actions/...` for
+  PRs, CI and deploy verification (add `--allow-escape-sequences` when reading
+  job logs)
+- `curl --max-time 15` against Supabase PostgREST to verify migrations landed
+  (HTTP 200 with `[]` = table exists but RLS blocks; 404 = table missing)
+
+Always bound commands with a timeout. If a local command is unavoidable, prefer
+a targeted, non-recursive one over anything that walks the tree.
+
+**Non-interactive git config (CI-safe).** Any automated context must never sit
+at a credential or host-key prompt. Export before any git/gh use:
+
+```
+export GIT_TERMINAL_PROMPT=0        # fail instead of prompting for credentials
+export GCM_INTERACTIVE=never        # git-credential-manager, if installed
+export GH_PROMPT_DISABLED=1         # gh never opens an interactive prompt
+git config --global credential.helper ''   # do NOT reach for the macOS keychain
+```
+
+On macOS the default `credential.helper=osxkeychain` is the specific hazard: a
+locked keychain blocks forever rather than failing. GitHub Actions is already
+safe here — `actions/checkout` injects a scoped token and sets its own helper.
+
+**Workflows carry no local-machine dependency (verified 2026-08-02).** Every job
+in `autobuild.yml`, `deploy.yml`, `ci.yml` and `auto-pr-hygiene.yml` is
+`runs-on: ubuntu-latest`; there are no self-hosted runners and no `localhost` or
+`/Users/...` paths anywhere in the workflow files. The pipeline runs end to end
+with Mike's laptop closed. Note that `.github/**` is inside the autobuild scope
+fence, so the bot cannot edit workflows — that is deliberate; workflow changes
+need a human with a Workflows-scoped token.
+
+**Migration numbering.** Numbers must be unique per directory. On 2026-08-02 two
+parallel agents both took `019` (`_change_summary` and `_duplicate_status`);
+they were independent so the deploy's `ls | sort` order was harmless, but two
+same-numbered files touching one object would apply in an order nobody chose.
+`server/tests/migration-safety.test.js` now fails CI on duplicate numbers, and
+every migration must be idempotent (that guard predates this, from PR #77).
+
 ## Next actions
 
-1. Mike: run the duplicate-submission test from the app (resubmit a known
-   symptom) — expected: stored instantly, classified duplicate, attached as
-   evidence, NO build dispatched, response names the existing item.
-2. Dispatch Submission 3 (pipeline screen rebuild) after test passes.
-3. Submissions 4 → 5 → 6 in order; before 6, verify dispatch-metadata cap
-   behavior (promptGuard.js) still holds with the card context block.
-4. Optional forensics: Railway bb-server logs 2026-08-01 22:45–23:20 UTC
-   for the old intake failure.
-5. Audit why auto-merge branch deletion left 45 stale branches.
-6. Rotate the tokens named above.
-7. When app #2 onboards: extract control plane to its own repo, move bot
+1. Mike: run the duplicate-submission test above from the app. It is now a real
+   gate — expect NO redundant build and an "Already tracked" alert naming the
+   existing item.
+2. Dispatch Submission 3 (pipeline screen rebuild) after that passes.
+3. Submissions 4 -> 5 -> 6 in order; before 6, verify dispatch-metadata cap
+   behaviour (promptGuard.js) still holds with the card context block.
+4. Reconcile the stale `dev_build_requests` rows that still read failed /
+   needs_attention for work that actually shipped: `758e028b` (PR #62, build
+   72), `08f6ba57` (PR #73), `a43d0e91` (PR #74, build 79), `cf741fe7` (PR #59).
+   All four merged and deployed; the red is an artifact of the old
+   non-idempotent migration failing the deploy job AFTER the real work
+   succeeded. Needs the service-role key (these tables are service-only RLS).
+5. Store the Supabase service-role key as a GitHub Actions secret and confirm it
+   in Railway env, so no future session needs it handed over:
+   `gh secret set SUPABASE_SERVICE_ROLE_KEY --repo strangepair/BattleBuddy < <file>`.
+   A chat session should not upload it on Mike's behalf — this key bypasses RLS
+   entirely, so widening its blast radius is a human decision.
+6. Rotate the tokens named in "Access / operational notes" above (still
+   outstanding from 2026-08-01), plus the leaked DB password.
+7. Audit why auto-merge branch deletion left 45 stale branches.
+8. When app #2 onboards: extract control plane to its own repo, move bot
    identity from PATs to a GitHub App, define pipeline.yml manifest.
