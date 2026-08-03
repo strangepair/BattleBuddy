@@ -20,6 +20,8 @@
 // creates a new one. See: insertSubmission, triageSubmission, handleRepetition.
 
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { githubFetch } from './githubApi.js';
+import { startRelease, completeRelease } from './devRelease.js';
 
 const SPEC_MODEL = 'claude-sonnet-4-6';
 
@@ -283,6 +285,11 @@ function publicRow(r) {
     attempts: r.attempts ?? 0,
     failure_class: r.failure_class ?? null,
     next_retry_at: r.next_retry_at ?? null,
+    // Build-train fields (migration 022): which release carried this change,
+    // whether it skipped the train, and the work item it implements.
+    release_id: r.release_id ?? null,
+    work_item_id: r.work_item_id ?? null,
+    expedite: r.expedite ?? false,
     created_at: r.created_at,
     updated_at: r.updated_at,
   };
@@ -356,37 +363,21 @@ export function resubmitPlan(row) {
   return 'redispatch_build';
 }
 
-async function githubJson(url, init) {
-  const token = process.env.GITHUB_TOKEN;
-  if (!token) throw new Error('GITHUB_TOKEN not set');
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-      ...(init && init.headers),
-    },
-  });
-  if (!res.ok) throw new Error(`github ${res.status} for ${url.split('/repos/')[1] || url}`);
-  return res;
-}
-
 /** Re-run the Deploy workflow for the merge commit of this request's PR. */
 async function rerunDeploy(row) {
-  const prRes = await githubJson(`https://api.github.com/repos/${GITHUB_REPO}/pulls/${row.pr_number}`);
+  const prRes = await githubFetch(`https://api.github.com/repos/${GITHUB_REPO}/pulls/${row.pr_number}`);
   const pr = await prRes.json();
   const sha = pr.merge_commit_sha;
   if (!sha) throw new Error('PR has no merge commit yet — nothing to redeploy');
 
-  const runsRes = await githubJson(
+  const runsRes = await githubFetch(
     `https://api.github.com/repos/${GITHUB_REPO}/actions/workflows/deploy.yml/runs?head_sha=${sha}&per_page=1`,
   );
   const runs = await runsRes.json();
   const runId = runs.workflow_runs && runs.workflow_runs[0] && runs.workflow_runs[0].id;
   if (!runId) throw new Error(`no Deploy run found for merge commit ${sha.slice(0, 7)}`);
 
-  await githubJson(
+  await githubFetch(
     `https://api.github.com/repos/${GITHUB_REPO}/actions/runs/${runId}/rerun-failed-jobs`,
     { method: 'POST' },
   );
@@ -1087,6 +1078,39 @@ export async function handleDevPipeline(req, res, deps) {
       }
     }
     return json(200, { ok: true });
+  }
+
+  // POST /dev/release/start | /dev/release/complete — build-train callbacks
+  // from mobile-release.yml. Authed with the same status token as the other
+  // workflow callbacks (these are workflow → backend, not app → backend).
+  //
+  // Both are idempotent on run_id, and `complete` re-derives the batch rather
+  // than trusting that `start` landed: the whole point of this design is that a
+  // dropped callback costs latency, never correctness.
+  if (req.method === 'POST' && (path === '/dev/release/start' || path === '/dev/release/complete')) {
+    if (!checkStatusToken(req)) return json(401, { error: 'unauthorized' });
+    if (!supabase) return json(503, { error: 'database not configured' });
+    const body = await readBody(req);
+    const payload = {
+      runId: body.run_id,
+      runNumber: body.run_number ?? null,
+      commitSha: body.commit_sha,
+      expediteRequestId: body.expedite_request_id || null,
+      status: body.status,
+      error: body.error,
+    };
+    if (!payload.runId || !payload.commitSha) {
+      return json(400, { error: 'run_id and commit_sha required' });
+    }
+    try {
+      const release = path === '/dev/release/start'
+        ? await startRelease(supabase, payload)
+        : await completeRelease(supabase, payload);
+      return json(200, { ok: true, release });
+    } catch (err) {
+      console.error('[devPipeline] release callback failed:', err.message);
+      return json(502, { error: err.message });
+    }
   }
 
   // PATCH /dev/requests/:id/archive — mark a request as archived (non-destructive).

@@ -297,6 +297,49 @@ sync.
 | 5 | Merge queue (rebase+retest before landing) | **NEEDS MIKE**: Workflows-scoped token + branch-protection change. Do not attempt silently. |
 | 6 | Optional GitHub webhooks (`pull_request`, `workflow_run`, `check_suite`) into the same `deriveState` | needs a webhook secret |
 
+### Stage 1 — SHIPPED (build train + releases grouping)
+
+Traceability id `21c1b312-156e-4bb3-9694-1eeafec20b46` (carried as a
+`Dev-Request-Id` trailer on the commit, so the stage-2 reconciler adopts it).
+
+What landed:
+
+- **`.github/workflows/mobile-release.yml`** — the train. `concurrency: { group:
+  mobile-release-<train|expedite id>, cancel-in-progress: false }`. The group is
+  an expression so stage 3 only has to set the dispatch input; on a `push`,
+  `github.event.inputs` is null and every build falls into the one `train` group.
+- **`deploy.yml` no longer builds mobile.** Its `report` job also stops claiming
+  `deployed` when the push touched `mobile/` — the server side is done but the
+  change has not ridden a build yet, and saying otherwise is precisely the lie
+  the app has been showing. It stays `deploying` until a release carries it.
+- **Migration 022** — `releases` learns `run_id` (its natural key), `run_number`,
+  `commit_sha`, `changelog`, `started_at`/`completed_at`, `platform`,
+  `expedite_request_id`; `changes` finally gets `dev_request_id` (the join that
+  was missing while the table sat empty) plus a nullable `work_item_id`;
+  `dev_build_requests` gets `work_item_id`, `release_id`, `expedite`,
+  `reconciled_at`, status `superseded` and source `github`.
+- **`server/githubApi.js`** — one definition of how the control plane reads
+  GitHub, shared by `devPipeline`, `devRelease` and (stage 2) the reconciler.
+- **`server/devRelease.js` + tests** — `POST /dev/release/start` and
+  `/dev/release/complete` (status-token auth, same as the other workflow
+  callbacks). Both upsert on `run_id`, and `complete` re-derives the batch rather
+  than trusting that `start` landed.
+
+Two invariants worth keeping:
+
+1. **Membership comes from git, not from what a workflow remembered to say.**
+   The commits between the previous release's `commit_sha` and this one carry
+   `Dev-Request-Id:` trailers and `(#123)` squash subjects, so the batch is
+   always recomputable. With no previous release the base is the head commit
+   alone: under-claiming is safe (stage 2 settles a merged change from its own
+   Deploy run), over-claiming would stamp `release_id` onto changes the build
+   never contained.
+2. **A superseded pending run never executes and therefore never reports.** So
+   completion cannot be "my own run finished" — it is "a release that carried me
+   went live". `completeRelease` is what settles the whole batch, and it runs
+   under `if: always()` so a failed build fails its batch instead of stranding it
+   in `deploying` forever.
+
 ### Traceability note
 
 `dev_build_requests` is service-only RLS, so a chat session cannot insert rows
