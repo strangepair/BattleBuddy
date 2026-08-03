@@ -42,6 +42,7 @@ import { DEFAULT_TZ, tzOffsetString, formatLocalTime, buildSessionContext as bui
 import { HABIT_EVENT_TYPES, deriveUsageFacts, renderUsageFactsLine, deriveDashboardPayload } from './usageFacts.js';
 import { checkDevModeToolResult, devModeStatusBlock } from './devMode.js';
 import { handleDevPipeline, runDevBuildWorker, handleDevItems } from './devPipeline.js';
+import { runReconcileTick } from './devReconcile.js';
 import { recordTextTurn, recordVoiceSessionStart, recordVoiceTranscript, sweepIdleSegments, registerShutdownFlush } from './devCapture.js';
 import { jsonrepair } from 'jsonrepair';
 import { broadcastToUser, registerSseClient } from './broadcast.js';
@@ -3905,6 +3906,20 @@ setInterval(() => { runScheduledFactConsolidation().catch(() => {}); }, FACT_CON
 const DEV_BUILD_CHECK_MS = 60 * 1000;
 setInterval(() => {
   runDevBuildWorker({ supabase }).catch((err) => console.error('[devPipeline] worker:', err.message));
+}, DEV_BUILD_CHECK_MS);
+
+// ─── Pipeline reconciler ───────────────────────────────────────────────────
+// Asks GitHub what is actually true and patches the difference. Every status
+// callback in the workflows is `curl ... || true`, so a dropped transition is
+// permanent and a cancelled / superseded / hand-made run reports nothing at
+// all — push-only delivery guarantees drift. This tick is what makes the Dev
+// tab a projection of GitHub rather than a parallel ledger.
+//
+// Deliberately NOT gated on DEV_PIPELINE_ENABLED: repairing state is correct
+// even when dispatching new builds is paused. DEV_RECONCILE_ENABLED=false is
+// the kill switch.
+setInterval(() => {
+  runReconcileTick({ supabase }).catch((err) => console.error('[devReconcile] tick:', err.message));
 }, DEV_BUILD_CHECK_MS);
 
 // Dev-mode capture idle sweep: flushes dev-mode conversation segments that
