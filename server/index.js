@@ -46,7 +46,7 @@ import { recordTextTurn, recordVoiceSessionStart, recordVoiceTranscript, sweepId
 import { jsonrepair } from 'jsonrepair';
 import { broadcastToUser, registerSseClient } from './broadcast.js';
 import { broadcastDashboard } from './broadcastDashboard.js';
-import { findDuplicate } from './middleware/deduplicate.js';
+import { findDuplicate, findActivityDuplicate } from './middleware/deduplicate.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -2590,6 +2590,11 @@ Return ONLY the JSON object, no markdown, no explanation.`;
       if (!supabase) {
         res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ error: 'Event store not configured' }));
+      }
+      const existing = await findActivityDuplicate(supabase, resolveUserId(userId), activity_name);
+      if (existing) {
+        res.writeHead(409, { ...CORS, 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ duplicate: true, existingEventId: existing.id }));
       }
       const row = {
         user_id: resolveUserId(userId),
