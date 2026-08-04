@@ -15,6 +15,7 @@ from livekit.agents.voice.agent_session import SessionConnectOptions
 from livekit.plugins import anthropic, deepgram
 from livekit.agents import tts as lk_tts
 import logging
+import inspect
 import aiohttp
 import asyncio
 
@@ -33,6 +34,59 @@ from tools.log_activity import log_activity as _log_activity
 logger = logging.getLogger(__name__)
 
 
+async def trace_node(label: str, result, item_name: str, exit_note: str = ""):
+    """Iterate a LiveKit Agent node result, tracing first item / total / errors.
+
+    `Agent.llm_node` and `Agent.tts_node` are NOT async generator functions in
+    livekit-agents 1.6.2 — each is typed to return an AsyncIterable, OR a
+    coroutine resolving to one, OR a coroutine resolving to None. All three
+    shapes are handled here so a framework-side change of shape degrades to
+    "no trace" instead of a TypeError that would break voice outright.
+
+    Module level (not a closure) purely so tests/test_node_tracing.py can
+    execute it: overrides that only run inside a live LiveKit session are
+    invisible to CI, which is the same deferred-execution blind spot that let
+    the agent.utils ModuleNotFoundError ship green.
+    """
+    t0 = time.monotonic()
+    n = 0
+    try:
+        if inspect.isawaitable(result):
+            result = await result
+        if result is None:
+            return
+        async for item in result:
+            n += 1
+            if n == 1:
+                _vlog(f"{label}: FIRST {item_name} after {time.monotonic() - t0:.2f}s")
+            yield item
+    except Exception as exc:
+        _vlog(f"{label}: RAISED after {time.monotonic() - t0:.2f}s: {exc!r}")
+        raise
+    finally:
+        _vlog(
+            f"{label}: EXIT after {time.monotonic() - t0:.2f}s — {n} {item_name.lower()}s"
+            f"{exit_note if n == 0 else ''}"
+        )
+
+
+def _vlog(msg: str) -> None:
+    """Timestamped, flushed diagnostic line for the reply pipeline.
+
+    Every line is prefixed [VOICE-DIAG] so one grep isolates the whole
+    generate_reply → LLM → TTS → playback chain from the rest of the logs.
+    Explicitly flushed: the container's stdout was block-buffered, so the
+    plain print() lines only reached Railway when the process exited — which
+    is precisely why a session that HANGS (rather than crashes) showed no
+    trace of where it stopped. Dockerfile now also sets PYTHONUNBUFFERED=1;
+    the flush here makes these lines independent of that.
+    """
+    # time.gmtime, not ZoneInfo — a diagnostic helper must never be able to
+    # raise on a machine where the tz database is the thing that's broken.
+    _t = time.time()
+    print(f"[VOICE-DIAG {time.strftime('%H:%M:%S', time.gmtime(_t))}.{int((_t % 1) * 1000):03d}Z] {msg}", flush=True)
+
+
 class _LoggedTTS(lk_tts.TTS):
     """Thin wrapper around deepgram.TTS that adds explicit per-step logging.
 
@@ -43,13 +97,27 @@ class _LoggedTTS(lk_tts.TTS):
     session events (registered after session creation).
     """
 
-    def __init__(self, inner: lk_tts.TTS):
+    def __init__(self, inner: lk_tts.TTS, model_name: str = "unknown"):
         super().__init__(
             capabilities=inner.capabilities,
             sample_rate=inner.sample_rate,
             num_channels=inner.num_channels,
         )
         self._inner = inner
+        self._model_name = model_name
+        _vlog(
+            f"TTS wrapper built — model={model_name} streaming={inner.capabilities.streaming} "
+            f"sample_rate={inner.sample_rate} channels={inner.num_channels}"
+        )
+
+    def prewarm(self) -> None:
+        # Forwarded so the inner Deepgram client still gets its connection
+        # pool warmed; the base-class default is a no-op, so without this the
+        # wrapper silently cost us the prewarm.
+        try:
+            self._inner.prewarm()
+        except Exception as exc:
+            _vlog(f"TTS prewarm failed (non-fatal): {exc!r}")
 
     def synthesize(self, text: str, *, conn_options=None) -> "_LoggedStream":
         from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
@@ -64,9 +132,22 @@ class _LoggedTTS(lk_tts.TTS):
         return _LoggedStream(tts=self, input_text=text, inner_stream=inner_stream, conn_options=opts)
 
     def stream(self, *, conn_options=None):
+        # THIS is the path production actually takes. Deepgram advertises
+        # capabilities.streaming=True, so LiveKit calls stream() and never
+        # synthesize() — which means every [TTS] line in synthesize() above
+        # has been dead code since it was added (PR #75) and its silence was
+        # never evidence of anything. Log here instead. The stream object is
+        # returned UNWRAPPED on purpose: the framework type-checks it, and a
+        # proxy would risk breaking synthesis to gain logging that tts_node
+        # (below) already provides at the frame level.
         from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
         opts = conn_options if conn_options is not None else DEFAULT_API_CONNECT_OPTIONS
-        return self._inner.stream(conn_options=opts)
+        _vlog(f"tts.stream(): opening Deepgram synthesis stream (model={self._model_name})")
+        try:
+            return self._inner.stream(conn_options=opts)
+        except Exception as exc:
+            _vlog(f"tts.stream(): FAILED to open stream: {exc!r}")
+            raise
 
     async def aclose(self) -> None:
         await self._inner.aclose()
@@ -534,6 +615,51 @@ async def battlebuddy_session(ctx: agents.JobContext):
                 print(f"[Agent] update_event failed: {e}")
                 return json.dumps({"error": str(e)})
 
+        async def llm_node(self, *args, **kwargs):
+            """Trace the LLM leg of every reply.
+
+            This is the load-bearing half of the LLM-vs-TTS split. The
+            2026-08-04 silent session showed zero assistant turns, but that
+            proved nothing on its own: in livekit-agents 1.x the assistant
+            conversation item is only added AFTER playout finishes, so an LLM
+            that answered fine and a TTS that emitted nothing look identical
+            from the outside. ENTER + FIRST CHUNK + EXIT here disambiguate.
+            """
+            _vlog("llm_node: ENTER — requesting completion from Anthropic")
+            async for _chunk in trace_node(
+                "llm_node",
+                Agent.llm_node(self, *args, **kwargs),
+                "CHUNK",
+                exit_note=" *** LLM PRODUCED NOTHING ***",
+            ):
+                yield _chunk
+
+        async def tts_node(self, text, *args, **kwargs):
+            """Trace the TTS leg: text in, audio frames out.
+
+            FIRST AUDIO FRAME is the single line that settles the question. If
+            llm_node reports chunks and this reports 0 frames, the break is
+            synthesis. If this never ENTERs, the break is upstream in the LLM.
+            """
+            _chars = {"n": 0}
+
+            async def _counted_text():
+                async for _t in text:
+                    _chars["n"] += len(_t or "")
+                    yield _t
+
+            _vlog("tts_node: ENTER — text stream opened")
+            try:
+                async for _frame in trace_node(
+                    "tts_node",
+                    Agent.tts_node(self, _counted_text(), *args, **kwargs),
+                    "AUDIO FRAME",
+                    exit_note=" *** TTS EMITTED NO AUDIO ***",
+                ):
+                    yield _frame
+            finally:
+                _vlog(f"tts_node: {_chars['n']} chars of LLM text reached synthesis")
+
         async def on_user_turn_completed(self, turn_ctx, new_message):
             # Log the STT result so pipeline failures are visible in agent logs.
             # An empty transcript means Deepgram produced no output — skip the
@@ -619,7 +745,10 @@ async def battlebuddy_session(ctx: agents.JobContext):
     _voice_model = get_voice()
     print(f"[Agent] TTS voice model: {_voice_model}")
     _deepgram_tts = deepgram.TTS(model=_voice_model)
-    _logged_tts = _LoggedTTS(_deepgram_tts)
+    _logged_tts = _LoggedTTS(_deepgram_tts, model_name=_voice_model)
+    # The cold-prompt first-token hang is the leading hypothesis for the
+    # silent greeting; the prompt's actual size is the premise, so state it.
+    _vlog(f"system prompt: {len(system_prompt)} chars (~{len(system_prompt) // 4} tokens)")
 
     session = AgentSession(
         stt=deepgram.STT(model="nova-3", language="multi"),
@@ -694,6 +823,7 @@ async def battlebuddy_session(ctx: agents.JobContext):
         agent=_session_agent,
     )
     print(f"[Agent] Session started — STT={type(session.stt).__name__} (nova-3/multi), LLM={type(session.llm).__name__}, TTS={type(session.tts).__name__}")
+    _vlog("session.start() returned — entering greeting probe")
 
     # Periodic save loop — runs every SAVE_INTERVAL_SECONDS, sends whatever we have
     async def periodic_save():
@@ -751,11 +881,13 @@ async def battlebuddy_session(ctx: agents.JobContext):
 
     @session.on("agent_started_speaking")
     def on_agent_started_speaking(ev):
-        print(f"[TTS] Playback started — agent speaking")
+        # Fires when the first synthesised frame is actually published to the
+        # room. Never fired once in the 2026-08-04 silent session.
+        _vlog("agent_started_speaking — FIRST AUDIO PUBLISHED TO ROOM")
 
     @session.on("agent_stopped_speaking")
     def on_agent_stopped_speaking(ev):
-        print(f"[TTS] Playback completed — agent finished speaking")
+        _vlog("agent_stopped_speaking — playback finished")
 
     @session.on("close")
     def on_close(ev):
@@ -769,7 +901,19 @@ async def battlebuddy_session(ctx: agents.JobContext):
             print(f"[Agent] Session close: sending {len(session_messages)} messages for {user_id} (isSessionEnd=true)")
             asyncio.ensure_future(_send_final_transcript(user_id, list(session_messages), session_id, timezone, dev_mode_on))
 
-    await session.generate_reply(instructions=greeting)
+    # The greeting is the cleanest possible probe: it is unconditional, needs
+    # no user speech, and depends on no VAD or turn detection. On 2026-08-04 it
+    # produced no audio and no assistant turn — which is what ruled turn
+    # detection out as the cause. These two lines bracket it so the next live
+    # session says whether it returns, raises, or simply never comes back.
+    _vlog(f"greeting: calling generate_reply (instructions={len(greeting)} chars)")
+    _greet_t0 = time.monotonic()
+    try:
+        await session.generate_reply(instructions=greeting)
+        _vlog(f"greeting: generate_reply RETURNED after {time.monotonic() - _greet_t0:.2f}s")
+    except Exception as exc:
+        _vlog(f"greeting: generate_reply RAISED after {time.monotonic() - _greet_t0:.2f}s: {exc!r}")
+        raise
 
 
 async def _send_final_transcript(user_id, messages, session_id=None, timezone="America/Chicago", dev_mode=False):
