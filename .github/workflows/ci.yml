@@ -109,11 +109,12 @@ jobs:
           APP_BASE: ${{ github.workspace }}
         run: python -c "import agent"
 
-  # agent/tests/ existed for weeks but never ran anywhere. Visibility-only for
-  # now (NOT a required context, NOT in the report gate) — promote to required
-  # once it has a green history on real PRs.
+  # Promoted to a required context 2026-08-04: on its very first run this job
+  # flagged the exact ModuleNotFoundError (agent.utils) that was crash-looping
+  # every production voice session — it was non-blocking then, so the signal
+  # was advisory. Green since PR #120. It blocks now.
   agent-tests:
-    name: agent tests (pytest · non-blocking)
+    name: agent (pytest)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -131,26 +132,25 @@ jobs:
   # Report the aggregate check result back to the backend so the Dev tab can
   # flip the request to "Under development → checks passed/failed". Only fires
   # for pipeline branches (auto/dev-<id>); no-op otherwise. Mirrors the
-  # required-context set exactly (mobile, server, agent) — agent-tests is
-  # deliberately excluded until it becomes required.
+  # required-context set exactly (mobile, server, agent, agent-tests).
   report:
     name: report status
     runs-on: ubuntu-latest
-    needs: [mobile, server, agent]
+    needs: [mobile, server, agent, agent-tests]
     if: always() && startsWith(github.head_ref, 'auto/dev-')
     steps:
       - name: Extract request id
         id: rid
         run: echo "id=${GITHUB_HEAD_REF#auto/dev-}" >> "$GITHUB_OUTPUT"
       - name: Callback (passed)
-        if: needs.mobile.result == 'success' && needs.server.result == 'success' && needs.agent.result == 'success'
+        if: needs.mobile.result == 'success' && needs.server.result == 'success' && needs.agent.result == 'success' && needs.agent-tests.result == 'success'
         run: |
           curl -sf -X POST "${{ secrets.BB_SERVER_URL }}/dev/github/webhook" \
             -H "content-type: application/json" \
             -H "x-bb-status-token: ${{ secrets.BB_STATUS_WEBHOOK_TOKEN }}" \
             -d "{\"requestId\":\"${{ steps.rid.outputs.id }}\",\"event\":\"checks_passed\"}" || true
       - name: Callback (failed)
-        if: needs.mobile.result != 'success' || needs.server.result != 'success' || needs.agent.result != 'success'
+        if: needs.mobile.result != 'success' || needs.server.result != 'success' || needs.agent.result != 'success' || needs.agent-tests.result != 'success'
         run: |
           curl -sf -X POST "${{ secrets.BB_SERVER_URL }}/dev/github/webhook" \
             -H "content-type: application/json" \
