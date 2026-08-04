@@ -77,11 +77,11 @@ jobs:
       # while a repo-root checkout resolves it fine as a PEP 420 namespace
       # package. That asymmetry is why PR #101's `from agent.utils…` passed
       # every check and then crash-looped every voice job for ~18 hours.
-      # tests/ is excluded on purpose: it runs from the repo root and never
-      # ships in the image, so "from agent.utils…" is correct there.
+      # Covers tests/ too: the pytest job also runs from agent/, so the flat
+      # form is the only one that resolves anywhere we actually execute.
       - name: container-path gate (no repo-root-relative agent.* imports)
         run: |
-          if grep -rnE '^[[:space:]]*(from|import)[[:space:]]+agent\.' --include='*.py' --exclude-dir=tests . ; then
+          if grep -rnE '^[[:space:]]*(from|import)[[:space:]]+agent\.' --include='*.py' . ; then
             echo "::error::'agent.*' imports do not resolve in the container (the image is flat: /app/agent.py + /app/utils + /app/tools). Use 'from utils…' / 'from tools…'."
             exit 1
           fi
