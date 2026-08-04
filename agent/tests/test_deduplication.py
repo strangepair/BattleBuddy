@@ -3,7 +3,10 @@
 import time
 from unittest.mock import patch
 
-from agent.utils.deduplication import EventDeduplicator, DEDUP_WINDOW_SECONDS
+# Flat import, matching both the CI job's working-directory (agent/) and the
+# container layout (/app/agent.py + /app/utils). Using the repo-root form
+# here would exercise a path that does not exist at runtime.
+from utils.deduplication import EventDeduplicator, DEDUP_WINDOW_SECONDS
 
 
 def test_first_call_is_not_skipped():

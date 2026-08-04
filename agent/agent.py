@@ -18,6 +18,18 @@ import logging
 import aiohttp
 import asyncio
 
+# Local agent modules. These MUST stay at module level and MUST NOT be prefixed
+# with "agent." — two separate traps, both of which shipped green:
+#   * The Dockerfile flattens agent/ into /app, so "agent.utils.x" resolves to
+#     the agent.py *module* in the container and raises ModuleNotFoundError.
+#     From a repo-root checkout it resolves fine (PEP 420 namespace package),
+#     so local runs and root-relative CI never see it.
+#   * The CI import gate executes only module-level code, so an import buried
+#     in a method body is invisible to it. PR #101 put one inside
+#     SessionAgent.__init__ and crash-looped every voice job for ~18 hours.
+from utils.deduplication import EventDeduplicator
+from tools.log_activity import log_activity as _log_activity
+
 logger = logging.getLogger(__name__)
 
 
@@ -320,7 +332,6 @@ async def battlebuddy_session(ctx: agents.JobContext):
     class SessionAgent(Agent):
         def __init__(self):
             super().__init__(instructions=system_prompt)
-            from agent.utils.deduplication import EventDeduplicator
             self._event_dedup = EventDeduplicator()
 
         @function_tool()
@@ -458,7 +469,6 @@ async def battlebuddy_session(ctx: agents.JobContext):
         @function_tool()
         async def log_activity(self, activity_name: str, start_time: str, end_time: str = "", location: str = ""):
             """Log an activity the user just reported starting or finishing. activity_name: short label (e.g. 'gym', 'lunch', 'work'). start_time: user's LOCAL wall-clock time as stated (e.g. '2026-08-01T14:30:00') — never convert to UTC. end_time: same format; omit when only a start is known. location: optional short label. Call immediately when the user reports finishing an activity or arriving somewhere — do NOT ask for confirmation first. If start_time is genuinely ambiguous, ask once then call. Confirm in one sentence: the activity name and the time(s) logged."""
-            from agent.tools.log_activity import log_activity as _log_activity
             result = await _log_activity(
                 server_url=SERVER_URL,
                 user_id=user_id,
