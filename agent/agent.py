@@ -30,6 +30,47 @@ import asyncio
 from utils.deduplication import EventDeduplicator
 from tools.log_activity import log_activity as _log_activity
 
+# Turn detection. The imports are module level ON PURPOSE so the CI import gate
+# fails loudly if a plugin is missing from the image (PR #120's lesson), but the
+# MODELS are built lazily: `python agent.py download-files` has to import this
+# module *before* those model files exist, so constructing them at import time
+# would deadlock the Docker build that fetches them.
+#
+# Deliberately NOT loaded via @server.prewarm — AgentServer in
+# livekit-agents 1.6.2 has no `prewarm` attribute, and adding one is what
+# crash-looped bb-agent for two days (PR #62, removed in PR #115).
+from livekit.plugins import silero
+from livekit.plugins.turn_detector.multilingual import MultilingualModel
+
+_vad = None
+_turn_detection = None
+
+
+def _get_vad():
+    """Silero VAD, loaded once per worker process.
+
+    Without a VAD an STT-LLM-TTS AgentSession never detects end-of-utterance:
+    transcripts still arrive from Deepgram, but no turn is ever committed, so
+    the LLM is never invoked and nothing reaches TTS. That was the exact live
+    signature on 2026-08-04 — three user turns captured, zero assistant turns,
+    and user_started_speaking / user_stopped_speaking never firing once.
+    """
+    global _vad
+    if _vad is None:
+        print("[Agent] Loading Silero VAD…")
+        _vad = silero.VAD.load()
+        print("[Agent] Silero VAD ready")
+    return _vad
+
+
+def _get_turn_detection():
+    global _turn_detection
+    if _turn_detection is None:
+        print("[Agent] Loading multilingual turn detector…")
+        _turn_detection = MultilingualModel()
+        print("[Agent] Turn detector ready")
+    return _turn_detection
+
 logger = logging.getLogger(__name__)
 
 
@@ -64,6 +105,11 @@ class _LoggedTTS(lk_tts.TTS):
         return _LoggedStream(tts=self, input_text=text, inner_stream=inner_stream, conn_options=opts)
 
     def stream(self, *, conn_options=None):
+        # Deepgram advertises streaming, so THIS is the path the session
+        # actually uses — it was passing straight through unlogged, which is
+        # why "every TTS request is traced" was false in practice and a TTS
+        # failure would have been invisible.
+        print("[TTS] Streaming synthesis stream opened")
         from livekit.agents.types import DEFAULT_API_CONNECT_OPTIONS
         opts = conn_options if conn_options is not None else DEFAULT_API_CONNECT_OPTIONS
         return self._inner.stream(conn_options=opts)
@@ -333,6 +379,23 @@ async def battlebuddy_session(ctx: agents.JobContext):
         def __init__(self):
             super().__init__(instructions=system_prompt)
             self._event_dedup = EventDeduplicator()
+
+        async def llm_node(self, chat_ctx, tools, model_settings, **kwargs):
+            """Trace the LLM boundary. A hang here is invisible otherwise — the
+            greeting produced no assistant turn and no error on 2026-08-04, and
+            there was no way to tell 'never invoked' from 'invoked and stuck'."""
+            print("[LLM] node entered — requesting completion")
+            chunks = 0
+            try:
+                async for chunk in super().llm_node(chat_ctx, tools, model_settings, **kwargs):
+                    chunks += 1
+                    if chunks == 1:
+                        print("[LLM] first chunk received")
+                    yield chunk
+            except Exception as exc:
+                print(f"[LLM] ERROR after {chunks} chunks: {exc!r}")
+                raise
+            print(f"[LLM] node completed — {chunks} chunks")
 
         @function_tool()
         async def check_dev_mode(self):
@@ -634,6 +697,8 @@ async def battlebuddy_session(ctx: agents.JobContext):
             timeout=httpx.Timeout(10.0, read=90.0),
         ),
         tts=_logged_tts,
+        vad=_get_vad(),
+        turn_detection=_get_turn_detection(),
         min_endpointing_delay=0.5,
         max_endpointing_delay=1.5,
         # Our on_user_turn_completed injects the local time each turn, which
@@ -769,7 +834,16 @@ async def battlebuddy_session(ctx: agents.JobContext):
             print(f"[Agent] Session close: sending {len(session_messages)} messages for {user_id} (isSessionEnd=true)")
             asyncio.ensure_future(_send_final_transcript(user_id, list(session_messages), session_id, timezone, dev_mode_on))
 
-    await session.generate_reply(instructions=greeting)
+    # The greeting is VAD-independent and should speak within seconds of
+    # session start. If these two lines don't bracket quickly in the logs, the
+    # hang is in generate_reply / the LLM, not in turn detection.
+    print(f"[Agent] Greeting: calling generate_reply ({len(greeting)} chars of instructions)")
+    try:
+        await session.generate_reply(instructions=greeting)
+        print("[Agent] Greeting: generate_reply returned")
+    except Exception as exc:
+        print(f"[Agent] Greeting: generate_reply FAILED: {exc!r}")
+        raise
 
 
 async def _send_final_transcript(user_id, messages, session_id=None, timezone="America/Chicago", dev_mode=False):

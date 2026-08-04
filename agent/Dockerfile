@@ -21,4 +21,12 @@ COPY server/voice-config.json /app/server/voice-config.json
 ENV TORIO_USE_FFMPEG=0
 ENV APP_BASE=/app
 
+# Bake the VAD / turn-detector model files into the image. Without this the
+# first job would try to fetch them at runtime — same class of trap as the
+# missing utils/ COPY in PR #120: fine everywhere it's tested, dead in the
+# container. Runs after the ENV lines because importing agent.py needs
+# APP_BASE to resolve server/prompts/. CI runs this same command so a broken
+# download fails the PR, not the deploy.
+RUN python agent.py download-files
+
 CMD ["python", "agent.py", "start"]

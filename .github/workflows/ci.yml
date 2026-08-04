@@ -108,6 +108,22 @@ jobs:
           BB_CLIENT_TOKEN: ci-dummy
           APP_BASE: ${{ github.workspace }}
         run: python -c "import agent"
+      # Model-files gate: the Dockerfile runs this exact command at build time
+      # to bake the VAD / turn-detector models into the image. Running it here
+      # means a missing subcommand or an unfetchable model fails the PR instead
+      # of shipping a container that dies on its first job — the PR #120 class
+      # of bug, caught one layer earlier.
+      - name: model-files gate (download-files succeeds, as the image build does)
+        env:
+          LIVEKIT_URL: ws://localhost:7880
+          LIVEKIT_API_KEY: ci-dummy
+          LIVEKIT_API_SECRET: ci-dummy
+          ANTHROPIC_API_KEY: ci-dummy
+          DEEPGRAM_API_KEY: ci-dummy
+          SERVER_URL: http://localhost:3333
+          BB_CLIENT_TOKEN: ci-dummy
+          APP_BASE: ${{ github.workspace }}
+        run: python agent.py download-files
 
   # agent/tests/ existed for weeks but never ran anywhere. Visibility-only for
   # now (NOT a required context, NOT in the report gate) — promote to required
