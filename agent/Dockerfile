@@ -20,5 +20,10 @@ COPY server/voice-config.json /app/server/voice-config.json
 
 ENV TORIO_USE_FFMPEG=0
 ENV APP_BASE=/app
+# Without this, CPython block-buffers stdout when it is a pipe, so every
+# print() in agent.py only reaches Railway when the process exits. A job that
+# HANGS rather than crashes therefore left no trace of where it stopped —
+# which is exactly the silent-greeting case we are trying to instrument.
+ENV PYTHONUNBUFFERED=1
 
 CMD ["python", "agent.py", "start"]
