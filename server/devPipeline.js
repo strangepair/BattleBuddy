@@ -1171,15 +1171,19 @@ export async function handleDevPipeline(req, res, deps) {
   // GET /dev/requests — list for the Dev tab.
   if (req.method === 'GET' && path === '/dev/requests') {
     if (!checkClientToken(req)) return json(401, { error: 'unauthorized' });
-    if (!supabase) return json(200, { requests: [] });
+    if (!supabase) return json(200, { total: 0, data: [], requests: [] });
     // Filterable: the flat newest-100 window hid in-flight rows behind a wall of
     // backlog, which is exactly how a slot-holding row stays invisible.
     const statusFilter = url.searchParams.get('status');
     const limit = Math.min(Number(url.searchParams.get('limit') || 100), 500);
+    const statusValues = statusFilter ? statusFilter.split(',').map((s) => s.trim()).filter(Boolean) : null;
+    let countQ = supabase.from('dev_build_requests').select('*', { count: 'exact', head: true });
+    if (statusValues) countQ = countQ.in('status', statusValues);
     let q = supabase.from('dev_build_requests').select('*');
-    if (statusFilter) q = q.in('status', statusFilter.split(',').map((s) => s.trim()).filter(Boolean));
-    const { data } = await q.order('created_at', { ascending: false }).limit(limit);
-    return json(200, { requests: (data || []).map(publicRow), enabled: isPipelineEnabled(), dryRun: isDryRun() });
+    if (statusValues) q = q.in('status', statusValues);
+    const [{ count }, { data }] = await Promise.all([countQ, q.order('created_at', { ascending: false }).limit(limit)]);
+    const rows = (data || []).map(publicRow);
+    return json(200, { total: count ?? rows.length, data: rows, requests: rows, enabled: isPipelineEnabled(), dryRun: isDryRun() });
   }
 
   // GET /dev/requests/:id
