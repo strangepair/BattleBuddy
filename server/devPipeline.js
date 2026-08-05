@@ -400,6 +400,10 @@ function publicRow(r) {
     // whether it skipped the train, and the work item it implements.
     release_id: r.release_id ?? null,
     reconciled_at: r.reconciled_at ?? null,
+    // Stage clock (migration 023): when this row took its current state, and
+    // whether a stage timeout is what retired it.
+    entered_at: r.entered_at ?? null,
+    timed_out_at: r.timed_out_at ?? null,
     work_item_id: r.work_item_id ?? null,
     expedite: r.expedite ?? false,
     created_at: r.created_at,
@@ -415,10 +419,19 @@ async function setStatus(supabase, id, patch, note) {
     .eq('id', id)
     .single();
   const history = Array.isArray(cur?.history) ? cur.history : [];
-  history.push({ at: new Date().toISOString(), from: cur?.status, to: patch.status, note: note || null });
+  const at = new Date().toISOString();
+  history.push({ at, from: cur?.status, to: patch.status, note: note || null });
   await supabase
     .from('dev_build_requests')
-    .update({ ...patch, updated_at: new Date().toISOString(), history })
+    .update({
+      ...patch,
+      // `entered_at` is when the row took its CURRENT state — the clock the
+      // stage-timeout sweep reads. updated_at cannot serve: any unrelated write
+      // (a reconciler touch, an archive) would reset the stage's TTL.
+      ...(patch.status && patch.status !== cur?.status ? { entered_at: at } : {}),
+      updated_at: at,
+      history,
+    })
     .eq('id', id);
 }
 
@@ -670,6 +683,33 @@ const TICK_TIMEOUT_MS = Number(process.env.DEV_WORKER_TICK_TIMEOUT_MS || 5 * 60 
 // timeout sweep can never disagree about what "occupies a slot" means.
 export const INFLIGHT_STATUSES = ['building', 'in_review', 'merging', 'deploying'];
 
+// ─── Stage timeouts (migration 023) ──────────────────────────────────────────
+//
+// No state may be permanent. Every in-flight state is a claim that GitHub still
+// owes us a transition, and every one of those claims can be lost: a callback
+// that 404s, an Actions run that is cancelled, an auto-merge that silently
+// disarms on a conflict, a release that never goes live. PR #124 sat in
+// `merging` and held the only slot until a human noticed; eleven rows did the
+// same thing on 2026-08-05 and cost the queue an afternoon.
+//
+// The reconciler repairs those from GitHub — when it is running, when GitHub
+// answers, and when GitHub actually knows. This is the backstop for when none
+// of that holds: past its stage's TTL a row is retired to `needs_attention`
+// with the reason written into it, and the slot comes back. Losing a slot to a
+// ghost is unrecoverable; retiring a row a human can resubmit is not.
+const STAGE_TTL_MINUTES = {
+  // Autobuild: Claude Code implements, pushes, opens the PR. The reconciler's
+  // own orphan check (no branch, no PR after 30m) usually gets here first.
+  building: Number(process.env.DEV_TTL_BUILDING_MIN || 45),
+  // Open PR waiting on CI, including a rerun after a flake.
+  in_review: Number(process.env.DEV_TTL_IN_REVIEW_MIN || 120),
+  // Green and waiting on auto-merge. Strict branch protection serialises
+  // merges, so this is generous — but a disarmed auto-merge waits forever.
+  merging: Number(process.env.DEV_TTL_MERGING_MIN || 90),
+  // Server deploy is minutes; a mobile change waits on an EAS build train.
+  deploying: Number(process.env.DEV_TTL_DEPLOYING_MIN || 180),
+};
+
 // Rows that were never built and never will be do not spend build budget.
 // Counting them (the old `neq('needs_attention')` did) let a burst of parked
 // duplicates silently exhaust DEV_MAX_PER_DAY and stall the queue for a day.
@@ -689,9 +729,72 @@ const heartbeat = {
   lastError: null,
   consecutiveErrors: 0,
   abandonedTicks: 0,
+  retiredTotal: 0,
+  lastSweep: null,
   gates: {},
   inflightRows: [],
 };
+
+/**
+ * Retire rows that have outstayed their stage, freeing the slots they hold.
+ *
+ * Exported for the watchdog and for tests. Idempotent: a row is retired once,
+ * because `needs_attention` is not an in-flight state and is never re-scanned.
+ */
+export async function sweepStageTimeouts(supabase, now = Date.now()) {
+  if (!supabase) return { retired: 0, rows: [] };
+
+  const { data, error } = await supabase
+    .from('dev_build_requests')
+    .select('id, title, status, pr_number, entered_at, updated_at, created_at')
+    .in('status', INFLIGHT_STATUSES)
+    .limit(100);
+  if (error) throw new Error(`stage timeout scan failed: ${error.message}`);
+
+  const retired = [];
+  for (const row of data || []) {
+    const ttl = STAGE_TTL_MINUTES[row.status];
+    if (!ttl) continue;
+    // entered_at is when this row took its CURRENT state. Rows that predate
+    // migration 023 fall back to updated_at, which is the same thing for every
+    // transition the pipeline has ever written.
+    const since = new Date(row.entered_at || row.updated_at || row.created_at || now).getTime();
+    if (!Number.isFinite(since)) continue;
+    const heldFor = Math.round((now - since) / 60000);
+    if (heldFor <= ttl) continue;
+
+    const reason = `stage timeout: held ${heldFor}m in ${row.status} (limit ${ttl}m) — `
+      + (row.pr_number
+        ? `PR #${row.pr_number} never reported a terminal state`
+        : 'no PR ever appeared')
+      + '. Slot released; resubmit when the cause is understood.';
+
+    await setStatus(supabase, row.id, {
+      status: 'needs_attention',
+      error: reason.slice(0, 300),
+      timed_out_at: new Date(now).toISOString(),
+      // Terminal by class: a stage timeout means something outside this process
+      // stopped answering. Auto-retrying that burns build minutes on a fault the
+      // pipeline cannot see.
+      failure_class: 'terminal',
+      next_retry_at: null,
+    }, reason);
+
+    // ONE visible alert per stuck row, collapsed by the partial unique index.
+    const { error: alertErr } = await supabase.from('pipeline_alerts').insert({
+      kind: 'stage_timeout',
+      signature: `stage_timeout:${row.id}`,
+      detail: { request_id: row.id, status: row.status, held_minutes: heldFor, ttl_minutes: ttl, pr_number: row.pr_number ?? null },
+    });
+    if (alertErr && !/duplicate key/i.test(alertErr.message)) {
+      console.error('[devPipeline] stage timeout alert failed:', alertErr.message);
+    }
+    console.warn(`[devPipeline] retired ${String(row.id).slice(0, 8)}: ${reason}`);
+    retired.push({ id: row.id, status: row.status, heldFor, ttl });
+  }
+
+  return { retired: retired.length, rows: retired };
+}
 
 /**
  * Everything needed to answer "is the dispatcher working, and if not, why not?"
@@ -762,6 +865,15 @@ async function workerTick(supabase) {
   heartbeat.gates = { dispatched: 0 };
 
   if (!supabase) { heartbeat.skipReason = 'no_database'; return; }
+
+  // Retire timed-out rows FIRST, so a slot freed by this sweep is filled by the
+  // same tick rather than 60 seconds later. Runs even when the pipeline is
+  // paused: like the reconciler, repairing state is correct while dispatching
+  // is not — and a pause is exactly when ghosts accumulate.
+  const swept = await sweepStageTimeouts(supabase);
+  heartbeat.lastSweep = { at: new Date().toISOString(), retired: swept.retired };
+  if (swept.retired) heartbeat.retiredTotal += swept.retired;
+
   if (!isPipelineEnabled()) { heartbeat.skipReason = PAUSED ? 'paused' : 'disabled'; return; }
 
   // ── Gates ─────────────────────────────────────────────────────────────────
@@ -771,7 +883,7 @@ async function workerTick(supabase) {
   const dayAgo = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
   const [inflightRes, todayRes, pendingCountRes] = await Promise.all([
     supabase.from('dev_build_requests')
-      .select('id, title, status, pr_number, updated_at')
+      .select('id, title, status, pr_number, entered_at, updated_at')
       .in('status', INFLIGHT_STATUSES)
       .order('updated_at', { ascending: true })
       .limit(50),
@@ -797,9 +909,10 @@ async function workerTick(supabase) {
     status: r.status,
     pr_number: r.pr_number ?? null,
     title: (r.title || '').slice(0, 80),
-    heldForMinutes: r.updated_at
-      ? Math.round((Date.now() - new Date(r.updated_at).getTime()) / 60000)
+    heldForMinutes: (r.entered_at || r.updated_at)
+      ? Math.round((Date.now() - new Date(r.entered_at || r.updated_at).getTime()) / 60000)
       : null,
+    ttlMinutes: STAGE_TTL_MINUTES[r.status] ?? null,
   }));
   heartbeat.gates = { inflight, today, pending: pendingCount, slots: 0, dispatched: 0 };
 

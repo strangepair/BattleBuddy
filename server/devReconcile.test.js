@@ -489,3 +489,38 @@ test('the tick reports its own health', async () => {
   assert.ok(s.at, 'last tick time is exposed so a stall is visible from outside');
   assert.equal(s.error, null);
 });
+
+// ─── Arbitration with the stage-timeout sweep ────────────────────────────────
+//
+// A retired row gave its concurrency slot back. Re-arming it takes the slot
+// again and the sweep retires it 60 seconds later — a fight that costs the
+// queue, not just the history log.
+
+test('a timed-out row is not dragged back in flight by an open PR', () => {
+  const retired = row({ status: 'needs_attention', timed_out_at: '2026-08-03T19:00:00Z' });
+
+  const green = deriveState({ row: retired, pr: openPr(), checks: 'passed', now: NOW });
+  assert.equal(green.status, undefined, 'green-but-unmerged must not re-arm a retired row');
+  assert.equal(green.pr_number, 12, 'GitHub still updates what it genuinely knows');
+  assert.equal(green.checks_status, 'passed');
+
+  const running = deriveState({ row: retired, pr: openPr(), checks: 'running', now: NOW });
+  assert.equal(running.status, undefined);
+});
+
+test('terminal truth still wins over a stage timeout, and clears the marker', () => {
+  const retired = row({ status: 'needs_attention', timed_out_at: '2026-08-03T19:00:00Z' });
+
+  const shipped = deriveState({
+    row: retired,
+    pr: mergedPr(),
+    deploy: { status: 'completed', conclusion: 'success' },
+    now: NOW,
+  });
+  assert.equal(shipped.status, 'deployed', 'a change that actually shipped is not stuck');
+  assert.equal(shipped.timed_out_at, null, 'the timeout marker is cleared with it');
+
+  const closed = deriveState({ row: retired, pr: { ...openPr(), state: 'closed', merged_at: null }, now: NOW });
+  assert.equal(closed.status, 'superseded');
+  assert.equal(closed.timed_out_at, null);
+});
