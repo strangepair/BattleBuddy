@@ -126,8 +126,29 @@ export function checksVerdict(checkRuns) {
  * @param {string?} trainEpoch     ISO time mobile-release.yml began existing
  * @param {number}  now            epoch ms
  */
+// States in which a row is still counted against DEV_MAX_CONCURRENT. Kept in
+// step with devPipeline's INFLIGHT_STATUSES; duplicated rather than imported to
+// keep this module's dependency direction one-way.
+const INFLIGHT = ['building', 'in_review', 'merging', 'deploying'];
+
 export function deriveState(args) {
   const out = deriveStateRaw(args);
+
+  // ARBITRATION with the stage-timeout sweep. A row retired by a stage timeout
+  // gave its concurrency slot back; putting it back in an in-flight state takes
+  // the slot again, and the sweep would retire it again 60 seconds later —
+  // exactly the fight the breaker arbitration below exists to prevent, but with
+  // the queue as the casualty. So GitHub may still update the row's PR, branch
+  // and checks, and it still wins outright whenever it knows something TERMINAL
+  // (merged and deployed, closed unmerged, failed) — which also clears the
+  // timeout marker. What it may not do is re-arm a retired row.
+  if (args.row?.timed_out_at && out.status) {
+    if (INFLIGHT.includes(out.status)) {
+      const { status, ...rest } = out;
+      return rest;
+    }
+    out.timed_out_at = null;
+  }
 
   // ARBITRATION with the circuit breaker. `needs_attention` is an escalation the
   // breaker raised after N failures sharing a signature — it carries strictly
@@ -361,9 +382,19 @@ async function applyPatch(supabase, row, patch, prevStatus) {
     to: patch.status ?? prevStatus,
     note: 'reconciled from GitHub',
   });
+  const at = new Date().toISOString();
   await supabase
     .from('dev_build_requests')
-    .update({ ...patch, history, reconciled_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .update({
+      ...patch,
+      // A reconciled transition restarts the stage clock, same as a webhook one.
+      // Without this, a row the reconciler moves into `deploying` inherits the
+      // age of the state it left and can be retired the instant it arrives.
+      ...(patch.status && patch.status !== prevStatus ? { entered_at: at } : {}),
+      history,
+      reconciled_at: at,
+      updated_at: at,
+    })
     .eq('id', row.id);
 }
 
