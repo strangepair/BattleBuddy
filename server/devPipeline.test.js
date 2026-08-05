@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dedupeKey, looksForbidden, patchForEvent, isPipelineEnabled, collapseNearDuplicates, generateProductRequests, insertRequests, insertSubmission, triageSubmission, handleRepetition, processSubmission, classifyFailure, failureSignature, retryDelayMs, applyFailure, runDevBuildWorker, resubmitPlan, RESUBMITTABLE, parkUnprocessedDirective, titleSimilarity, handleDevPipeline, workerStatus, sweepStageTimeouts } from './devPipeline.js';
+import { dedupeKey, looksForbidden, patchForEvent, isPipelineEnabled, collapseNearDuplicates, generateProductRequests, insertRequests, insertSubmission, triageSubmission, handleRepetition, processSubmission, classifyFailure, failureSignature, retryDelayMs, applyFailure, runDevBuildWorker, resubmitPlan, RESUBMITTABLE, parkUnprocessedDirective, titleSimilarity, handleDevPipeline, workerStatus, sweepStageTimeouts, runWorkerWatchdog } from './devPipeline.js';
 
 test('dedupeKey is stable and target-scoped', () => {
   const a = dedupeKey('ui', 'Make the greeting warmer!');
@@ -1183,4 +1183,96 @@ test('a status change stamps the stage clock; the retry pass does not', async ()
   const row = sb._store.dev_build_requests[0];
   assert.equal(row.status, 'building');
   assert.ok(row.entered_at, 'entering `building` starts that stage clock');
+});
+
+// ─── Watchdog: the stall corrects itself and says that it did ────────────────
+
+const NOW_MS = Date.parse('2026-08-05T18:00:00Z');
+const ago = (ms) => new Date(NOW_MS - ms).toISOString();
+
+/** A workerStatus() shape, healthy unless told otherwise. */
+const statusOf = (over = {}) => () => ({
+  bootedAt: ago(3600_000),
+  lastTickStartedAt: ago(10_000),
+  lastTickFinishedAt: ago(9_000),
+  running: false,
+  consecutiveErrors: 0,
+  starved: false,
+  maxConcurrent: 1,
+  gates: { inflight: 0, pending: 0, dispatched: 0 },
+  inflightRows: [],
+  lastError: null,
+  ...over,
+});
+
+test('watchdog leaves a healthy dispatcher alone', async () => {
+  const sb = makeSelfHealSupabase();
+  let kicked = 0;
+  const r = await runWorkerWatchdog({ supabase: sb, kick: () => { kicked += 1; }, status: statusOf(), now: NOW_MS });
+
+  assert.equal(r.healthy, true);
+  assert.equal(kicked, 0, 'a healthy tick is never restarted');
+  assert.equal(sb._store.pipeline_alerts.length, 0, 'and never alerted on');
+});
+
+test('watchdog restarts a dispatcher that stopped ticking', async () => {
+  const sb = makeSelfHealSupabase();
+  let kicked = 0; let rearmed = 0;
+  const r = await runWorkerWatchdog({
+    supabase: sb,
+    kick: () => { kicked += 1; },
+    restartTimer: () => { rearmed += 1; },
+    status: statusOf({ lastTickFinishedAt: ago(20 * 60_000), lastTickStartedAt: ago(20 * 60_000) }),
+    now: NOW_MS,
+  });
+
+  assert.equal(r.healthy, false);
+  assert.match(r.reasons[0], /no completed tick for \d+s/);
+  assert.equal(rearmed, 1, 'the interval is re-armed — a dead timer is not fixed by one tick');
+  assert.equal(kicked, 1, 'and a tick runs now, not in 60s');
+  assert.equal(sb._store.pipeline_alerts[0].kind, 'worker_stall', 'the self-restart is visible, not silent');
+});
+
+test('watchdog fires on the exact 2026-08-05 shape: pending work, free slot, no dispatch', async () => {
+  const sb = makeSelfHealSupabase();
+  const starved = statusOf({ starved: true, gates: { inflight: 0, pending: 29, dispatched: 0 } });
+  let kicked = 0;
+
+  // One starved tick is not a stall: a row can arrive a millisecond after the
+  // queue was read. The watchdog waits for it to persist.
+  const first = await runWorkerWatchdog({ supabase: sb, kick: () => { kicked += 1; }, status: starved, now: NOW_MS });
+  assert.equal(first.healthy, true, 'a single starved tick is tolerated');
+  assert.equal(kicked, 0);
+
+  const later = await runWorkerWatchdog({ supabase: sb, kick: () => { kicked += 1; }, status: starved, now: NOW_MS + 3 * 60_000 });
+  assert.equal(later.healthy, false);
+  assert.match(later.reasons[0], /29 pending with 1 free slot\(s\) and nothing dispatched/);
+  assert.equal(kicked, 1);
+  assert.equal(sb._store.pipeline_alerts.filter((a) => !a.resolved_at).length, 1);
+});
+
+test('a continuing stall raises ONE alert, and recovery closes it', async () => {
+  const sb = makeSelfHealSupabase();
+  const stalled = statusOf({ lastTickFinishedAt: ago(30 * 60_000), lastTickStartedAt: ago(30 * 60_000) });
+
+  await runWorkerWatchdog({ supabase: sb, kick: () => {}, status: stalled, now: NOW_MS });
+  await runWorkerWatchdog({ supabase: sb, kick: () => {}, status: stalled, now: NOW_MS + 60_000 });
+  assert.equal(sb._store.pipeline_alerts.length, 1, 'a stall that lasts an hour is one alert, not sixty');
+
+  await runWorkerWatchdog({ supabase: sb, kick: () => {}, status: statusOf(), now: NOW_MS + 120_000 });
+  assert.ok(sb._store.pipeline_alerts[0].resolved_at,
+    'an open worker_stall must always mean "right now"');
+});
+
+test('watchdog fires when every tick throws', async () => {
+  const sb = makeSelfHealSupabase();
+  const r = await runWorkerWatchdog({
+    supabase: sb,
+    kick: () => {},
+    status: statusOf({ consecutiveErrors: 4, lastError: { message: 'connection reset' } }),
+    now: NOW_MS,
+  });
+
+  assert.equal(r.healthy, false);
+  assert.match(r.reasons[0], /4 consecutive tick failures: connection reset/);
 });
