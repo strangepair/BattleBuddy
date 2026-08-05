@@ -4008,7 +4008,20 @@ setInterval(() => {
 // even when dispatching new builds is paused. DEV_RECONCILE_ENABLED=false is
 // the kill switch.
 setInterval(() => {
-  runReconcileTick({ supabase }).catch((err) => console.error('[devReconcile] tick:', err.message));
+  runReconcileTick({
+    supabase,
+    // Push every derived transition down the existing SSE channel so a client
+    // watching the pipeline sees a status change without asking for it. The Dev
+    // screen also polls while focused — this is the low-latency path, the poll
+    // is the one that cannot silently stop working.
+    onTransition: (t) => {
+      try {
+        broadcastToUser('pipeline', 'dashboard:pipeline-update', { transition: t });
+      } catch (err) {
+        console.error('[devReconcile] broadcast:', err.message);
+      }
+    },
+  }).catch((err) => console.error('[devReconcile] tick:', err.message));
 }, DEV_BUILD_CHECK_MS);
 
 // Dev-mode capture idle sweep: flushes dev-mode conversation segments that

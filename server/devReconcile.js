@@ -21,8 +21,23 @@
 // decided. Stage 6's webhooks call the same function with the same shape, so a
 // webhook and a tick can never disagree about the same PR.
 
-import { githubJson } from './githubApi.js';
+import { githubJson, rateLimitRemaining } from './githubApi.js';
 import { upsertChangeForRequest } from './devRelease.js';
+
+// Last tick's outcome, served by GET /dev/reconcile/status. The first version of
+// this module stalled silently for hours and could not be diagnosed from outside
+// the container at all — no Railway log access, no route, nothing. Reconciler
+// health has to be observable or it is not operable.
+let lastTick = { at: null, checked: 0, patched: 0, adopted: 0, error: null, skipped: null };
+export function reconcileStatus() {
+  return { ...lastTick, rate_limit_remaining: rateLimitRemaining() };
+}
+
+// A merged PR's file list never changes, so this is safe to keep for the life of
+// the process. It also matters: re-listing files for every merged row on every
+// tick was most of this module's GitHub traffic.
+const mobileCache = new Map();
+let trainEpochCache;
 
 // Rows in these states are still in GitHub's hands. `duplicate` and `deployed`
 // are terminal and are left alone; re-deriving them every minute would cost
@@ -41,6 +56,9 @@ const ORPHAN_MS = Number(process.env.DEV_ORPHAN_MINUTES || 30) * 60 * 1000;
 // import the entire history of the repository.
 const ADOPT_WINDOW_MS = Number(process.env.DEV_ADOPT_WINDOW_DAYS || 14) * 24 * 3600 * 1000;
 const ADOPT_PER_TICK = Number(process.env.DEV_ADOPT_PER_TICK || 5);
+// GitHub gives a PAT 5,000 REST calls an hour. Stop well short so the pipeline's
+// own dispatch and callback traffic is never starved by bookkeeping.
+const RATE_FLOOR = Number(process.env.DEV_RECONCILE_RATE_FLOOR || 500);
 
 const UUID_RE = /^auto\/dev-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 const TRAILER_RE = /^Dev-Request-Id:\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\s*$/im;
@@ -105,9 +123,28 @@ export function checksVerdict(checkRuns) {
  * @param {string?} lastGoodDeploy ISO timestamp of the newest SUCCESSFUL main deploy
  * @param {boolean} touchesMobile  whether the PR changed anything under mobile/
  * @param {object?} release        the release carrying this change, if any
+ * @param {string?} trainEpoch     ISO time mobile-release.yml began existing
  * @param {number}  now            epoch ms
  */
-export function deriveState({ row, pr, checks, deploy, lastGoodDeploy, touchesMobile, release, now }) {
+export function deriveState(args) {
+  const out = deriveStateRaw(args);
+
+  // ARBITRATION with the circuit breaker. `needs_attention` is an escalation the
+  // breaker raised after N failures sharing a signature — it carries strictly
+  // more information than "CI is red", which is all this module can see. Letting
+  // the reconciler downgrade it to `failed` would start a fight: breaker
+  // escalates, tick demotes, every 60 seconds, spamming history and hiding the
+  // alert. GitHub still wins whenever it says something the breaker cannot know
+  // (merged, superseded, green again) — only the failed/needs_attention pair is
+  // resolved in the breaker's favour.
+  if (args.row?.status === 'needs_attention' && out.status === 'failed') {
+    const { status, error, ...rest } = out;
+    return rest;
+  }
+  return out;
+}
+
+function deriveStateRaw({ row, pr, checks, deploy, lastGoodDeploy, touchesMobile, release, trainEpoch, now }) {
   const out = {};
   // `null` is a real value here, not "no opinion": clearing a stale `error` is
   // half of what repairing a wrongly-failed row means. Only `undefined` (GitHub
@@ -193,7 +230,14 @@ export function deriveState({ row, pr, checks, deploy, lastGoodDeploy, touchesMo
   // The server side is live. A change that also touches mobile/ is only really
   // shipped once a build train release carries it to TestFlight — saying
   // "deployed" before that is the lie the Dev tab used to tell.
-  if (touchesMobile) {
+  //
+  // But ONLY for changes merged after the train existed. Anything merged before
+  // mobile-release.yml landed was built by deploy.yml's own mobile job, and no
+  // release will ever carry it — gating those on a release strands them in
+  // `deploying` forever, which is the very drift this module exists to remove.
+  // PRs #93 and #83 were sitting exactly there.
+  const trainOwnsThis = Boolean(trainEpoch) && mergedAt >= new Date(trainEpoch).getTime();
+  if (touchesMobile && trainOwnsThis) {
     if (release?.status === 'live') {
       set('status', 'deployed');
       set('deploy_status', 'ok');
@@ -274,20 +318,36 @@ export async function loadGitHubSnapshot() {
     }
   }
 
-  return { prsByNumber, prsByBranch, deployBySha, lastGoodDeploy };
+  return { prsByNumber, prsByBranch, deployBySha, lastGoodDeploy, trainEpoch: await loadTrainEpoch() };
+}
+
+/**
+ * When the build train began to exist — the moment mobile-release.yml appeared.
+ *
+ * Anything merged before this was built by deploy.yml's own mobile job and must
+ * not be gated on a release that will never come. Cached for the life of the
+ * process: a workflow's creation time is immutable.
+ */
+async function loadTrainEpoch() {
+  if (trainEpochCache !== undefined) return trainEpochCache;
+  try {
+    const wf = await githubJson('actions/workflows/mobile-release.yml');
+    trainEpochCache = wf?.created_at || null;
+  } catch {
+    // Workflow absent (or unreadable) means no train, so nothing is gated.
+    trainEpochCache = null;
+  }
+  return trainEpochCache;
 }
 
 /** Does this PR change anything the mobile build ships? */
-async function prTouchesMobile(prNumber, cache) {
-  if (cache.has(prNumber)) return cache.get(prNumber);
-  let touches = false;
-  try {
-    const files = await githubJson(`pulls/${prNumber}/files?per_page=100`);
-    touches = (files || []).some((f) => String(f.filename || '').startsWith('mobile/'));
-  } catch (err) {
-    console.error('[devReconcile] could not list PR files:', err.message);
-  }
-  cache.set(prNumber, touches);
+async function prTouchesMobile(prNumber) {
+  if (mobileCache.has(prNumber)) return mobileCache.get(prNumber);
+  const files = await githubJson(`pulls/${prNumber}/files?per_page=100`);
+  const touches = (files || []).some((f) => String(f.filename || '').startsWith('mobile/'));
+  // Only cache a real answer. Caching a failure as `false` would permanently
+  // mark a mobile change as server-only and ship it early.
+  mobileCache.set(prNumber, touches);
   return touches;
 }
 
@@ -403,7 +463,8 @@ export async function runReconcileTick(deps) {
     snapshot = await loadGitHubSnapshot();
   } catch (err) {
     console.error('[devReconcile] GitHub snapshot failed:', err.message);
-    return { checked: 0, patched: 0, adopted: 0 };
+    lastTick = { at: new Date().toISOString(), checked: 0, patched: 0, adopted: 0, error: err.message, skipped: null };
+    return { checked: 0, patched: 0, adopted: 0, error: err.message };
   }
 
   const { data: rows } = await supabase
@@ -414,98 +475,141 @@ export async function runReconcileTick(deps) {
     .limit(BATCH);
 
   const now = Date.now();
-  const mobileCache = new Map();
   const seenPrNumbers = new Set();
   let patched = 0;
+  let skipped = null;
 
   for (const row of rows || []) {
     if (row.archived) continue;
 
-    let pr = null;
-    if (row.pr_number) pr = snapshot.prsByNumber.get(row.pr_number) || null;
-    if (!pr && row.branch) pr = snapshot.prsByBranch.get(row.branch) || null;
-    if (!pr) pr = snapshot.prsByBranch.get(`auto/dev-${row.id}`) || null;
-    // A row whose PR fell off the recent page still has to be reconciled — this
-    // is precisely the old, drifted row we most need to repair.
-    if (!pr && row.pr_number) {
-      try { pr = await githubJson(`pulls/${row.pr_number}`); } catch { pr = null; }
-    }
-    if (pr) seenPrNumbers.add(pr.number);
-
-    let checks = null;
-    if (pr && pr.state === 'open' && pr.head?.sha) {
-      try {
-        const body = await githubJson(`commits/${pr.head.sha}/check-runs?per_page=50`);
-        checks = checksVerdict(body?.check_runs);
-      } catch (err) {
-        console.error('[devReconcile] check-runs failed:', err.message);
-      }
+    // RATE GUARD. Bookkeeping must never starve the pipeline's own dispatch and
+    // callback traffic. Stop the batch, keep what we did, resume next tick.
+    const remaining = rateLimitRemaining();
+    if (remaining !== null && remaining < RATE_FLOOR) {
+      skipped = `github rate budget ${remaining} below floor ${RATE_FLOOR}`;
+      console.warn(`[devReconcile] stopping batch early: ${skipped}`);
+      break;
     }
 
-    let deploy = null;
-    let touchesMobile = false;
-    let release = null;
-    if (pr && pr.merged_at) {
-      if (pr.merge_commit_sha) deploy = snapshot.deployBySha.get(pr.merge_commit_sha) || null;
-      touchesMobile = await prTouchesMobile(pr.number, mobileCache);
-      if (row.release_id) {
-        const { data: rel } = await supabase
-          .from('releases').select('id, status, version').eq('id', row.release_id).single();
-        release = rel || null;
-      }
-    }
-
-    const patch = deriveState({
-      row, pr, checks, deploy, lastGoodDeploy: snapshot.lastGoodDeploy, touchesMobile, release, now,
-    });
-
-    const keys = Object.keys(patch);
-    if (keys.length === 0) {
-      // Nothing to say, but record that we looked — otherwise this row is
-      // re-checked first on every tick and newer rows starve.
+    // PER-ROW ISOLATION — the fix for the stall that made the first version of
+    // this module useless in practice. The loop had no try/catch, so ONE row
+    // that threw aborted the entire tick; and because every row before it had
+    // already had `reconciled_at` advanced, the next tick began at the same bad
+    // row and died in the same place. Forever, silently. A reconciler that one
+    // unlucky row can stop is not a reconciler.
+    try {
+      const didPatch = await reconcileRow({ supabase, row, snapshot, now, onTransition, seenPrNumbers });
+      if (didPatch) patched += 1;
+    } catch (err) {
+      // String(...) not row.id.slice(...): the whole point of this block is to
+      // survive a malformed row, and a row with no id would throw here too.
+      console.error(`[devReconcile] row ${String(row.id).slice(0, 8)} failed:`, err.message);
+      // Advance the cursor anyway: a row that always throws then costs one
+      // attempt per pass instead of blocking every row behind it.
       await supabase
         .from('dev_build_requests')
         .update({ reconciled_at: new Date().toISOString() })
         .eq('id', row.id);
-      continue;
-    }
-
-    // Read the old status BEFORE writing: the patch is what we are about to
-    // apply, and every consumer below reports the transition, not the result.
-    const prevStatus = row.status;
-    const nextStatus = patch.status ?? prevStatus;
-    await applyPatch(supabase, row, patch, prevStatus);
-    patched += 1;
-    console.log(`[devReconcile] ${row.id.slice(0, 8)} ${prevStatus} -> ${nextStatus} (${keys.join(', ')})`);
-
-    const workItemId = await syncWorkItem(supabase, row, nextStatus);
-    await upsertChangeForRequest(
-      supabase,
-      { ...row, ...patch, work_item_id: workItemId },
-      row.release_id,
-      changeStatusFor(nextStatus),
-    );
-
-    if (patch.status && workItemId) {
-      await supabase.from('pipeline_events').insert({
-        kind: 'reconciled',
-        work_item_id: workItemId,
-        detail: { request_id: row.id, from: prevStatus, to: nextStatus, pr_number: pr?.number ?? null },
-      }).then(({ error }) => { if (error) console.error('[devReconcile] event insert:', error.message); });
-    }
-
-    if (patch.status && typeof onTransition === 'function') {
-      try {
-        onTransition({ id: row.id, from: prevStatus, to: nextStatus, pr_number: pr?.number ?? null });
-      } catch (err) {
-        console.error('[devReconcile] onTransition:', err.message);
-      }
     }
   }
 
   const adopted = await adoptUntrackedPrs(supabase, snapshot, seenPrNumbers, now);
 
-  return { checked: (rows || []).length, patched, adopted };
+  lastTick = {
+    at: new Date().toISOString(),
+    checked: (rows || []).length,
+    patched,
+    adopted,
+    error: null,
+    skipped,
+  };
+  return { checked: (rows || []).length, patched, adopted, skipped };
+}
+
+/** Reconcile exactly one row. Returns true if it wrote a patch. */
+async function reconcileRow({ supabase, row, snapshot, now, onTransition, seenPrNumbers }) {
+  let pr = null;
+  if (row.pr_number) pr = snapshot.prsByNumber.get(row.pr_number) || null;
+  if (!pr && row.branch) pr = snapshot.prsByBranch.get(row.branch) || null;
+  if (!pr) pr = snapshot.prsByBranch.get(`auto/dev-${row.id}`) || null;
+  // A row whose PR fell off the recent page still has to be reconciled — this
+  // is precisely the old, drifted row we most need to repair.
+  if (!pr && row.pr_number) {
+    try { pr = await githubJson(`pulls/${row.pr_number}`); } catch { pr = null; }
+  }
+  if (pr) seenPrNumbers.add(pr.number);
+
+  let checks = null;
+  if (pr && pr.state === 'open' && pr.head?.sha) {
+    try {
+      const body = await githubJson(`commits/${pr.head.sha}/check-runs?per_page=50`);
+      checks = checksVerdict(body?.check_runs);
+    } catch (err) {
+      console.error('[devReconcile] check-runs failed:', err.message);
+    }
+  }
+
+  let deploy = null;
+  let touchesMobile = false;
+  let release = null;
+  if (pr && pr.merged_at) {
+    if (pr.merge_commit_sha) deploy = snapshot.deployBySha.get(pr.merge_commit_sha) || null;
+    touchesMobile = await prTouchesMobile(pr.number);
+    if (row.release_id) {
+      const { data: rel } = await supabase
+        .from('releases').select('id, status, version').eq('id', row.release_id).single();
+      release = rel || null;
+    }
+  }
+
+  const patch = deriveState({
+    row, pr, checks, deploy, lastGoodDeploy: snapshot.lastGoodDeploy,
+    touchesMobile, release, trainEpoch: snapshot.trainEpoch, now,
+  });
+
+  const keys = Object.keys(patch);
+  if (keys.length === 0) {
+    // Nothing to say, but record that we looked — otherwise this row is
+    // re-checked first on every tick and newer rows starve.
+    await supabase
+      .from('dev_build_requests')
+      .update({ reconciled_at: new Date().toISOString() })
+      .eq('id', row.id);
+    return false;
+  }
+
+  // Read the old status BEFORE writing: the patch is what we are about to
+  // apply, and every consumer below reports the transition, not the result.
+  const prevStatus = row.status;
+  const nextStatus = patch.status ?? prevStatus;
+  await applyPatch(supabase, row, patch, prevStatus);
+  console.log(`[devReconcile] ${row.id.slice(0, 8)} ${prevStatus} -> ${nextStatus} (${keys.join(', ')})`);
+
+  const workItemId = await syncWorkItem(supabase, row, nextStatus);
+  await upsertChangeForRequest(
+    supabase,
+    { ...row, ...patch, work_item_id: workItemId },
+    row.release_id,
+    changeStatusFor(nextStatus),
+  );
+
+  if (patch.status && workItemId) {
+    await supabase.from('pipeline_events').insert({
+      kind: 'reconciled',
+      work_item_id: workItemId,
+      detail: { request_id: row.id, from: prevStatus, to: nextStatus, pr_number: pr?.number ?? null },
+    }).then(({ error }) => { if (error) console.error('[devReconcile] event insert:', error.message); });
+  }
+
+  if (patch.status && typeof onTransition === 'function') {
+    try {
+      onTransition({ id: row.id, from: prevStatus, to: nextStatus, pr_number: pr?.number ?? null });
+    } catch (err) {
+      console.error('[devReconcile] onTransition:', err.message);
+    }
+  }
+
+  return true;
 }
 
 /** Second pass: PRs with no row at all. */

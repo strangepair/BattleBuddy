@@ -8,6 +8,14 @@
 
 const GITHUB_API = 'https://api.github.com';
 
+// Last value GitHub reported for this token's hourly REST budget. Callers that
+// loop (the reconciler) check it and stop early rather than spending the
+// pipeline's dispatch budget on bookkeeping.
+let lastRateRemaining = null;
+export function rateLimitRemaining() {
+  return lastRateRemaining;
+}
+
 export function githubRepo() {
   return process.env.GITHUB_REPO || 'strangepair/BattleBuddy';
 }
@@ -37,6 +45,8 @@ export async function githubFetch(url, init) {
       ...(init && init.headers),
     },
   });
+  const remaining = res.headers.get('x-ratelimit-remaining');
+  if (remaining !== null && remaining !== '') lastRateRemaining = Number(remaining);
   if (!res.ok) throw new Error(`github ${res.status} for ${full.split('/repos/')[1] || full}`);
   return res;
 }
