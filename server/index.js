@@ -31,6 +31,9 @@ import { runPromotionSweep } from './promotionJob.js';
 import { buildVoiceGreeting, sessionGapPhrase } from './greeting.js';
 import { storeVoiceAgentConfig, takeVoiceAgentConfig } from './voiceAgentConfig.js';
 import {
+  noteVoiceRoom, clearVoiceRoomForUser, clearVoiceRoomByName, speakInVoiceRoom,
+} from './voiceBridge.js';
+import {
   insertCommitments, getOpenCommitmentKeys, getDueCommitment, markCommitmentDelivered,
 } from './vectorStore.js';
 import {
@@ -1182,6 +1185,25 @@ async function streamTextTurn(res, systemPrompt, conversationMessages, effective
     if (!finalMessage) return;
   }
 
+  // Voice bridge: hand the finished reply to the room so BB speaks the exact
+  // text the user is reading. Fire-and-forget — it can never delay or break
+  // the SSE turn. Keyed on the user, not the session: the client only sends a
+  // sessionId once one exists, so a fresh voice session (speaker tapped before
+  // anything was typed) has none at connect time and would never be mapped.
+  try {
+    const spoken = (finalMessage.content || [])
+      .filter(b => b.type === 'text')
+      .map(b => b.text)
+      .join('')
+      .trim();
+    if (spoken) {
+      speakInVoiceRoom(effectiveUserId, spoken)
+        .catch(err => console.error('[Speak] bridge error:', err.message));
+    }
+  } catch (e) {
+    console.error('[Speak] Could not extract reply text:', e.message);
+  }
+
   res.write('data: [DONE]\n\n');
   res.end();
 }
@@ -1648,6 +1670,10 @@ const server = createServer(async (req, res) => {
           metadata: dispatchMetadata,
         });
         console.log(`Dispatched agent to room: ${roomName} (user: ${userName}, metadata ${dispatchMetadata.length} bytes)`);
+        // Only after a successful dispatch — a failed dispatch means no agent
+        // is in the room, so there is nothing that could speak. Keyed on the
+        // RESOLVED user id, the same value /session/turn hands the bridge.
+        noteVoiceRoom(resolveUserId(effectiveUserId), roomName);
       } catch (dispatchErr) {
         // A failed dispatch means NO agent joins this room — the user hears
         // nothing. Never bury this as info-level "may already exist".
@@ -1685,6 +1711,63 @@ const server = createServer(async (req, res) => {
       res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify(config));
     } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  // ─── Voice greeting: the opening line, already spoken-ready ────────────────
+  // buildVoiceGreeting composes an INSTRUCTION ("greet Mike by name, you last
+  // spoke 3 days ago, reference this fact…"). The voice agent used to hand that
+  // to its own LLM and speak the result — the one path that never produced
+  // audio, so every voice session opened in silence. The agent has no LLM any
+  // more (agent/agent.py), so the instruction is rendered to a literal line
+  // here and the agent speaks it verbatim. Auth is the same single-dispatch
+  // nonce as /livekit/agent-config, which stays readable for its TTL.
+  if (req.method === 'POST' && req.url === '/voice/greeting') {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    try {
+      const { room, token } = JSON.parse(body || '{}');
+      const config = takeVoiceAgentConfig(room, token);
+      if (!config) {
+        res.writeHead(404, { ...CORS, 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'no config for room' }));
+      }
+
+      // The greeting instruction rides as its own trailing system block. The
+      // static half above it is the cached prefix shared with every text turn;
+      // appending inside it would invalidate that cache for the whole app.
+      const cached = toCachedSystemBlocks(config.systemPrompt);
+      const systemBlocks = (Array.isArray(cached) ? cached : [{ type: 'text', text: cached }]).concat({
+        type: 'text',
+        text: `## Opening this voice session\n${config.greeting}\n\nReply with ONLY the words to say out loud — no stage directions, no quotation marks, no markdown. It is spoken aloud exactly as written.`,
+      });
+
+      const msg = await client.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 200,
+        system: systemBlocks,
+        messages: [{ role: 'user', content: '[The user just connected on voice. Speak first.]' }],
+      });
+      // Models like to wrap a requested line in quotes; TTS reads those as a
+      // pause and a change of register, so drop a matched outer pair.
+      const text = (msg.content || [])
+        .filter(b => b.type === 'text').map(b => b.text).join('').trim()
+        .replace(/^["“'](.*)["”']$/s, '$1').trim();
+
+      if (!text) {
+        // The agent falls back to a literal opener — a plain greeting beats a
+        // silent connect, which is the failure this endpoint exists to end.
+        console.warn('[Voice] greeting render produced no text — agent will use its fallback');
+        res.writeHead(502, { ...CORS, 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'empty greeting' }));
+      }
+      console.log(`[Voice] Greeting rendered for ${config.userId} (${text.length} chars): ${text.slice(0, 120)}`);
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ text }));
+    } catch (err) {
+      console.error('[Voice] greeting render failed:', err.message);
       res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: err.message }));
     }
@@ -2216,6 +2299,7 @@ Return ONLY the JSON object, no markdown, no explanation.`;
       // COMMITMENTS_ENABLED). Independent of the analysis below and its own
       // background pass, so a failure in either can't affect the other.
       if (isSessionEnd) {
+        clearVoiceRoomForUser(resolveUserId(userId || 'default'));
         maybeInferCommitments(userId || 'default', messages, timezone || 'America/Chicago').catch(() => {});
       }
 
@@ -3088,6 +3172,11 @@ Return ONLY the JSON object, no markdown, no explanation.`;
         if (userId === 'default' && roomName.startsWith('bb-')) {
           userId = roomName.replace('bb-', '');
         }
+
+        // The room is gone — stop routing spoken replies to it. A backstop for
+        // the /context/analyze session-end clear above: a voice session that
+        // ends by the user closing the app never posts one.
+        clearVoiceRoomByName(roomName);
 
         // Observability only. This webhook used to increment session_count as
         // a "safety net", but the voice agent's final transcript (3 retries)

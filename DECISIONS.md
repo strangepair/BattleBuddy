@@ -4,6 +4,30 @@ A running log of significant product/architecture decisions and deviations from 
 
 ---
 
+## 2026-08-04 — One brain: the voice agent speaks bb-server's reply and generates nothing
+
+**Context.** Voice had two brains and neither reached the user's ears. The mobile client routes every final STT transcript to `POST /session/turn` (`VoiceSession.tsx` → `useSessionChat` → `chatStream.ts`), which generates the reply the user *reads*. The LiveKit agent independently ran its own Anthropic call over the same turn — and that generation never produced audio. So a voice session transcribed speech perfectly, printed an answer in the chat, and said nothing. `docs/06-VOICE.md` says "same agent in voice and text"; in practice there were two, and the second one was the broken one.
+
+**PR #125 built the bridge; this finishes the architecture.** #125 added the `bb.speak` data channel — `/session/turn` hands its finished reply to the room, the agent speaks it with `session.say()` through the live Deepgram TTS. That was the right call and is kept intact, topic name included. It stopped short of four things, each of which is why voice was still not whole:
+
+1. **The second brain was described as disabled, but nothing disabled it.** `on_user_turn_completed` returned normally, so livekit-agents ran the agent's LLM on every turn exactly as before — it just hung there. Now it raises `StopResponse`, which the framework catches to abandon the turn before any LLM call. The user's transcript is unaffected: `user_input_transcribed` fires in the STT pipeline, upstream of and independent from reply generation, so the client still POSTs it and the reply still comes back. Without this, the day the agent's LLM starts working is the day every utterance gets two different answers, both spoken.
+2. **The greeting was still on the broken path.** `session.generate_reply(instructions=greeting)` is the exact call that never produced audio, so a connect still opened in silence. `buildVoiceGreeting` composes an *instruction*, and an agent with no LLM cannot turn that into speech — so `POST /voice/greeting` renders it to a literal line (same nonce auth as `/livekit/agent-config`) and the agent says that. The remaining `generate_reply` calls — billing/rate-limit notices, the sign-off — became literal `say()`s too; asking a model to announce an outage is a model call inside an outage.
+3. **The room map was keyed on the client's `sessionId`,** which the client only sends once a session exists. Tap the speaker before typing anything and it is `undefined` at `/livekit/token` time: nothing is mapped, and that session is silent for its whole life. Now keyed on the resolved `userId`, the one key both sides always have.
+4. **The duplicate-bubble question #125 left open is answered.** `session.output.set_transcription_enabled(False)` detaches the *agent* transcription sink only: user STT transcripts ride RoomIO's separate `_user_tr_output`, and `_SyncedAudioOutput.capture_frame` passes audio through before it checks the enabled flag — read out of livekit-agents 1.6.2's source, not assumed. So the reply appears once (from the SSE stream) instead of twice, and the user-transcript path the whole reply loop depends on is untouched.
+
+**Why the bridge rather than fixing the agent's own LLM.** The agent-side hang is undiagnosed after several rounds (PRs #62, #101→#120, #123). Whatever it is, fixing it would still leave two independent generations answering one question — different models, different context, one read and one heard. The bridge deletes the whole failure class instead of the current instance, and it is server+agent only, so it deploys in minutes with no TestFlight build.
+
+**Trade-offs, stated.**
+- **The spoken greeting no longer appears as a chat bubble** — that bubble came from the agent transcription now disabled, and nothing on the text path generates a greeting. It is still captured for memory via `conversation_item_added` → `/context/analyze`. Restoring it means pushing the greeting into the chat stream too; deferred as cosmetic.
+- The bridge moved from inline in `index.js` to `server/voiceBridge.js`. `index.js` boots a server on import, so nothing inside it is reachable from `node --test` — and an untested bridge is precisely how a silent voice session hides.
+- The agent accepts a `bb.speak` packet with no `type` field. bb-server and bb-agent are separate Railway services that deploy independently, and #125's payload was a bare `{"text": …}`; rejecting it would make voice silent for the width of the deploy window.
+- The agent's `@function_tool` methods are now inert (the server executes the same tools via `AGENT_TOOLS`). Kept, not deleted, so re-arming agent-side generation stays a one-line change. `llm_node` is kept as a tripwire: if it ever logs ENTER, the second brain is back.
+- Removed with the LLM they fed: the agent's per-turn local-time, usage-facts, and repeat-guard injections, plus the orphaned `local_now` and session-gap helpers. `/session/turn` does all three for the generation that now happens (`timeContext.js`, `usageFacts.js`), and the facts fetch was costing up to 1.5 s of blocking HTTP per turn to feed nothing.
+
+**Affects.** `agent/agent.py`, `agent/tests/test_speak_bridge.py` (new), `server/voiceBridge.js` (new), `server/voiceBridge.test.js` (new), `server/index.js` (`/session/turn`, `/livekit/token`, `/livekit/webhook`, `/context/analyze`, new `/voice/greeting`). No mobile change — deliberately, so this ships without a build.
+
+---
+
 ## 2026-07-28 — Dev toggle returns to the chat screen (safely), CI gains a launch gate, agent gains `check_dev_mode`
 
 **Context.** Mike's directive: "Move the developer mode toggle to the chat page. Arm the agent with a tool to check whether it is in Dev mode or not; it should check this whenever the user mentions being in dev mode and wanting to create a PR." This deliberately reverses part of 2756da2 (#19), which moved all dev UI off the session screen after the builds 50–53 launch-crash streak — so the how matters more than the what.
