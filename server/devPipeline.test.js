@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dedupeKey, looksForbidden, patchForEvent, isPipelineEnabled, collapseNearDuplicates, generateProductRequests, insertRequests, insertSubmission, triageSubmission, handleRepetition, processSubmission, classifyFailure, failureSignature, retryDelayMs, applyFailure, runDevBuildWorker, resubmitPlan, RESUBMITTABLE, parkUnprocessedDirective, titleSimilarity, handleDevPipeline, workerStatus } from './devPipeline.js';
+import { dedupeKey, looksForbidden, patchForEvent, isPipelineEnabled, collapseNearDuplicates, generateProductRequests, insertRequests, insertSubmission, triageSubmission, handleRepetition, processSubmission, classifyFailure, failureSignature, retryDelayMs, applyFailure, runDevBuildWorker, resubmitPlan, RESUBMITTABLE, parkUnprocessedDirective, titleSimilarity, handleDevPipeline, workerStatus, sweepStageTimeouts } from './devPipeline.js';
 
 test('dedupeKey is stable and target-scoped', () => {
   const a = dedupeKey('ui', 'Make the greeting warmer!');
@@ -1071,10 +1071,12 @@ test('the heartbeat names the rows holding the slots, with their age', async () 
   // Exactly today's failure: merged PRs whose callbacks never arrived sat in
   // `merging` and consumed every slot. The number alone was not enough — the
   // route has to say WHICH rows and for how long.
-  const old = new Date(Date.now() - 6 * 3600 * 1000).toISOString();
+  // Inside its stage TTL, so it legitimately still holds the slot (past it, the
+  // stage-timeout sweep would have retired it — see below).
+  const held = new Date(Date.now() - 40 * 60 * 1000).toISOString();
   const sb = makeSelfHealSupabase({
     dev_build_requests: [
-      { id: 'ghost', status: 'merging', archived: false, pr_number: 110, title: 'merged hours ago', history: [], updated_at: old, created_at: old },
+      { id: 'ghost', status: 'merging', archived: false, pr_number: 110, title: 'green, waiting on auto-merge', history: [], entered_at: held, updated_at: held, created_at: held },
       pendingRow(),
       pendingRow({ id: 'p2' }),
     ],
@@ -1084,8 +1086,8 @@ test('the heartbeat names the rows holding the slots, with their age', async () 
 
   const st = workerStatus();
   assert.equal(st.gates.inflight, 1, 'the in-flight row is counted');
-  assert.ok(st.inflightRows.some((r) => r.id === 'ghost' && r.heldForMinutes >= 300),
-    'the slot-holder is named with its age');
+  assert.ok(st.inflightRows.some((r) => r.id === 'ghost' && r.heldForMinutes >= 35 && r.ttlMinutes > 0),
+    'the slot-holder is named with its age and the limit it is measured against');
   assert.ok(st.gates.pending >= 2, 'the queue depth is visible next to it');
 });
 
@@ -1105,4 +1107,80 @@ test('parked and superseded rows do not spend the daily build budget', async () 
 
   assert.equal(workerStatus().gates.today, 1, 'only the row that can actually build counts');
   assert.equal(sb._store.dev_build_requests.find((r) => r.id === 'p1').status, 'building');
+});
+
+// ─── Stage timeouts: no state may be permanent ───────────────────────────────
+
+test('a row past its stage TTL is retired, with the reason written into it', async () => {
+  const stale = new Date(Date.now() - 4 * 3600 * 1000).toISOString();
+  const sb = makeSelfHealSupabase({
+    dev_build_requests: [{
+      id: 'ghost', status: 'merging', archived: false, pr_number: 124, title: 'held the only slot',
+      history: [], entered_at: stale, updated_at: stale, created_at: stale,
+    }],
+  });
+
+  const { retired } = await sweepStageTimeouts(sb);
+
+  const row = sb._store.dev_build_requests[0];
+  assert.equal(retired, 1);
+  assert.equal(row.status, 'needs_attention', 'the slot must come back');
+  assert.match(row.error, /stage timeout: held \d+m in merging/);
+  assert.match(row.error, /PR #124 never reported a terminal state/);
+  assert.ok(row.timed_out_at, 'the timeout marker is what stops the reconciler re-arming it');
+  assert.equal(row.failure_class, 'terminal', 'a stage timeout is never auto-retried');
+  assert.equal(sb._store.pipeline_alerts.length, 1, 'one visible alert per stuck row');
+});
+
+test('a row still inside its stage TTL is left alone', async () => {
+  const recent = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const sb = makeSelfHealSupabase({
+    dev_build_requests: [{
+      id: 'fresh', status: 'deploying', archived: false, history: [],
+      entered_at: recent, updated_at: recent, created_at: recent,
+    }],
+  });
+
+  const { retired } = await sweepStageTimeouts(sb);
+
+  assert.equal(retired, 0);
+  assert.equal(sb._store.dev_build_requests[0].status, 'deploying');
+});
+
+test('rows predating the stage clock fall back to updated_at rather than never ageing out', async () => {
+  const stale = new Date(Date.now() - 10 * 3600 * 1000).toISOString();
+  const sb = makeSelfHealSupabase({
+    dev_build_requests: [{
+      id: 'old', status: 'deploying', archived: false, history: [],
+      entered_at: null, updated_at: stale, created_at: stale,
+    }],
+  });
+
+  assert.equal((await sweepStageTimeouts(sb)).retired, 1);
+});
+
+test('the timed-out slot is reused by the same tick, not the next one', async () => {
+  // The whole point: a stuck row must not cost a dispatch cycle on its way out.
+  const stale = new Date(Date.now() - 6 * 3600 * 1000).toISOString();
+  const sb = makeSelfHealSupabase({
+    dev_build_requests: [
+      { id: 'ghost', status: 'deploying', archived: false, history: [], entered_at: stale, updated_at: stale, created_at: stale },
+      { id: 'ghost2', status: 'merging', archived: false, history: [], entered_at: stale, updated_at: stale, created_at: stale },
+      pendingRow(),
+    ],
+  });
+
+  const dispatched = await runWorkerWith(sb);
+
+  assert.equal(dispatched, 1, 'the freed slot is filled immediately');
+  assert.equal(sb._store.dev_build_requests.find((r) => r.id === 'p1').status, 'building');
+  assert.equal(workerStatus().lastSweep.retired, 2);
+});
+
+test('a status change stamps the stage clock; the retry pass does not', async () => {
+  const sb = makeSelfHealSupabase({ dev_build_requests: [pendingRow({ entered_at: null })] });
+  await runWorkerWith(sb);
+  const row = sb._store.dev_build_requests[0];
+  assert.equal(row.status, 'building');
+  assert.ok(row.entered_at, 'entering `building` starts that stage clock');
 });
