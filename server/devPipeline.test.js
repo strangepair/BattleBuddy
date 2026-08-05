@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dedupeKey, looksForbidden, patchForEvent, isPipelineEnabled, collapseNearDuplicates, generateProductRequests, insertRequests, insertSubmission, triageSubmission, handleRepetition, processSubmission, classifyFailure, failureSignature, retryDelayMs, applyFailure, runDevBuildWorker, resubmitPlan, RESUBMITTABLE, parkUnprocessedDirective, titleSimilarity } from './devPipeline.js';
+import { dedupeKey, looksForbidden, patchForEvent, isPipelineEnabled, collapseNearDuplicates, generateProductRequests, insertRequests, insertSubmission, triageSubmission, handleRepetition, processSubmission, classifyFailure, failureSignature, retryDelayMs, applyFailure, runDevBuildWorker, resubmitPlan, RESUBMITTABLE, parkUnprocessedDirective, titleSimilarity, handleDevPipeline } from './devPipeline.js';
 
 test('dedupeKey is stable and target-scoped', () => {
   const a = dedupeKey('ui', 'Make the greeting warmer!');
@@ -887,4 +887,98 @@ test('titleSimilarity leaves genuinely different asks alone', () => {
     'Add Supabase index on sessions(user_id, created_at) for pagination',
   ) < 0.6);
   assert.equal(titleSimilarity('', 'anything'), 0);
+});
+
+// ─── GET /dev/requests — total + data shape ───────────────────────────────────
+
+function makeRequestsSupabase(rows) {
+  const store = { dev_build_requests: rows };
+  const table = (name) => {
+    const preds = [];
+    let head = false;
+    let limitN = null;
+
+    const self = {
+      select(_cols, opt) { if (opt && opt.head) head = true; return self; },
+      in(c, vals) { preds.push((r) => vals.includes(r[c])); return self; },
+      order() { return self; },
+      limit(n) { limitN = n; return self; },
+      then(resolve) {
+        let out = (store[name] || []).filter((r) => preds.every((f) => f(r)));
+        const total = out.length;
+        if (limitN != null) out = out.slice(0, limitN);
+        if (head) return Promise.resolve({ count: total, data: null, error: null }).then(resolve);
+        return Promise.resolve({ data: out, error: null }).then(resolve);
+      },
+    };
+    return self;
+  };
+  return { from: table };
+}
+
+function makeDevDeps(supabase) {
+  return {
+    CORS: {},
+    checkClientToken: () => true,
+    checkAdminSecret: () => true,
+    anthropic: null,
+    supabase,
+    resolveUserId: (id) => id,
+  };
+}
+
+async function callListRequests(supabase, queryString = '') {
+  let statusCode;
+  let body;
+  const req = { method: 'GET', url: `http://x/dev/requests${queryString}`, headers: {} };
+  const res = {
+    writeHead(s) { statusCode = s; },
+    end(b) { body = JSON.parse(b); },
+  };
+  await handleDevPipeline(req, res, makeDevDeps(supabase));
+  return { statusCode, body };
+}
+
+test('GET /dev/requests returns total and data fields', async () => {
+  const rows = [
+    { id: 'r1', status: 'pending', created_at: '2024-01-03T00:00:00Z' },
+    { id: 'r2', status: 'pending', created_at: '2024-01-02T00:00:00Z' },
+  ];
+  const { statusCode, body } = await callListRequests(makeRequestsSupabase(rows));
+  assert.equal(statusCode, 200);
+  assert.equal(typeof body.total, 'number', 'total must be a number');
+  assert.ok(Array.isArray(body.data), 'data must be an array');
+});
+
+test('GET /dev/requests: total equals data length when records <= limit', async () => {
+  const rows = [
+    { id: 'r1', status: 'pending', created_at: '2024-01-03T00:00:00Z' },
+    { id: 'r2', status: 'pending', created_at: '2024-01-02T00:00:00Z' },
+  ];
+  const { body } = await callListRequests(makeRequestsSupabase(rows));
+  assert.equal(body.total, body.data.length, 'total equals data length when no truncation');
+});
+
+test('GET /dev/requests: total is greater than data length when records exceed limit', async () => {
+  const rows = Array.from({ length: 5 }, (_, i) => ({
+    id: `r${i}`,
+    status: 'pending',
+    created_at: new Date(2024, 0, 5 - i).toISOString(),
+  }));
+  const { body } = await callListRequests(makeRequestsSupabase(rows), '?limit=2');
+  assert.equal(body.data.length, 2, 'data is capped by limit');
+  assert.equal(body.total, 5, 'total reflects the full count');
+  assert.ok(body.total > body.data.length, 'total > data.length when truncated');
+});
+
+test('GET /dev/requests: status filter is applied to both total and data', async () => {
+  const rows = [
+    { id: 'r1', status: 'pending', created_at: '2024-01-03T00:00:00Z' },
+    { id: 'r2', status: 'deployed', created_at: '2024-01-02T00:00:00Z' },
+    { id: 'r3', status: 'pending', created_at: '2024-01-01T00:00:00Z' },
+  ];
+  const { body } = await callListRequests(makeRequestsSupabase(rows), '?status=pending');
+  assert.equal(body.total, 2, 'total counts only matching status rows');
+  assert.equal(body.data.length, 2, 'data contains only matching status rows');
+  assert.ok(body.data.every((r) => r.status === 'pending'), 'all data rows match the status filter');
 });
