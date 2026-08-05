@@ -44,7 +44,7 @@ import { toCachedSystemBlocks } from './promptCache.js';
 import { DEFAULT_TZ, tzOffsetString, formatLocalTime, buildSessionContext as buildSessionContextLine, normalizeOccurredAt } from './timeContext.js';
 import { HABIT_EVENT_TYPES, deriveUsageFacts, renderUsageFactsLine, deriveDashboardPayload } from './usageFacts.js';
 import { checkDevModeToolResult, devModeStatusBlock } from './devMode.js';
-import { handleDevPipeline, runDevBuildWorker, handleDevItems } from './devPipeline.js';
+import { handleDevPipeline, runDevBuildWorker, runWorkerWatchdog, handleDevItems } from './devPipeline.js';
 import { runReconcileTick } from './devReconcile.js';
 import { recordTextTurn, recordVoiceSessionStart, recordVoiceTranscript, sweepIdleSegments, registerShutdownFlush } from './devCapture.js';
 import { jsonrepair } from 'jsonrepair';
@@ -3993,8 +3993,27 @@ setInterval(() => { runScheduledFactConsolidation().catch(() => {}); }, FACT_CON
 // inert on every deploy until the pipeline is explicitly switched on. Frequent
 // tick because these are user-initiated and should feel responsive.
 const DEV_BUILD_CHECK_MS = 60 * 1000;
+const runWorkerTick = () => runDevBuildWorker({ supabase })
+  .catch((err) => console.error('[devPipeline] worker:', err.message));
+
+// The handle is kept so the watchdog can re-arm the timer. A cleared or wedged
+// interval is otherwise unrecoverable without a redeploy, and a redeploy is not
+// a control the pipeline has over itself.
+let devWorkerTimer = setInterval(runWorkerTick, DEV_BUILD_CHECK_MS);
+const restartWorkerTimer = () => {
+  clearInterval(devWorkerTimer);
+  devWorkerTimer = setInterval(runWorkerTick, DEV_BUILD_CHECK_MS);
+  console.warn('[devPipeline] worker interval re-armed by the watchdog');
+};
+
+// ─── Dev-mode build watchdog ───────────────────────────────────────────────
+// Separate timer on purpose: a watchdog that shares the timer it is watching
+// dies with it. Notices "no tick", "tick hung", and the one that actually
+// happened — pending work, a free slot, and nothing dispatched — then restarts
+// the tick and leaves a `worker_stall` row in pipeline_alerts saying it did.
 setInterval(() => {
-  runDevBuildWorker({ supabase }).catch((err) => console.error('[devPipeline] worker:', err.message));
+  runWorkerWatchdog({ supabase, kick: runWorkerTick, restartTimer: restartWorkerTimer })
+    .catch((err) => console.error('[devPipeline] watchdog:', err.message));
 }, DEV_BUILD_CHECK_MS);
 
 // ─── Pipeline reconciler ───────────────────────────────────────────────────
