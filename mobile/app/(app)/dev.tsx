@@ -36,6 +36,11 @@ import { WorkItemCard } from '../../src/components/pipeline/WorkItemCard';
 import { ReleaseGroup } from '../../src/components/pipeline/ReleaseGroup';
 import { ExceptionCard } from '../../src/components/pipeline/ExceptionCard';
 
+// How often the pipeline screen re-reads server state while it is on screen.
+// Fast enough that a status change feels immediate, slow enough that a screen
+// left open is not a load problem: the reconciler itself only ticks every 60 s.
+const PIPELINE_POLL_MS = 10000;
+
 const STATUS_META: Record<
   DevRequestStatus,
   { label: string; color: string; bucket: 'active' | 'done' | 'queued' | 'attention' }
@@ -124,9 +129,22 @@ export default function DevScreen() {
     setLoading(false);
   }, [userId]);
 
+  // The pipeline moves on its own — a build lands, the reconciler flips a status
+  // from GitHub truth — so a screen that only loads on focus is stale the moment
+  // it finishes rendering. Poll while focused, stop on blur so a backgrounded
+  // screen costs nothing.
+  //
+  // Polling rather than the SSE broadcast is deliberate as the PRIMARY path: the
+  // server also pushes these transitions, but a push channel that quietly stops
+  // working looks exactly like a pipeline with nothing to report. The poll is
+  // the one that cannot fail silently.
   useFocusEffect(
     useCallback(() => {
-      load();
+      let cancelled = false;
+      const tick = () => { if (!cancelled) load(); };
+      tick();
+      const timer = setInterval(tick, PIPELINE_POLL_MS);
+      return () => { cancelled = true; clearInterval(timer); };
     }, [load]),
   );
 
