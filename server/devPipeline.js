@@ -966,9 +966,22 @@ async function workerTick(supabase) {
   // same tick rather than 60 seconds later. Runs even when the pipeline is
   // paused: like the reconciler, repairing state is correct while dispatching
   // is not — and a pause is exactly when ghosts accumulate.
-  const swept = await sweepStageTimeouts(supabase);
-  heartbeat.lastSweep = { at: new Date().toISOString(), retired: swept.retired };
-  if (swept.retired) heartbeat.retiredTotal += swept.retired;
+  //
+  // FAIL-SOFT, and this is not defensive decoration. deploy.yml deploys the
+  // server BEFORE it applies migrations, so between those two jobs the new code
+  // is talking to the old schema. The first deploy of this sweep threw
+  // `column dev_build_requests.entered_at does not exist` and, because the
+  // failure propagated, took the whole tick down with it — the repair wedged
+  // the dispatcher it exists to protect. A sweep is a repair, never a
+  // precondition: it reports its own failure and the tick carries on.
+  try {
+    const swept = await sweepStageTimeouts(supabase);
+    heartbeat.lastSweep = { at: new Date().toISOString(), retired: swept.retired, error: null };
+    if (swept.retired) heartbeat.retiredTotal += swept.retired;
+  } catch (err) {
+    heartbeat.lastSweep = { at: new Date().toISOString(), retired: 0, error: String(err.message).slice(0, 200) };
+    console.error('[devPipeline] stage timeout sweep failed (dispatch continues):', err.message);
+  }
 
   if (!isPipelineEnabled()) { heartbeat.skipReason = PAUSED ? 'paused' : 'disabled'; return; }
 
