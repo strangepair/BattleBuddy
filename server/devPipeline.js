@@ -731,6 +731,8 @@ const heartbeat = {
   abandonedTicks: 0,
   retiredTotal: 0,
   lastSweep: null,
+  watchdogFirings: 0,
+  lastWatchdog: null,
   gates: {},
   inflightRows: [],
 };
@@ -816,10 +818,104 @@ export function workerStatus() {
       heartbeat.gates.pending > 0
       && (heartbeat.gates.inflight ?? 0) < MAX_CONCURRENT
       && heartbeat.gates.dispatched === 0
-      && heartbeat.skipReason !== 'paused'
-      && heartbeat.skipReason !== 'disabled',
+      && !['paused', 'disabled', 'daily_cap'].includes(heartbeat.skipReason),
     ),
   };
+}
+
+// ─── Watchdog ────────────────────────────────────────────────────────────────
+//
+// The heartbeat above makes a stall LEGIBLE. This makes it self-correcting.
+//
+// Three ways the dispatcher goes quiet, all observed or one bad await away:
+//
+//   1. no tick at all — the interval stopped firing, or a tick is hung on an
+//      await that never settles (fetch with no timeout is the realistic case);
+//   2. ticking but starved — pending > 0, a free slot, nothing dispatched. This
+//      is exactly 2026-08-05, and the shape any future gate bug will take;
+//   3. ticking into an error every time — the tick throws before dispatch.
+//
+// On any of them: raise ONE visible alert, restart the timer, and force a tick.
+// The alert closes itself when the pipeline recovers, so an open `worker_stall`
+// row always means "right now", never "once, in August".
+const WATCHDOG_STALE_MS = Number(process.env.DEV_WATCHDOG_STALE_MS || 4 * 60 * 1000);
+// A single starved tick is not a stall — a row can be inserted a millisecond
+// after the queue was read. Two consecutive minutes of it is.
+const WATCHDOG_STARVED_MS = Number(process.env.DEV_WATCHDOG_STARVED_MS || 2 * 60 * 1000);
+const WATCHDOG_SIGNATURE = 'worker_stall';
+
+let starvedSince = null;
+
+export async function runWorkerWatchdog(deps = {}) {
+  const { supabase, kick, restartTimer, status = workerStatus, now = Date.now() } = deps;
+  const st = status();
+
+  const reasons = [];
+
+  // 1. Is it ticking at all?
+  const lastTickMs = st.lastTickFinishedAt || st.lastTickStartedAt || st.bootedAt;
+  const sinceTick = now - new Date(lastTickMs).getTime();
+  if (sinceTick > WATCHDOG_STALE_MS) {
+    reasons.push(`no completed tick for ${Math.round(sinceTick / 1000)}s`);
+  }
+  if (st.running && now - new Date(st.lastTickStartedAt || now).getTime() > TICK_TIMEOUT_MS) {
+    reasons.push('a tick has been running past its timeout — presumed hung');
+  }
+
+  // 2. Ticking, but a free slot and a full queue. The failure this exists for.
+  if (st.starved) {
+    if (starvedSince === null) starvedSince = now;
+    if (now - starvedSince > WATCHDOG_STARVED_MS) {
+      reasons.push(
+        `${st.gates.pending} pending with ${st.maxConcurrent - (st.gates.inflight ?? 0)} free slot(s) `
+        + `and nothing dispatched for ${Math.round((now - starvedSince) / 1000)}s`,
+      );
+    }
+  } else {
+    starvedSince = null;
+  }
+
+  // 3. Ticking into the same error every time.
+  if (st.consecutiveErrors >= 3) {
+    reasons.push(`${st.consecutiveErrors} consecutive tick failures: ${st.lastError?.message || 'unknown'}`);
+  }
+
+  if (reasons.length === 0) {
+    // Recovery closes the alert. An open `worker_stall` must always mean now.
+    if (heartbeat.lastWatchdog?.action) {
+      heartbeat.lastWatchdog = { ...heartbeat.lastWatchdog, recoveredAt: new Date(now).toISOString() };
+      if (supabase) await resolveAlert(supabase, WATCHDOG_SIGNATURE);
+    }
+    return { healthy: true, reasons: [] };
+  }
+
+  heartbeat.watchdogFirings += 1;
+  heartbeat.lastWatchdog = {
+    at: new Date(now).toISOString(),
+    reasons,
+    action: 'restarted the tick',
+    recoveredAt: null,
+  };
+  console.error('[devPipeline] watchdog: dispatcher stalled —', reasons.join('; '));
+
+  if (supabase) {
+    const { error } = await supabase.from('pipeline_alerts').insert({
+      kind: 'worker_stall',
+      signature: WATCHDOG_SIGNATURE,
+      detail: { reasons, gates: st.gates, inflight_rows: st.inflightRows, firings: heartbeat.watchdogFirings },
+    });
+    // The partial unique index collapses a continuing stall into one alert.
+    if (error && !/duplicate key/i.test(error.message)) {
+      console.error('[devPipeline] watchdog alert failed:', error.message);
+    }
+  }
+
+  // Re-arm the timer first: if the interval itself died, kicking one tick fixes
+  // one minute. Then run a tick immediately rather than waiting out the period.
+  try { restartTimer?.(); } catch (err) { console.error('[devPipeline] watchdog restart failed:', err.message); }
+  try { await kick?.(); } catch (err) { console.error('[devPipeline] watchdog kick failed:', err.message); }
+
+  return { healthy: false, reasons };
 }
 
 export async function runDevBuildWorker(deps) {
