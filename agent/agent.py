@@ -240,6 +240,8 @@ if not BB_CLIENT_TOKEN:
 END_PHRASES = ["bye bye buddy", "bye-bye buddy", "bye bye, buddy"]
 
 SAVE_INTERVAL_SECONDS = 60
+# Data-packet topic bb-server uses to hand us a reply to speak (see index.js).
+SPEAK_TOPIC = "bb.speak"
 
 
 def get_voice():
@@ -823,6 +825,40 @@ async def battlebuddy_session(ctx: agents.JobContext):
         agent=_session_agent,
     )
     print(f"[Agent] Session started — STT={type(session.stt).__name__} (nova-3/multi), LLM={type(session.llm).__name__}, TTS={type(session.tts).__name__}")
+
+    # ─── Speak bridge ────────────────────────────────────────────────────────
+    # bb-server generates the reply (POST /session/turn) and streams it to the
+    # chat UI, then hands the finished text to this room on the bb.speak topic.
+    # We speak exactly that text through the live Deepgram TTS.
+    #
+    # The agent's own LLM is deliberately NOT invoked for it: that path has
+    # never produced an assistant turn, and running it would answer the user
+    # twice with two different models. One reply — shown and spoken.
+    async def _speak(text):
+        try:
+            print(f"[SPEAK] Calling session.say() — {len(text)} chars")
+            await session.say(text)
+            print("[SPEAK] session.say() completed — audio queued")
+        except Exception as exc:
+            print(f"[SPEAK] session.say() FAILED: {exc!r}")
+
+    @ctx.room.on("data_received")
+    def on_speak_packet(packet):
+        try:
+            topic = getattr(packet, "topic", None)
+            if topic != SPEAK_TOPIC:
+                return
+            raw = bytes(getattr(packet, "data", b"") or b"")
+            text = (json.loads(raw.decode("utf-8")).get("text") or "").strip()
+            if not text:
+                print("[SPEAK] bb.speak packet carried no text — ignoring")
+                return
+            print(f"[SPEAK] Reply received ({len(text)} chars): {text[:80]!r}")
+            asyncio.ensure_future(_speak(text))
+        except Exception as exc:
+            print(f"[SPEAK] ERROR handling bb.speak packet: {exc!r}")
+
+    print(f"[SPEAK] Bridge armed — listening for '{SPEAK_TOPIC}' data packets")
     _vlog("session.start() returned — entering greeting probe")
 
     # Periodic save loop — runs every SAVE_INTERVAL_SECONDS, sends whatever we have
