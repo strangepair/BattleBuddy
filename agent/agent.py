@@ -1,4 +1,31 @@
-"""BattleBuddy LiveKit Voice Agent — VOIP-style conversation with Claude + Deepgram."""
+"""BattleBuddy LiveKit Voice Agent — the EARS AND MOUTH of one shared brain.
+
+Reply architecture (changed 2026-08-04; read this before touching the file).
+
+There used to be two brains. The mobile client sends every final STT transcript
+to bb-server's POST /session/turn, which runs its own Anthropic call and streams
+the reply into the chat UI — that is the reply the user actually reads. This
+agent ALSO ran its own LLM over the same turn, and that second generation never
+produced audio: it hung somewhere between generate_reply and playout, so voice
+sessions transcribed speech perfectly and answered in silence.
+
+Now there is one brain and one reply:
+
+    user speaks → Deepgram STT → transcript published to the room
+        → mobile client POSTs it to /session/turn (unchanged)
+        → server generates the reply, streams it to the chat UI (unchanged)
+        → server pushes the finished text into this room as a `bb.speak`
+          data packet (server/voiceBridge.js)
+        → this agent speaks it with session.say() through Deepgram TTS
+
+So the agent's own LLM is deliberately never invoked: on_user_turn_completed
+raises StopResponse, and every place that used to call generate_reply now says
+a literal line instead. The LLM stays configured on the session only because
+AgentSession expects one — nothing routes to it. The @function_tool methods
+below are likewise inert on this path (the server executes the same tools via
+AGENT_TOOLS); they are kept so re-enabling the agent-side LLM is a one-line
+change rather than a rewrite.
+"""
 
 import json
 import os
@@ -8,8 +35,8 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from dotenv import load_dotenv
 import httpx
-from livekit import agents
-from livekit.agents import AgentServer, AgentSession, Agent, function_tool, APIConnectOptions
+from livekit import agents, rtc
+from livekit.agents import AgentServer, AgentSession, Agent, function_tool, APIConnectOptions, StopResponse
 from livekit.agents.llm import ChatContext
 from livekit.agents.voice.agent_session import SessionConnectOptions
 from livekit.plugins import anthropic, deepgram
@@ -170,34 +197,23 @@ class _LoggedStream(lk_tts.ChunkedStream):
         print(f"[TTS] Synthesis complete — audio queued for playback")
 
 
-def local_now(timezone):
-    """The user's current wall clock, or None if the zone can't be resolved.
-
-    Never falls back to datetime.now(): the container clock is UTC, and a UTC
-    time formatted without a zone and injected as "the current local time"
-    is exactly the fabricated-timestamp bug — a confidently wrong clock. If we
-    don't know the user's real local time, the model must be told it's
-    unavailable, not handed a lie (requirements.txt pins tzdata so resolution
-    only fails on a genuinely bogus timezone string).
-    """
-    try:
-        return datetime.now(ZoneInfo(timezone)).strftime("%-I:%M %p on %A, %B %-d, %Y")
-    except Exception:
-        try:
-            return datetime.now(ZoneInfo("America/Chicago")).strftime("%-I:%M %p on %A, %B %-d, %Y")
-        except Exception:
-            return None
+# local_now() lived here: it rendered the user's wall clock for the per-turn
+# time injection. That injection fed the agent-side LLM, which no longer runs —
+# /session/turn does the same job (server/timeContext.js) for the generation
+# that actually happens. The rule it encoded still stands wherever time is
+# stated: never fall back to the container clock, which is UTC, because a UTC
+# time presented as local is the fabricated-timestamp bug.
 
 load_dotenv(Path(__file__).parent / ".env")
 
 # Fail loudly at boot if the tz database is missing (python:*-slim has no OS
-# tzdata; the pip tzdata package in requirements.txt provides it). Every
-# per-turn time injection depends on this.
+# tzdata; the pip tzdata package in requirements.txt provides it). Still load-
+# bearing for the session-gap math and the UTC stamps on voice_failure events.
 try:
     ZoneInfo("America/Chicago")
-    print("[Agent] tzdata OK — per-turn local-time injection active")
+    print("[Agent] tzdata OK")
 except Exception as _tz_err:
-    print(f"[Agent] FATAL-ISH: tzdata unavailable ({_tz_err}) — local time injection will be disabled, BB will say it doesn't have the clock")
+    print(f"[Agent] FATAL-ISH: tzdata unavailable ({_tz_err}) — zone-aware timestamps will fail")
 
 # Support both local dev layout (agent/ is sibling to server/) and container layout (/app/)
 _base = Path(os.environ.get("APP_BASE", Path(__file__).parent.parent))
@@ -240,8 +256,86 @@ if not BB_CLIENT_TOKEN:
 END_PHRASES = ["bye bye buddy", "bye-bye buddy", "bye bye, buddy"]
 
 SAVE_INTERVAL_SECONDS = 60
-# Data-packet topic bb-server uses to hand us a reply to speak (see index.js).
+
+# ── Server → agent reply bridge ──────────────────────────────────────────────
+# The server publishes each finished /session/turn reply to the room as a
+# LiveKit data packet on this topic; we speak it. Topic-scoped so it can never
+# collide with the client's own data traffic (it listens for the bare string
+# "VOICE_FAILURE" on the default topic).
 SPEAK_TOPIC = "bb.speak"
+
+# Spoken when the server's greeting line can't be fetched (e.g. the agent
+# redeployed ahead of the server and /voice/greeting isn't live yet). A literal,
+# never an instruction: nothing on this path can turn an instruction into speech.
+DEFAULT_SPOKEN_GREETING = "Hey, really glad you're here. How are you doing?"
+DEFAULT_SPOKEN_CONTINUATION = "Okay, I'm on voice now — go ahead."
+
+
+def parse_speak_packet(topic, data, seen_ids):
+    """Decode a `bb.speak` data packet into the line to say, or None to ignore.
+
+    Pure and module-level on purpose. The handler that calls it is registered
+    inside the session, where neither CI gate can see it — the same deferred-
+    execution blind spot that let a ModuleNotFoundError ship green and kill
+    voice for 18 hours. This function holds every branch worth testing, so
+    tests/test_speak_bridge.py can execute them for real.
+
+    seen_ids is a mutable set: LiveKit reliable delivery can repeat a packet,
+    and speaking the same reply twice is the exact failure this whole change
+    exists to remove.
+
+    A missing "type" is accepted. bb-server and bb-agent are separate Railway
+    services that deploy independently, and the shape shipped in #125 was a
+    bare {"text": …} — rejecting it would make voice silent for whatever window
+    a new agent runs against the old server.
+    """
+    if topic != SPEAK_TOPIC:
+        return None
+    try:
+        payload = json.loads(bytes(data).decode("utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("type", "speak") != "speak":
+        return None
+    text = (payload.get("text") or "").strip()
+    if not text:
+        return None
+    msg_id = payload.get("id")
+    if msg_id:
+        if msg_id in seen_ids:
+            return None
+        seen_ids.add(msg_id)
+    return text
+
+
+async def fetch_greeting_text(room_name, config_token):
+    """Ask the server for the LITERAL opening line to speak.
+
+    The agent no longer has an LLM of its own, so it cannot turn the greeting
+    *instruction* the server composes (buildVoiceGreeting) into speech. The
+    server renders it to a spoken line and returns that. Auth is the same
+    single-dispatch nonce used by /livekit/agent-config, which stays readable
+    for its TTL. Returns None on any failure — the caller falls back to a
+    literal so a server hiccup costs the greeting's warmth, never the session.
+    """
+    if not room_name or not config_token:
+        return None
+    try:
+        async with aiohttp.ClientSession() as http:
+            resp = await http.post(
+                f"{SERVER_URL}/voice/greeting",
+                json={"room": room_name, "token": config_token},
+                timeout=aiohttp.ClientTimeout(total=15),
+            )
+            if resp.status == 200:
+                data = await resp.json()
+                return (data.get("text") or "").strip() or None
+            _vlog(f"greeting: /voice/greeting returned {resp.status}")
+    except Exception as e:
+        _vlog(f"greeting: /voice/greeting failed: {e}")
+    return None
 
 
 def get_voice():
@@ -319,8 +413,8 @@ async def battlebuddy_session(ctx: agents.JobContext):
     # metadata — trade the nonce for it. On failure the fallbacks below keep
     # the session speaking with the generic prompt rather than going silent.
     config_token = dispatch_meta.get("configToken")
+    room_name = dispatch_meta.get("room") or getattr(ctx.room, "name", None)
     if config_token:
-        room_name = dispatch_meta.get("room") or getattr(ctx.room, "name", None)
         fetched = await fetch_agent_config(room_name, config_token)
         if fetched:
             dispatch_meta = merge_agent_config(dispatch_meta, fetched)
@@ -332,17 +426,19 @@ async def battlebuddy_session(ctx: agents.JobContext):
         system_prompt = system_prompt + "\n\n## Developer Session\nYou are currently speaking with the BattleBuddy developer. This is not a live user coaching session. When the developer shares product feedback, feature ideas, or bug observations, acknowledge them naturally and conversationally (e.g. \"Good callout, I'll note that.\") rather than treating them as personal habit-coaching topics. All safety protocols and hard limits remain fully in effect."
     # When switching from text to voice mid-session, skip the standard greeting
     # so the user doesn't hear "Hey, really glad you're here" again mid-conversation.
-    if dispatch_meta.get("context") == "switched_from_text" and dispatch_meta.get("sessionId"):
-        greeting = dispatch_meta.get("greeting") or "Say something brief and natural to let the user know you've switched to voice — one short sentence, no re-introduction."
-    else:
-        greeting = dispatch_meta.get("greeting") or "Say: 'Hey, really glad you're here. How are you doing?'"
+    # Only the FALLBACK is decided here: the real line comes from the server
+    # (/voice/greeting), which renders the same buildVoiceGreeting instruction
+    # this agent used to hand to its own LLM.
+    is_continuation = (
+        dispatch_meta.get("context") == "switched_from_text" and bool(dispatch_meta.get("sessionId"))
+    )
+    fallback_greeting = DEFAULT_SPOKEN_CONTINUATION if is_continuation else DEFAULT_SPOKEN_GREETING
 
     user_id = dispatch_meta.get("userId") or "default"
     timezone = dispatch_meta.get("timezone") or "America/Chicago"
     # Rides every /context/analyze post so the server can rebuild a dev-capture
     # segment even after a redeploy wiped its in-memory state (devCapture.js).
     dev_mode_on = dispatch_meta.get("devMode", False) is True
-    last_session_at = dispatch_meta.get("last_session_at")
     # When the user switches from text to voice mid-session the mobile client
     # sends the active text-session ID so the voice agent continues the same
     # conversation rather than forking a new one. Fall back to the LiveKit room
@@ -356,23 +452,10 @@ async def battlebuddy_session(ctx: agents.JobContext):
     if dispatch_meta.get("sessionId"):
         print(f"[Agent] Continuing existing session {session_id} for {user_id} (switched from text)")
 
-    # Compute session gap for the system prompt injection (Bug D)
-    session_gap_str = ""
-    if last_session_at:
-        try:
-            last_dt = datetime.fromisoformat(last_session_at.replace("Z", "+00:00"))
-            gap_seconds = (datetime.now(last_dt.tzinfo or ZoneInfo("UTC")) - last_dt).total_seconds()
-            gap_minutes = int(gap_seconds / 60)
-            if gap_minutes < 30:
-                session_gap_str = f"Last session: {gap_minutes} minutes ago. This is a continuation — skip the greeting."
-            elif gap_minutes < 60:
-                session_gap_str = f"Last session: {gap_minutes} minutes ago."
-            elif gap_minutes < 1440:
-                session_gap_str = f"Last session: {gap_minutes // 60} hours ago."
-            else:
-                session_gap_str = f"Last session: {gap_minutes // 1440} days ago."
-        except Exception:
-            pass
+    # A session-gap string was computed here for a system-prompt injection that
+    # no code ever read (dead before this change, and the agent has no prompt to
+    # inject into now). The live version is sessionGapPhrase() in
+    # server/greeting.js, which feeds the greeting the server actually renders.
 
     print(f"[Agent] Session started for {user_id}")
 
@@ -380,37 +463,12 @@ async def battlebuddy_session(ctx: agents.JobContext):
     last_save_count = 0
     session_ended = False
 
-    # Bug I: 30-second repeat buffer — track last question asked
-    last_question = {"text": "", "time": 0.0}
-
-    # Last successfully fetched usage-facts line — the fallback when the
-    # per-turn fetch times out, so a server hiccup degrades to slightly stale
-    # ground truth instead of no ground truth (which is when BB improvises).
-    facts_cache = {"line": ""}
-
-    async def fetch_usage_facts_line():
-        """Ground-truth cigarette facts for the per-turn injection.
-
-        Deterministic and server-computed (bb_events, user's timezone) — the
-        voice model must never count or time-stamp cigarettes itself; it got
-        'one today' past five logged rows doing that (2026-07-29). Tight
-        timeout: this sits ahead of first-token on every turn.
-        """
-        try:
-            async with aiohttp.ClientSession() as http:
-                resp = await http.get(
-                    f"{SERVER_URL}/context/factsline/{user_id}?timezone={timezone}",
-                    timeout=aiohttp.ClientTimeout(total=1.5),
-                )
-                if resp.status == 200:
-                    data = await resp.json()
-                    line = data.get("line") or ""
-                    if line:
-                        facts_cache["line"] = line
-                        return line
-        except Exception as e:
-            print(f"[Agent] factsline fetch failed: {e}")
-        return facts_cache["line"]
+    # The per-turn context injections that used to live here — local time, the
+    # server-computed usage-facts line, the 30-second repeat guard — are gone
+    # with the agent-side LLM they fed. /session/turn performs every one of
+    # them for the generation that actually happens now (see buildSystemPrompt
+    # and buildLastEventAwareness in server/index.js), so keeping them here
+    # bought nothing and cost up to 1.5s of blocking HTTP on every turn.
 
     class SessionAgent(Agent):
         def __init__(self):
@@ -618,16 +676,14 @@ async def battlebuddy_session(ctx: agents.JobContext):
                 return json.dumps({"error": str(e)})
 
         async def llm_node(self, *args, **kwargs):
-            """Trace the LLM leg of every reply.
+            """Should never run. Kept as the tripwire for a second brain.
 
-            This is the load-bearing half of the LLM-vs-TTS split. The
-            2026-08-04 silent session showed zero assistant turns, but that
-            proved nothing on its own: in livekit-agents 1.x the assistant
-            conversation item is only added AFTER playout finishes, so an LLM
-            that answered fine and a TTS that emitted nothing look identical
-            from the outside. ENTER + FIRST CHUNK + EXIT here disambiguate.
+            on_user_turn_completed raises StopResponse, so no turn reaches an
+            LLM call. If this ever logs ENTER, something re-armed agent-side
+            generation and the user is about to be answered twice — by two
+            different models, which is the failure this architecture removed.
             """
-            _vlog("llm_node: ENTER — requesting completion from Anthropic")
+            _vlog("llm_node: ENTER — *** UNEXPECTED: agent-side LLM ran; the server is the reply source ***")
             async for _chunk in trace_node(
                 "llm_node",
                 Agent.llm_node(self, *args, **kwargs),
@@ -639,9 +695,11 @@ async def battlebuddy_session(ctx: agents.JobContext):
         async def tts_node(self, text, *args, **kwargs):
             """Trace the TTS leg: text in, audio frames out.
 
-            FIRST AUDIO FRAME is the single line that settles the question. If
-            llm_node reports chunks and this reports 0 frames, the break is
-            synthesis. If this never ENTERs, the break is upstream in the LLM.
+            This is now the ONLY node on the reply path — session.say() feeds
+            it directly. FIRST AUDIO FRAME is the line that settles a silent
+            session: if _speak() logs a say() and this reports 0 frames, the
+            break is Deepgram synthesis; if this never ENTERs, the reply never
+            reached the agent and the break is the server-side bridge.
             """
             _chars = {"n": 0}
 
@@ -663,9 +721,18 @@ async def battlebuddy_session(ctx: agents.JobContext):
                 _vlog(f"tts_node: {_chars['n']} chars of LLM text reached synthesis")
 
         async def on_user_turn_completed(self, turn_ctx, new_message):
-            # Log the STT result so pipeline failures are visible in agent logs.
-            # An empty transcript means Deepgram produced no output — skip the
-            # LLM turn entirely rather than forwarding a blank message.
+            """Log the transcript, then stop — this agent never answers.
+
+            Raising StopResponse is what makes the single-brain architecture
+            real: livekit-agents catches it here and abandons the turn before
+            any LLM call. The transcript itself is already on its way to the
+            client (user_input_transcribed fires in the STT pipeline, upstream
+            of and independent from reply generation), so the client still
+            POSTs it to /session/turn and the reply still comes back — over
+            the data channel, to be spoken by _speak() below.
+            """
+            # An empty transcript means Deepgram produced no output — nothing
+            # to log and nothing for the server to answer.
             try:
                 user_text = ""
                 if hasattr(new_message, 'text_content') and new_message.text_content:
@@ -682,67 +749,13 @@ async def battlebuddy_session(ctx: agents.JobContext):
                                 break
                 if user_text:
                     print(f"[STT] Transcript received ({len(user_text)} chars): {user_text[:120]!r}")
+                    _vlog(f"turn: transcript out to client — server will answer ({len(user_text)} chars)")
                 else:
-                    print(f"[STT] WARNING: empty transcript from Deepgram — skipping LLM turn (message type: {type(new_message).__name__})")
-                    return
+                    print(f"[STT] WARNING: empty transcript from Deepgram (message type: {type(new_message).__name__})")
             except Exception as e:
-                print(f"[Agent] STT→LLM logging error: {e}")
+                print(f"[Agent] STT logging error: {e}")
 
-            # Inject the current local time before every response. This message
-            # is the single source of "now" — it supersedes the (session-start,
-            # by now stale) time in the system prompt and anything said earlier.
-            try:
-                now = local_now(timezone)
-                if now:
-                    turn_ctx.add_message(
-                        role="system",
-                        content=(
-                            f"[The current local time for the user is {now} ({timezone}). "
-                            "This is already local — never convert it or apply a UTC offset. "
-                            "It supersedes any time stated earlier in this conversation or in your instructions. "
-                            "Use it as 'now'; never compute or carry over a different time.]"
-                        ),
-                    )
-                else:
-                    turn_ctx.add_message(
-                        role="system",
-                        content=(
-                            "[The current local time is UNAVAILABLE this turn. If you need the time, "
-                            "say you don't have the clock right now — never estimate or invent one.]"
-                        ),
-                    )
-            except Exception:
-                pass
-
-            # Inject the server-computed cigarette facts before every response
-            # — counts, last-cigarette time, and gaps come ONLY from here (or a
-            # fresh get_usage_stats call), never from the model's own memory.
-            try:
-                facts_line = await fetch_usage_facts_line()
-                if facts_line:
-                    turn_ctx.add_message(role="system", content=f"[{facts_line}]")
-                else:
-                    turn_ctx.add_message(
-                        role="system",
-                        content=(
-                            "[LOGGED CIGARETTE FACTS are UNAVAILABLE this turn. For any count, "
-                            "time, or gap question, call get_usage_stats and report only what it "
-                            "returns — if that also fails, say you can't pull the log right now. "
-                            "Never estimate or reconstruct numbers from conversation memory.]"
-                        ),
-                    )
-            except Exception:
-                pass
-
-            # Bug I: Inject repeat guard
-            if last_question["text"] and (time.time() - last_question["time"]) < 60:
-                try:
-                    turn_ctx.add_message(
-                        role="system",
-                        content=f"[REPEAT GUARD: You recently asked: \"{last_question['text']}\". Do NOT ask the same or a substantially similar question again. Move the conversation forward.]",
-                    )
-                except Exception:
-                    pass
+            raise StopResponse()
 
     _voice_model = get_voice()
     print(f"[Agent] TTS voice model: {_voice_model}")
@@ -754,11 +767,9 @@ async def battlebuddy_session(ctx: agents.JobContext):
 
     session = AgentSession(
         stt=deepgram.STT(model="nova-3", language="multi"),
-        # caching="ephemeral" caches the big system prompt + tools across turns
-        # (the ~15K-token prompt was reprocessed cold on every turn, pushing
-        # first-token time past the framework's 10s per-attempt default and
-        # surfacing as BB "stuck thinking"). Generous read timeout for the
-        # uncached first turn.
+        # Configured but never called: AgentSession expects an LLM, and every
+        # turn is stopped before generation (see on_user_turn_completed). The
+        # reply comes from bb-server over the bb.speak data channel.
         llm=anthropic.LLM(
             model="claude-haiku-4-5-20251001",
             caching="ephemeral",
@@ -767,8 +778,7 @@ async def battlebuddy_session(ctx: agents.JobContext):
         tts=_logged_tts,
         min_endpointing_delay=0.5,
         max_endpointing_delay=1.5,
-        # Our on_user_turn_completed injects the local time each turn, which
-        # invalidates every preemptive generation — pure duplicate LLM load.
+        # No agent-side generation happens at all, preemptive or otherwise.
         preemptive_generation=False,
         conn_options=SessionConnectOptions(
             llm_conn_options=APIConnectOptions(max_retry=3, retry_interval=1.0, timeout=45.0),
@@ -805,10 +815,6 @@ async def battlebuddy_session(ctx: agents.JobContext):
             print(f"[Agent] on_item: {role} turn captured ({len(content)} chars)")
             session_messages.append({"role": role, "content": content})
 
-            if role == "assistant" and "?" in content:
-                last_question["text"] = content.strip()
-                last_question["time"] = time.time()
-
             if role == "user":
                 lower = content.lower().strip()
                 for phrase in END_PHRASES:
@@ -818,48 +824,62 @@ async def battlebuddy_session(ctx: agents.JobContext):
         except Exception as e:
             print(f"[Agent] on_item error: {e}")
 
+    # ── The mouth ────────────────────────────────────────────────────────────
+    # Everything BattleBuddy says in voice goes through here, greeting included.
+    # No LLM, no streaming node chain: text straight into the session's Deepgram
+    # TTS. The three log lines bracket the whole call so a silent session is
+    # readable from the logs alone — say() entered, playout finished, or raised.
+    _spoken_ids = set()
+
+    async def _speak(text, label="reply"):
+        _vlog(f"[SPEAK] say({label}) — {len(text)} chars: {text[:80]!r}")
+        _t0 = time.monotonic()
+        try:
+            handle = session.say(text)
+            await handle.wait_for_playout()
+            _vlog(f"[SPEAK] say({label}) playout finished after {time.monotonic() - _t0:.2f}s")
+        except Exception as exc:
+            _vlog(f"[SPEAK] say({label}) FAILED after {time.monotonic() - _t0:.2f}s: {exc!r}")
+
+    # Registered before start() so a reply that arrives during connection setup
+    # is not dropped. LiveKit hands server-published packets a null participant,
+    # so identity is never checked — the topic plus the config nonce that gated
+    # this room is the trust boundary.
+    @ctx.room.on("data_received")
+    def on_data(packet: rtc.DataPacket):
+        try:
+            text = parse_speak_packet(
+                getattr(packet, "topic", None), getattr(packet, "data", b""), _spoken_ids
+            )
+            if text is None:
+                return
+            _vlog(f"[SPEAK] Reply received from server ({len(text)} chars)")
+            asyncio.ensure_future(_speak(text))
+        except Exception as exc:
+            _vlog(f"[SPEAK] data handler error: {exc!r}")
+
+    _vlog(f"[SPEAK] Bridge armed — listening for '{SPEAK_TOPIC}' data packets")
+
     print(f"[Agent] Starting session for {user_id} (session_id={session_id}, room={getattr(ctx.room, 'name', 'unknown')})")
     _session_agent = SessionAgent()
     await session.start(
         room=ctx.room,
         agent=_session_agent,
     )
-    print(f"[Agent] Session started — STT={type(session.stt).__name__} (nova-3/multi), LLM={type(session.llm).__name__}, TTS={type(session.tts).__name__}")
+    print(f"[Agent] Session started — STT={type(session.stt).__name__} (nova-3/multi), TTS={type(session.tts).__name__}, replies via bb.speak bridge")
 
-    # ─── Speak bridge ────────────────────────────────────────────────────────
-    # bb-server generates the reply (POST /session/turn) and streams it to the
-    # chat UI, then hands the finished text to this room on the bb.speak topic.
-    # We speak exactly that text through the live Deepgram TTS.
-    #
-    # The agent's own LLM is deliberately NOT invoked for it: that path has
-    # never produced an assistant turn, and running it would answer the user
-    # twice with two different models. One reply — shown and spoken.
-    async def _speak(text):
-        try:
-            print(f"[SPEAK] Calling session.say() — {len(text)} chars")
-            await session.say(text)
-            print("[SPEAK] session.say() completed — audio queued")
-        except Exception as exc:
-            print(f"[SPEAK] session.say() FAILED: {exc!r}")
-
-    @ctx.room.on("data_received")
-    def on_speak_packet(packet):
-        try:
-            topic = getattr(packet, "topic", None)
-            if topic != SPEAK_TOPIC:
-                return
-            raw = bytes(getattr(packet, "data", b"") or b"")
-            text = (json.loads(raw.decode("utf-8")).get("text") or "").strip()
-            if not text:
-                print("[SPEAK] bb.speak packet carried no text — ignoring")
-                return
-            print(f"[SPEAK] Reply received ({len(text)} chars): {text[:80]!r}")
-            asyncio.ensure_future(_speak(text))
-        except Exception as exc:
-            print(f"[SPEAK] ERROR handling bb.speak packet: {exc!r}")
-
-    print(f"[SPEAK] Bridge armed — listening for '{SPEAK_TOPIC}' data packets")
-    _vlog("session.start() returned — entering greeting probe")
+    # The client already renders every reply from the /session/turn SSE stream.
+    # Publishing the agent's own transcription would print the identical text a
+    # second time in the chat. This detaches ONLY the agent-side sink: the user's
+    # STT transcripts ride RoomIO's separate _user_tr_output, and that forwarding
+    # is what the client turns into its /session/turn POST — break it and voice
+    # goes mute again. Guarded so a framework rename costs a duplicate bubble,
+    # never the session.
+    try:
+        session.output.set_transcription_enabled(False)
+        _vlog("agent transcription output disabled — chat text comes from /session/turn")
+    except Exception as exc:
+        _vlog(f"could not disable agent transcription (non-fatal, expect duplicate chat text): {exc!r}")
 
     # Periodic save loop — runs every SAVE_INTERVAL_SECONDS, sends whatever we have
     async def periodic_save():
@@ -898,13 +918,18 @@ async def battlebuddy_session(ctx: agents.JobContext):
                 "timestamp": datetime.now(ZoneInfo("UTC")).isoformat(),
             }
             print(f"[Agent] VOICE_FAILURE {_json.dumps(_vf_event)}")
+        # Spoken literally rather than via generate_reply: asking a model to
+        # relay an outage is a model call inside an outage, and this agent has
+        # no reply path of its own any more.
         if "credit balance" in err_msg or "too low" in err_msg or "billing" in err_msg.lower():
-            asyncio.ensure_future(session.generate_reply(
-                instructions="Say exactly: 'Hey, I'm having a connection issue on my end right now. Give me a minute and try again.' Do not say anything else."
+            asyncio.ensure_future(_speak(
+                "Hey, I'm having a connection issue on my end right now. Give me a minute and try again.",
+                label="error",
             ))
         elif "rate" in err_msg.lower() and "limit" in err_msg.lower():
-            asyncio.ensure_future(session.generate_reply(
-                instructions="Say exactly: 'I'm getting a lot of traffic right now. Hang tight — try again in a minute.' Do not say anything else."
+            asyncio.ensure_future(_speak(
+                "I'm getting a lot of traffic right now. Hang tight — try again in a minute.",
+                label="error",
             ))
 
     @session.on("user_started_speaking")
@@ -937,19 +962,19 @@ async def battlebuddy_session(ctx: agents.JobContext):
             print(f"[Agent] Session close: sending {len(session_messages)} messages for {user_id} (isSessionEnd=true)")
             asyncio.ensure_future(_send_final_transcript(user_id, list(session_messages), session_id, timezone, dev_mode_on))
 
-    # The greeting is the cleanest possible probe: it is unconditional, needs
-    # no user speech, and depends on no VAD or turn detection. On 2026-08-04 it
-    # produced no audio and no assistant turn — which is what ruled turn
-    # detection out as the cause. These two lines bracket it so the next live
-    # session says whether it returns, raises, or simply never comes back.
-    _vlog(f"greeting: calling generate_reply (instructions={len(greeting)} chars)")
+    # The greeting is still the cleanest probe of the whole audio path: it is
+    # unconditional and depends on no VAD, no turn detection, and now no LLM.
+    # If the user hears this line, TTS and playout are healthy and anything
+    # still silent afterwards is the reply bridge, not the mouth.
+    _vlog("greeting: fetching spoken line from server")
     _greet_t0 = time.monotonic()
-    try:
-        await session.generate_reply(instructions=greeting)
-        _vlog(f"greeting: generate_reply RETURNED after {time.monotonic() - _greet_t0:.2f}s")
-    except Exception as exc:
-        _vlog(f"greeting: generate_reply RAISED after {time.monotonic() - _greet_t0:.2f}s: {exc!r}")
-        raise
+    greeting_text = await fetch_greeting_text(room_name, config_token)
+    if greeting_text:
+        _vlog(f"greeting: server line in {time.monotonic() - _greet_t0:.2f}s ({len(greeting_text)} chars)")
+    else:
+        greeting_text = fallback_greeting
+        _vlog(f"greeting: falling back to literal after {time.monotonic() - _greet_t0:.2f}s")
+    await _speak(greeting_text, label="greeting")
 
 
 async def _send_final_transcript(user_id, messages, session_id=None, timezone="America/Chicago", dev_mode=False):
@@ -973,10 +998,15 @@ async def _send_final_transcript(user_id, messages, session_id=None, timezone="A
 
 
 async def _end_session(session, ctx, user_id, messages, session_id=None, timezone="America/Chicago", dev_mode=False):
-    await session.generate_reply(
-        instructions="The user said 'bye bye buddy' to end the call. "
-        "Say bye and one short sentence of encouragement. Keep it warm and brief."
-    )
+    # A literal sign-off, for the same reason as everywhere else on this path:
+    # the agent has no LLM of its own, and the room is about to close — a
+    # generation racing a disconnect is how a goodbye becomes silence.
+    _vlog("end: speaking sign-off")
+    try:
+        handle = session.say("Bye for now — I'm proud of you. Talk soon.")
+        await handle.wait_for_playout()
+    except Exception as exc:
+        _vlog(f"end: sign-off RAISED: {exc!r}")
 
     if messages and len(messages) >= 2:
         print(f"[Agent] End session — sending {len(messages)} messages to context agent")
