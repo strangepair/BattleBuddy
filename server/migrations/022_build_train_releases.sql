@@ -96,18 +96,32 @@ create index if not exists dev_build_requests_reconciled_idx on dev_build_reques
 -- 'superseded' is what a closed-but-not-merged PR derives to. Before this there
 -- was no honest state for it, so those rows sat at their last pushed status
 -- (usually in_review) forever — one of the drifts this submission removes.
+--
+-- THIS FILE IS THE SOLE DEFINITION of dev_build_requests_status_check. 021 used
+-- to define it too, with a narrower list, and re-narrowed it on every pass until
+-- a 'superseded' row made that fail and deadlocked every migration above 021.
+-- To add a status, widen the list HERE — never in a new file, or this one
+-- becomes the narrowing next time. Enforced by tests/migration-safety.test.js.
+--
+-- Wrapped in a transaction because psql autocommits statement by statement: on
+-- 2026-08-05 a DROP committed and its ADD failed, leaving the live table with no
+-- status constraint at all. A violated ADD must take the DROP down with it.
+begin;
 alter table dev_build_requests drop constraint if exists dev_build_requests_status_check;
 alter table dev_build_requests add constraint dev_build_requests_status_check
   check (status in ('pending','building','in_review','merging','deploying',
                     'deployed','failed','needs_attention','duplicate','superseded'));
+commit;
 
 -- 'github' is the source for a request the reconciler adopted from a PR nobody
 -- submitted through the app (a hand-made or agent-authored branch). Mike's rule
 -- is that every change is tracked in dev_build_requests; adoption is how a
 -- direct PR — including the ones shipping this submission — gets a row.
+begin;
 alter table dev_build_requests drop constraint if exists dev_build_requests_source_check;
 alter table dev_build_requests add constraint dev_build_requests_source_check
   check (source in ('transcript','directive','github'));
+commit;
 
 comment on column dev_build_requests.expedite is
   'Bypass the mobile build train: dispatch mobile-release.yml under a unique concurrency group so this one change builds immediately and alone.';
