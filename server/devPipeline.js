@@ -638,38 +638,195 @@ async function resolveAlert(supabase, signature) {
 }
 
 // ─── Build worker (scheduled tick) ───────────────────────────────────────────
-// Follows runScheduledDesignLoop: cheap, idempotent, swallows errors.
+//
+// WHY THIS TICK IS INSTRUMENTED
+//
+// 2026-08-05: 29 rows sat `pending` for hours while the dispatcher looked dead.
+// It was not dead — it was refusing, correctly, because eleven rows were parked
+// in `merging`/`deploying` whose PRs had merged days earlier and whose terminal
+// callbacks never arrived. Every concurrency slot was held by a ghost. From
+// outside the container that is indistinguishable from a dead interval: no
+// route reported the gate values, no route reported the last tick, and there is
+// no log access. Diagnosis took hours of inference from row timestamps.
+//
+// So the tick now records WHY it did nothing, every time, and serves it at
+// GET /dev/worker/status. Three classes of silent stall are closed here:
+//
+//   1. a swallowed query error (`{ data }` destructured, `error` dropped) —
+//      a failing select read as an empty queue, forever;
+//   2. head-of-line starvation — `.limit(slots)` ran BEFORE the archived rows
+//      were filtered out, so with DEV_MAX_CONCURRENT=1 a single archived-but-
+//      pending row at the head of the queue starved every row behind it;
+//   3. overlapping ticks — no re-entrancy guard, so a dispatch slower than the
+//      60s interval let two ticks select and dispatch the same row twice.
+
+// A tick that has not finished within this window is treated as hung: the next
+// tick abandons it rather than deferring to it forever. Generous — a normal
+// tick is a handful of Supabase reads and at most `slots` GitHub dispatches.
+const TICK_TIMEOUT_MS = Number(process.env.DEV_WORKER_TICK_TIMEOUT_MS || 5 * 60 * 1000);
+
+// In-flight = still in GitHub's hands, and counted against DEV_MAX_CONCURRENT.
+// One list, exported, so the worker, the status route and (stage 3) the stage
+// timeout sweep can never disagree about what "occupies a slot" means.
+export const INFLIGHT_STATUSES = ['building', 'in_review', 'merging', 'deploying'];
+
+// Rows that were never built and never will be do not spend build budget.
+// Counting them (the old `neq('needs_attention')` did) let a burst of parked
+// duplicates silently exhaust DEV_MAX_PER_DAY and stall the queue for a day.
+const NON_SPENDING_STATUSES = ['needs_attention', 'superseded', 'duplicate'];
+
+const heartbeat = {
+  bootedAt: new Date().toISOString(),
+  ticks: 0,
+  running: false,
+  lastTickStartedAt: null,
+  lastTickFinishedAt: null,
+  lastTickMs: null,
+  lastDispatchAt: null,
+  lastDispatchedId: null,
+  dispatchedTotal: 0,
+  skipReason: null,
+  lastError: null,
+  consecutiveErrors: 0,
+  abandonedTicks: 0,
+  gates: {},
+  inflightRows: [],
+};
+
+/**
+ * Everything needed to answer "is the dispatcher working, and if not, why not?"
+ * from outside the container. Served by GET /dev/worker/status.
+ */
+export function workerStatus() {
+  const last = heartbeat.lastTickFinishedAt || heartbeat.lastTickStartedAt;
+  return {
+    ...heartbeat,
+    enabled: isPipelineEnabled(),
+    paused: PAUSED,
+    dryRun: isDryRun(),
+    maxConcurrent: MAX_CONCURRENT,
+    maxPerDay: MAX_PER_DAY,
+    secondsSinceLastTick: last ? Math.round((Date.now() - new Date(last).getTime()) / 1000) : null,
+    // The one number that matters: a free slot with a full queue and nothing
+    // dispatched is the failure this pipeline keeps having.
+    starved: Boolean(
+      heartbeat.gates.pending > 0
+      && (heartbeat.gates.inflight ?? 0) < MAX_CONCURRENT
+      && heartbeat.gates.dispatched === 0
+      && heartbeat.skipReason !== 'paused'
+      && heartbeat.skipReason !== 'disabled',
+    ),
+  };
+}
 
 export async function runDevBuildWorker(deps) {
   const { supabase } = deps;
-  if (!supabase || !isPipelineEnabled()) return;
 
-  // Concurrency + daily-rate gates.
+  // Re-entrancy guard. A tick slower than the interval must not run twice over
+  // the same pending row — that dispatches one request as two builds.
+  if (heartbeat.running) {
+    const startedMs = new Date(heartbeat.lastTickStartedAt || 0).getTime();
+    if (Date.now() - startedMs < TICK_TIMEOUT_MS) {
+      heartbeat.skipReason = 'previous_tick_still_running';
+      return;
+    }
+    // Past the timeout the previous tick is presumed hung (a fetch that never
+    // settles is the realistic case). Abandon it: a hung await must not be able
+    // to hold the dispatcher shut forever.
+    heartbeat.abandonedTicks += 1;
+    console.error('[devPipeline] abandoning a tick that never finished; starting a fresh one');
+  }
+
+  heartbeat.running = true;
+  heartbeat.ticks += 1;
+  heartbeat.lastTickStartedAt = new Date().toISOString();
+  const t0 = Date.now();
+  try {
+    await workerTick(supabase);
+    heartbeat.lastError = null;
+    heartbeat.consecutiveErrors = 0;
+  } catch (err) {
+    heartbeat.lastError = { at: new Date().toISOString(), message: String(err?.message || err).slice(0, 300) };
+    heartbeat.consecutiveErrors += 1;
+    heartbeat.skipReason = 'error';
+    throw err;                        // index.js logs it; the heartbeat keeps it
+  } finally {
+    heartbeat.running = false;
+    heartbeat.lastTickFinishedAt = new Date().toISOString();
+    heartbeat.lastTickMs = Date.now() - t0;
+  }
+}
+
+async function workerTick(supabase) {
+  heartbeat.skipReason = null;
+  heartbeat.gates = { dispatched: 0 };
+
+  if (!supabase) { heartbeat.skipReason = 'no_database'; return; }
+  if (!isPipelineEnabled()) { heartbeat.skipReason = PAUSED ? 'paused' : 'disabled'; return; }
+
+  // ── Gates ─────────────────────────────────────────────────────────────────
+  // Read the in-flight rows themselves, not just a count. When the queue is
+  // blocked, "which rows are holding the slots and for how long" is the entire
+  // answer — a bare number sent the last investigation down a dead end.
   const dayAgo = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
-  const [{ count: inflight }, { count: today }] = await Promise.all([
+  const [inflightRes, todayRes, pendingCountRes] = await Promise.all([
+    supabase.from('dev_build_requests')
+      .select('id, title, status, pr_number, updated_at')
+      .in('status', INFLIGHT_STATUSES)
+      .order('updated_at', { ascending: true })
+      .limit(50),
     supabase.from('dev_build_requests').select('*', { count: 'exact', head: true })
-      .in('status', ['building', 'in_review', 'merging', 'deploying']),
+      .gte('created_at', dayAgo)
+      .not('status', 'in', `(${NON_SPENDING_STATUSES.join(',')})`),
     supabase.from('dev_build_requests').select('*', { count: 'exact', head: true })
-      .gte('created_at', dayAgo).neq('status', 'needs_attention'),
+      .eq('status', 'pending').eq('archived', false),
   ]);
-  if ((inflight || 0) >= MAX_CONCURRENT) return;
-  if ((today || 0) >= MAX_PER_DAY) return;
+  // An error here used to be indistinguishable from an empty queue. Never again:
+  // it fails the tick loudly and lands in the heartbeat.
+  for (const [what, res] of [['inflight', inflightRes], ['daily rate', todayRes], ['pending count', pendingCountRes]]) {
+    if (res?.error) throw new Error(`${what} query failed: ${res.error.message}`);
+  }
 
-  const slots = MAX_CONCURRENT - (inflight || 0);
-  const { data: pending } = await supabase
+  const inflightRows = inflightRes.data || [];
+  const inflight = inflightRows.length;
+  const today = todayRes.count || 0;
+  const pendingCount = pendingCountRes.count || 0;
+
+  heartbeat.inflightRows = inflightRows.map((r) => ({
+    id: r.id,
+    status: r.status,
+    pr_number: r.pr_number ?? null,
+    title: (r.title || '').slice(0, 80),
+    heldForMinutes: r.updated_at
+      ? Math.round((Date.now() - new Date(r.updated_at).getTime()) / 60000)
+      : null,
+  }));
+  heartbeat.gates = { inflight, today, pending: pendingCount, slots: 0, dispatched: 0 };
+
+  if (inflight >= MAX_CONCURRENT) { heartbeat.skipReason = 'at_capacity'; return; }
+  if (today >= MAX_PER_DAY) { heartbeat.skipReason = 'daily_cap'; return; }
+
+  const slots = MAX_CONCURRENT - inflight;
+  heartbeat.gates.slots = slots;
+
+  // An archived row is one a human took off the board. It can still be
+  // `pending` — and the filter used to be applied AFTER `.limit(slots)`, so one
+  // archived row at the head of a FIFO queue with a single slot starved
+  // everything behind it forever. Filter in the query: the limit then applies
+  // to rows that are actually dispatchable.
+  const { data: pending, error: pendingErr } = await supabase
     .from('dev_build_requests')
     .select('*')
     .eq('status', 'pending')
+    .eq('archived', false)
     .order('created_at', { ascending: true })
     .limit(slots);
+  if (pendingErr) throw new Error(`pending select failed: ${pendingErr.message}`);
 
-  // An archived row is one a human took off the board. It can still be
-  // `pending`, so without this the worker happily rebuilds things that were
-  // explicitly cleared. Filtered here rather than in the query so the ordering
-  // and slot arithmetic above stay untouched.
-  for (const req of (pending || []).filter((r) => !r.archived)) {
+  for (const req of pending || []) {
     await attemptDispatch(supabase, req, 'dispatched to GitHub Actions');
   }
+  if (!pending?.length && pendingCount === 0) heartbeat.skipReason = 'queue_empty';
 
   // ── Retry pass ────────────────────────────────────────────────────────────
   // Re-pick failed rows whose class is retryable and whose backoff has expired.
@@ -681,7 +838,7 @@ export async function runDevBuildWorker(deps) {
   const retrySlots = slots - (pending || []).length;
   if (retrySlots <= 0) return;
 
-  const { data: dueRetries } = await supabase
+  const { data: dueRetries, error: retryErr } = await supabase
     .from('dev_build_requests')
     .select('*')
     .eq('status', 'failed')
@@ -690,6 +847,7 @@ export async function runDevBuildWorker(deps) {
     .lte('next_retry_at', new Date().toISOString())
     .order('next_retry_at', { ascending: true })
     .limit(retrySlots);
+  if (retryErr) throw new Error(`retry select failed: ${retryErr.message}`);
 
   for (const req of dueRetries || []) {
     const cap = MAX_RETRIES[req.failure_class] ?? 0;
@@ -711,6 +869,12 @@ export async function runDevBuildWorker(deps) {
 async function attemptDispatch(supabase, req, note, attempts) {
   try {
     await dispatchBuild(req);
+    // Recorded here rather than at the call sites so the retry pass counts too:
+    // "last dispatch" is the number the watchdog and the status route trust.
+    heartbeat.dispatchedTotal += 1;
+    heartbeat.gates.dispatched = (heartbeat.gates.dispatched || 0) + 1;
+    heartbeat.lastDispatchAt = new Date().toISOString();
+    heartbeat.lastDispatchedId = req.id;
     await setStatus(
       supabase,
       req.id,
@@ -1360,6 +1524,15 @@ export async function handleDevPipeline(req, res, deps) {
       await setStatus(supabase, r.id, { status: 'superseded', archived: true, next_retry_at: null }, 'backlog cleared');
     }
     return json(200, { ok: true, cancelled: doomed.map(publicRow), kept: [...keep] });
+  }
+
+  // GET /dev/worker/status — is the DISPATCHER alive, and if it dispatched
+  // nothing, why not? The reconciler got this route after it stalled silently;
+  // the worker then stalled silently in exactly the same way, with a full queue
+  // and a free slot, and cost hours of guesswork. Symmetry is the fix.
+  if (req.method === 'GET' && path === '/dev/worker/status') {
+    if (!checkClientToken(req)) return json(401, { error: 'unauthorized' });
+    return json(200, workerStatus());
   }
 
   // GET /dev/reconcile/status — is the reconciler alive and making progress?
