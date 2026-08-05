@@ -10,6 +10,7 @@ import {
   stageForStatus,
   changeStatusFor,
   runReconcileTick,
+  reconcileStatus,
   RECONCILABLE,
 } from './devReconcile.js';
 
@@ -142,6 +143,7 @@ test('a merged mobile change is not deployed until a release carries it', () => 
     pr: mergedPr(),
     deploy: { status: 'completed', conclusion: 'success' },
     touchesMobile: true,
+    trainEpoch: '2026-08-01T00:00:00Z',   // merged after the train existed
     now: NOW,
   };
   assert.equal(deriveState({ ...base, release: null }).status, undefined,
@@ -288,7 +290,7 @@ function stubGitHub({ pulls, deployRuns, files = [], checkRuns = [] }) {
     else if (u.includes('/check-runs')) body = { check_runs: checkRuns };
     else if (/\/pulls\/\d+$/.test(u)) body = pulls.find((p) => u.endsWith(`/${p.number}`)) || null;
     else body = {};
-    return { ok: true, status: 200, json: async () => body };
+    return { ok: true, status: 200, headers: { get: () => null }, json: async () => body };
   };
   return () => { globalThis.fetch = original; };
 }
@@ -383,4 +385,107 @@ test('the tick no-ops without a GitHub token', async () => {
   const result = await runReconcileTick({ supabase: makeSupabase() });
   if (saved) process.env.GITHUB_TOKEN = saved;
   assert.deepEqual(result, { checked: 0, patched: 0, adopted: 0 });
+});
+
+// ─── Stage 2a: the three defects the live pipeline exposed ───────────────────
+
+test('a mobile change merged BEFORE the train existed is not stranded', () => {
+  // PRs #93 and #83 sat at `deploying` forever: they touch mobile/, they merged
+  // before mobile-release.yml existed, and so no release will ever carry them.
+  // Gating those on a release reintroduces the exact drift this module removes.
+  const base = {
+    row: row({ status: 'deploying' }),
+    pr: mergedPr({ merged_at: '2026-08-03T00:41:49Z' }),
+    deploy: { status: 'completed', conclusion: 'success' },
+    touchesMobile: true,
+    release: null,
+    now: NOW,
+  };
+  assert.equal(
+    deriveState({ ...base, trainEpoch: '2026-08-03T20:28:58Z' }).status,
+    'deployed',
+    'merged before the train epoch -> deploy.yml built it, so it is shipped',
+  );
+  assert.equal(
+    deriveState({ ...base, trainEpoch: null }).status,
+    'deployed',
+    'no train at all -> nothing is gated',
+  );
+  assert.equal(
+    deriveState({ ...base, row: row({ status: 'in_review' }), trainEpoch: '2026-08-01T00:00:00Z' }).status,
+    'deploying',
+    'merged after the train epoch -> it really does have to ride a build',
+  );
+});
+
+test('the reconciler never downgrades a breaker escalation to failed', () => {
+  // needs_attention means the circuit breaker escalated after N failures sharing
+  // a signature. That is strictly more information than "CI is red", which is
+  // all this module can see. Without arbitration the two paths overwrite each
+  // other every 60 s and the alert is buried.
+  const patch = deriveState({
+    row: row({ status: 'needs_attention', error: 'breaker: 3 failures', pr_number: 12, pr_url: 'https://x/12', branch: `auto/dev-${ID}` }),
+    pr: openPr(),
+    checks: 'failed',
+    now: NOW,
+  });
+  assert.equal(patch.status, undefined, 'status is left alone');
+  assert.equal(patch.error, undefined, 'and so is the breaker explanation');
+  assert.equal(patch.checks_status, 'failed', 'but GitHub facts still land');
+});
+
+test('GitHub still moves a needs_attention row when it knows something better', () => {
+  const merged = deriveState({
+    row: row({ status: 'needs_attention', error: 'breaker' }),
+    pr: mergedPr(),
+    deploy: { status: 'completed', conclusion: 'success' },
+    now: NOW,
+  });
+  assert.equal(merged.status, 'deployed', 'merged and deployed beats a stale escalation');
+
+  const closed = deriveState({
+    row: row({ status: 'needs_attention', error: 'breaker' }),
+    pr: mergedPr({ merged_at: null, merge_commit_sha: null }),
+    now: NOW,
+  });
+  assert.equal(closed.status, 'superseded');
+});
+
+test('one throwing row cannot stall the tick', async () => {
+  // The stall: no per-row try/catch meant a single bad row aborted the tick, and
+  // since earlier rows had already advanced `reconciled_at`, every later tick
+  // restarted at the same bad row and died there. Forever.
+  const pulls = [
+    { number: 62, html_url: 'https://x/62', state: 'closed', merged_at: '2026-08-01T19:28:00Z',
+      merge_commit_sha: 'merge62', updated_at: '2026-08-01T19:28:00Z', created_at: OLD,
+      head: { ref: `auto/dev-${ID}`, sha: 'h62' }, title: 'ok row', labels: [] },
+  ];
+  const restore = stubGitHub({
+    pulls,
+    deployRuns: [{ head_sha: 'merge62', status: 'completed', conclusion: 'success', head_branch: 'main' }],
+  });
+
+  const supabase = makeSupabase({
+    dev_build_requests: [
+      // No id -> row.id.slice() throws inside reconcileRow.
+      { id: null, status: 'deploying', title: 'poison', created_at: OLD, pr_number: 62, history: [] },
+      { id: ID, status: 'deploying', title: 'ok row', created_at: OLD, pr_number: 62, history: [] },
+    ],
+  });
+
+  const result = await runReconcileTick({ supabase });
+  restore();
+
+  const good = supabase._store.dev_build_requests.find((r) => r.id === ID);
+  assert.equal(good.status, 'deployed', 'the row behind the poison row is still reconciled');
+  assert.equal(result.patched, 1);
+});
+
+test('the tick reports its own health', async () => {
+  const restore = stubGitHub({ pulls: [], deployRuns: [] });
+  await runReconcileTick({ supabase: makeSupabase() });
+  restore();
+  const s = reconcileStatus();
+  assert.ok(s.at, 'last tick time is exposed so a stall is visible from outside');
+  assert.equal(s.error, null);
 });
