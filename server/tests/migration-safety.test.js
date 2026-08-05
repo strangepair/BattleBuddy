@@ -92,4 +92,50 @@ describe('migration safety', () => {
     assert.deepEqual(violations, [],
       'Non-idempotent migration statements (these break re-runs):\n' + violations.join('\n'));
   });
+
+  // 2026-08-05: THE MIGRATION PLANE DEADLOCKED, and this is the guard for it.
+  //
+  // 021 and 022 both define `dev_build_requests_status_check`; 022's list is
+  // wider (it adds 'superseded'). Because every file re-runs on every deploy in
+  // numeric order, 021 replaced 022's constraint with its own narrower one on
+  // each pass. Harmless until a row actually held 'superseded' — then 021
+  // failed, ON_ERROR_STOP aborted the job, and NOTHING numbered above 021 could
+  // ever be applied again. A later widening silently makes an earlier one a
+  // narrowing.
+  //
+  // So: for any named constraint, only the LAST file that defines it may
+  // drop-and-add unconditionally. Earlier definitions must be conditional on
+  // the constraint not already existing.
+  it('only the last definition of a check constraint is unconditional', () => {
+    const ADD = /add\s+constraint\s+([a-z0-9_]+)/gi;
+    const byConstraint = new Map();
+
+    for (const full of sqlFiles().sort()) {
+      const sql = fs.readFileSync(full, 'utf8');
+      for (const m of sql.matchAll(ADD)) {
+        const name = m[1].toLowerCase();
+        if (!byConstraint.has(name)) byConstraint.set(name, []);
+        const guarded = /pg_constraint/i.test(sql);
+        const files = byConstraint.get(name);
+        if (!files.some((f) => f.full === full)) files.push({ full, guarded });
+      }
+    }
+
+    const violations = [];
+    for (const [name, files] of byConstraint) {
+      if (files.length < 2) continue;
+      // Every file but the last must be guarded against re-narrowing.
+      for (const f of files.slice(0, -1)) {
+        if (!f.guarded) {
+          violations.push(
+            `${f.full}: redefines "${name}" unconditionally, but `
+            + `${files[files.length - 1].full} defines it later — wrap this one in a `
+            + 'DO block guarded on pg_constraint so it cannot narrow the later definition',
+          );
+        }
+      }
+    }
+    assert.deepEqual(violations, [],
+      'A later widening turned an earlier one into a narrowing:\n' + violations.join('\n'));
+  });
 });
