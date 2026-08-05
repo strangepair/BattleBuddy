@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dedupeKey, looksForbidden, patchForEvent, isPipelineEnabled, collapseNearDuplicates, generateProductRequests, insertRequests, insertSubmission, triageSubmission, handleRepetition, processSubmission, classifyFailure, failureSignature, retryDelayMs, applyFailure, runDevBuildWorker, resubmitPlan, RESUBMITTABLE } from './devPipeline.js';
+import { dedupeKey, looksForbidden, patchForEvent, isPipelineEnabled, collapseNearDuplicates, generateProductRequests, insertRequests, insertSubmission, triageSubmission, handleRepetition, processSubmission, classifyFailure, failureSignature, retryDelayMs, applyFailure, runDevBuildWorker, resubmitPlan, RESUBMITTABLE, parkUnprocessedDirective, titleSimilarity } from './devPipeline.js';
 
 test('dedupeKey is stable and target-scoped', () => {
   const a = dedupeKey('ui', 'Make the greeting warmer!');
@@ -797,4 +797,94 @@ test('only stuck requests are resubmittable', () => {
   assert.deepEqual(RESUBMITTABLE, ['failed', 'needs_attention']);
   assert.ok(!RESUBMITTABLE.includes('building'), 'an in-flight build must not be double-dispatched');
   assert.ok(!RESUBMITTABLE.includes('deployed'));
+});
+
+
+// ─── Backlog hygiene: near-duplicate collapse + never losing a directive ─────
+
+/** Minimal double supporting the chains insertRequests actually uses. */
+function dedupSupabase(openRows) {
+  const inserted = [];
+  const chain = (rows) => {
+    let mode = 'select';
+    let batch = null;
+    let single = false;
+    const self = {
+      select: () => self,
+      gte: () => self,
+      in: () => self,
+      insert(r) { mode = 'insert'; batch = Array.isArray(r) ? r : [r]; inserted.push(...batch); return self; },
+      single() { single = true; return self; },
+      then(resolve) {
+        // An insert().select() RETURNS the inserted rows, not the query rows —
+        // conflating the two made the dedup assertions meaningless.
+        const data = mode === 'insert' ? (single ? { id: 'new-row', ...batch[0] } : batch) : rows;
+        return Promise.resolve({ data, error: null }).then(resolve);
+      },
+    };
+    return self;
+  };
+  return { from: () => chain(openRows), _inserted: inserted };
+}
+
+test('insertRequests collapses a reworded duplicate of an open row', async () => {
+  // The three real backlog rows this prevents:
+  //   "Calendar: show only current-day logs; enable full scroll"
+  //   "Calendar view: show only current day's logged activities"
+  //   "Calendar: show only current-day logs; make timeline scrollable"
+  // Same ask, three wordings, three different dedupe_key hashes, three rows.
+  const supabase = dedupSupabase([
+    { title: 'Calendar: show only current-day logs; enable full scroll', target: 'ui', status: 'pending' },
+  ]);
+  const result = await insertRequests(supabase, { source: 'directive', userId: null, sessionId: null }, [
+    { title: "Calendar view: show only current day's logged activities", description: 'calendar shows only current day logs', target: 'ui', confidence: 0.9 },
+  ]);
+  assert.deepEqual(result, [], 'the reworded duplicate is collapsed, not inserted');
+});
+
+test('insertRequests still admits a genuinely different ask on the same surface', async () => {
+  const supabase = dedupSupabase([
+    { title: 'Calendar: show only current-day logs; enable full scroll', target: 'ui', status: 'pending' },
+  ]);
+  const result = await insertRequests(supabase, { source: 'directive', userId: null, sessionId: null }, [
+    { title: 'Add a Jump to Now button on the dashboard', description: 'scroll the timeline back to the present moment', target: 'ui', confidence: 0.9 },
+  ]);
+  assert.equal(result.length, 1, 'a different ask must still get through');
+});
+
+test('a directive the generator cannot parse is parked, never dropped', async () => {
+  const supabase = dedupSupabase([]);
+  const text = 'Supabase composite index on sessions(user_id, created_at DESC)';
+  const row = await parkUnprocessedDirective(supabase, { userId: 'u1' }, text, 'spec generation returned nothing');
+
+  const written = supabase._inserted[0];
+  assert.equal(written.status, 'needs_attention', 'it lands somewhere a human will see it');
+  assert.equal(written.spec.rawDirective, text, 'the original wording survives verbatim');
+  assert.equal(written.spec.unprocessed, true);
+  assert.match(written.error, /Could not be turned into a build request/);
+  assert.ok(row, 'and the row is returned so the endpoint can show it');
+});
+
+test('titleSimilarity scores the real backlog duplicates above the threshold', () => {
+  // Both pairs are actual rows that coexisted in the pending backlog.
+  assert.ok(titleSimilarity(
+    'Calendar: show only current-day logs; enable full scroll',
+    "Calendar view: show only current day's logged activities",
+  ) >= 0.6);
+  assert.ok(titleSimilarity(
+    'Add start_time and end_time fields to logged events schema (additive migration)',
+    'Add start_time and end_time fields to activity/event log schema (additive)',
+  ) >= 0.6);
+});
+
+test('titleSimilarity leaves genuinely different asks alone', () => {
+  assert.ok(titleSimilarity(
+    'Calendar: show only current-day logs; enable full scroll',
+    "Add a 'Jump to Now' button on the Mission Dashboard",
+  ) < 0.6);
+  assert.ok(titleSimilarity(
+    'Agent boot heartbeat: agent.py POST + server /agent/heartbeat',
+    'Add Supabase index on sessions(user_id, created_at) for pagination',
+  ) < 0.6);
+  assert.equal(titleSimilarity('', 'anything'), 0);
 });

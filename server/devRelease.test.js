@@ -146,6 +146,7 @@ function stubGitHub(commitsByCompare) {
   globalThis.fetch = async (url) => ({
     ok: true,
     status: 200,
+    headers: { get: () => null },
     json: async () => {
       if (String(url).includes('/compare/')) {
         return { commits: commitsByCompare.map((c) => ({ sha: c.sha, commit: { message: c.message } })) };
