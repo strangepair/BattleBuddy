@@ -372,6 +372,57 @@ const MID_SESSION_SUMMARY_THRESHOLD = 80;
 // background Haiku call is in flight; injection is skipped until it resolves.
 const midSessionSummaries = new Map();
 
+// ─── Voice speak-bridge ──────────────────────────────────────────────────────
+// The reply the user hears is the SAME one the text backend already generated
+// and streamed to chat. /session/turn hands the finished text to the LiveKit
+// room; the agent speaks it via its live Deepgram TTS. The voice agent's own
+// LLM is never invoked, so there is exactly one answer — spoken and shown.
+//
+// In-memory on purpose: a restart just means the next turn isn't voiced until
+// the user reconnects, which beats persisting a stale room name.
+const voiceRooms = new Map(); // clientSessionId -> { room, at }
+const VOICE_ROOM_TTL_MS = 60 * 60 * 1000;
+const SPEAK_TOPIC = 'bb.speak';
+
+function noteVoiceRoom(sessionId, room) {
+  if (!sessionId || !room) return;
+  voiceRooms.set(sessionId, { room, at: Date.now() });
+}
+
+function clearVoiceRoom(sessionId) {
+  if (sessionId) voiceRooms.delete(sessionId);
+}
+
+// Fire-and-forget: speaking must never delay or fail a text turn.
+async function speakInVoiceRoom(sessionId, text) {
+  try {
+    if (!sessionId || !text) return;
+    const entry = voiceRooms.get(sessionId);
+    if (!entry) return;                                  // no voice session — text-only turn
+    if (Date.now() - entry.at > VOICE_ROOM_TTL_MS) {
+      voiceRooms.delete(sessionId);
+      return;
+    }
+    const apiKey = process.env.LIVEKIT_API_KEY;
+    const apiSecret = process.env.LIVEKIT_API_SECRET;
+    const lkUrl = process.env.LIVEKIT_URL;
+    if (!apiKey || !apiSecret || !lkUrl) return;
+
+    const { RoomServiceClient, DataPacket_Kind } = await import('livekit-server-sdk');
+    const svc = new RoomServiceClient(lkUrl, apiKey, apiSecret);
+    const payload = new TextEncoder().encode(JSON.stringify({ text }));
+    // RELIABLE is 0; read it off the enum when present so a v3 rename can't
+    // silently downgrade this to lossy.
+    const kind = (DataPacket_Kind && DataPacket_Kind.RELIABLE !== undefined)
+      ? DataPacket_Kind.RELIABLE
+      : 0;
+    await svc.sendData(entry.room, payload, kind, { topic: SPEAK_TOPIC });
+    console.log(`[Speak] Sent reply to ${entry.room} (${text.length} chars) for speaking`);
+  } catch (err) {
+    console.error('[Speak] Failed to send reply for speaking:', err.message);
+  }
+}
+
 function maybeSummarizeMidSession(sessionId, messages) {
   if (!sessionId || !messages || messages.length < MID_SESSION_SUMMARY_THRESHOLD) return;
   if (midSessionSummaries.has(sessionId)) return; // already running or done for this session
@@ -1182,6 +1233,20 @@ async function streamTextTurn(res, systemPrompt, conversationMessages, effective
     if (!finalMessage) return;
   }
 
+  // Voice bridge: hand the finished reply to the room so BB speaks the exact
+  // text the user is reading. After res.end() semantics are irrelevant — this
+  // is fire-and-forget and can never delay or break the SSE turn.
+  try {
+    const spoken = (finalMessage.content || [])
+      .filter(b => b.type === 'text')
+      .map(b => b.text)
+      .join('')
+      .trim();
+    if (spoken) speakInVoiceRoom(requestContext.sessionId, spoken);
+  } catch (e) {
+    console.error('[Speak] Could not extract reply text:', e.message);
+  }
+
   res.write('data: [DONE]\n\n');
   res.end();
 }
@@ -1648,6 +1713,9 @@ const server = createServer(async (req, res) => {
           metadata: dispatchMetadata,
         });
         console.log(`Dispatched agent to room: ${roomName} (user: ${userName}, metadata ${dispatchMetadata.length} bytes)`);
+        // Only after a successful dispatch — a failed dispatch means no agent
+        // is in the room, so there is nothing that could speak.
+        noteVoiceRoom(clientSessionId, roomName);
       } catch (dispatchErr) {
         // A failed dispatch means NO agent joins this room — the user hears
         // nothing. Never bury this as info-level "may already exist".
@@ -2216,6 +2284,7 @@ Return ONLY the JSON object, no markdown, no explanation.`;
       // COMMITMENTS_ENABLED). Independent of the analysis below and its own
       // background pass, so a failure in either can't affect the other.
       if (isSessionEnd) {
+        clearVoiceRoom(sessionId);
         maybeInferCommitments(userId || 'default', messages, timezone || 'America/Chicago').catch(() => {});
       }
 
