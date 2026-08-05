@@ -22,6 +22,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { githubFetch } from './githubApi.js';
 import { startRelease, completeRelease } from './devRelease.js';
+import { reconcileStatus } from './devReconcile.js';
 
 const SPEC_MODEL = 'claude-sonnet-4-6';
 
@@ -106,6 +107,44 @@ function jaccardOverlap(wordsA, wordsB) {
   for (const w of setA) if (setB.has(w)) intersection++;
   const union = setA.size + setB.size - intersection;
   return union === 0 ? 1 : intersection / union;
+}
+
+// Words that carry no signal about WHAT is being asked for. Dropping them stops
+// phrasing ("the", "a view of") from diluting the comparison.
+const TITLE_STOPWORDS = new Set([
+  'a', 'an', 'the', 'to', 'of', 'for', 'and', 'or', 'in', 'on', 'at', 'with',
+  'from', 'is', 'be', 'as', 'by', 's', 'it', 'its', 'this', 'that',
+]);
+
+const NEAR_DUPLICATE_THRESHOLD = Number(process.env.DEV_NEAR_DUPLICATE_THRESHOLD || 0.6);
+
+function titleTokens(title) {
+  const out = new Set();
+  for (const w of normalizeWords(String(title || ''))) {
+    if (TITLE_STOPWORDS.has(w) || w.length < 2) continue;
+    // Crude singularisation so "logs" and "log" are the same ask.
+    out.add(w.endsWith('s') && !w.endsWith('ss') ? w.slice(0, -1) : w);
+  }
+  return out;
+}
+
+/**
+ * How much two request titles describe the same ask, 0..1.
+ *
+ * Overlap coefficient (intersection over the SMALLER set), not Jaccard. Jaccard
+ * punishes a longer title for its extra words, so "Calendar: show only
+ * current-day logs; enable full scroll" and "Calendar view: show only current
+ * day's logged activities" scored 0.43 and both landed as separate rows — one of
+ * the real duplicate pairs sitting in the backlog. Containment is the right
+ * question here: does one title's meaning fit inside the other's?
+ */
+export function titleSimilarity(a, b) {
+  const x = titleTokens(a);
+  const y = titleTokens(b);
+  if (x.size === 0 || y.size === 0) return 0;
+  let shared = 0;
+  for (const w of x) if (y.has(w)) shared += 1;
+  return shared / Math.min(x.size, y.size);
 }
 
 export function collapseNearDuplicates(items) {
@@ -221,6 +260,29 @@ export async function insertRequests(supabase, { source, userId, sessionId }, ta
     .select('dedupe_key, status, updated_at')
     .in('dedupe_key', keys);
 
+  // Near-duplicate collapse against what is already OPEN, not just an exact
+  // dedupe_key match. The key is a hash of (target|normalised title), so three
+  // rewordings of one ask — "Calendar: show only current-day logs", "Calendar
+  // view: show only current day's logged activities", "Calendar: show only
+  // current-day logs; make timeline scrollable" — hash differently and all three
+  // landed as separate rows. That is what filled the backlog with duplicates.
+  //
+  // Wrapped: this is an ENHANCEMENT to insertion, so it must never be able to
+  // prevent one. Durability-first — a submission that cannot be deduped is
+  // still a submission, and losing it would be far worse than a duplicate.
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+  let openRows = [];
+  try {
+    const { data } = await supabase
+      .from('dev_build_requests')
+      .select('title, target, status')
+      .gte('created_at', sevenDaysAgo)
+      .in('status', ['pending', 'building', 'in_review', 'merging', 'deploying', 'needs_attention']);
+    openRows = data || [];
+  } catch (err) {
+    console.error('[devPipeline] near-duplicate scan unavailable, inserting anyway:', err.message);
+  }
+
   const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 3600 * 1000).toISOString();
   const seen = new Set();
   for (const r of existing || []) {
@@ -232,8 +294,21 @@ export async function insertRequests(supabase, { source, userId, sessionId }, ta
     }
   }
 
+  function nearDuplicateOf(task) {
+    for (const r of openRows || []) {
+      if (r.target !== task.target) continue;
+      if (titleSimilarity(task.title, r.title) >= NEAR_DUPLICATE_THRESHOLD) return r;
+    }
+    return null;
+  }
+
   const rows = tasks
     .filter((t) => !seen.has(dedupeKey(t.target, t.title)))
+    .filter((t) => {
+      const dup = nearDuplicateOf(t);
+      if (dup) console.log('[devPipeline] skip insert: near-duplicate of open row:', dup.title);
+      return !dup;
+    })
     .map((t) => ({
       source,
       user_id: userId ? String(userId) : null,
@@ -267,6 +342,42 @@ export async function insertRequests(supabase, { source, userId, sessionId }, ta
   return data || [];
 }
 
+/**
+ * Record a directive the spec generator could not turn into anything.
+ *
+ * generateProductRequests returns [] when the model truncated or its JSON did
+ * not parse. The endpoint used to answer 200 {"requests":[]} — no row, no error,
+ * nothing on screen — so the submission simply vanished. Durability-first says a
+ * submission must never disappear silently; this is the visible landing place,
+ * with the original text preserved so it can be re-run by hand.
+ */
+export async function parkUnprocessedDirective(supabase, { userId }, text, reason) {
+  if (!supabase) return null;
+  const { data, error } = await supabase
+    .from('dev_build_requests')
+    .insert({
+      source: 'directive',
+      user_id: userId ? String(userId) : null,
+      title: text.slice(0, 120),
+      target: 'backend',
+      description: text.slice(0, 4000),
+      spec: { rawDirective: text, unprocessed: true, reason },
+      confidence: 0,
+      dedupe_key: dedupeKey('backend', text),
+      status: 'needs_attention',
+      error: `Could not be turned into a build request (${reason}). The original wording is kept in spec.rawDirective — resubmit or reword it.`,
+      history: [{ at: new Date().toISOString(), to: 'needs_attention', note: `unprocessed directive parked (${reason})` }],
+    })
+    .select('*')
+    .single();
+  if (error) {
+    console.error('[devPipeline] DURABILITY: could not park unprocessed directive:', error.message);
+    return null;
+  }
+  console.warn('[devPipeline] parked unprocessed directive as', data.id);
+  return data;
+}
+
 function publicRow(r) {
   return {
     id: r.id,
@@ -288,6 +399,7 @@ function publicRow(r) {
     // Build-train fields (migration 022): which release carried this change,
     // whether it skipped the train, and the work item it implements.
     release_id: r.release_id ?? null,
+    reconciled_at: r.reconciled_at ?? null,
     work_item_id: r.work_item_id ?? null,
     expedite: r.expedite ?? false,
     created_at: r.created_at,
@@ -551,7 +663,11 @@ export async function runDevBuildWorker(deps) {
     .order('created_at', { ascending: true })
     .limit(slots);
 
-  for (const req of pending || []) {
+  // An archived row is one a human took off the board. It can still be
+  // `pending`, so without this the worker happily rebuilds things that were
+  // explicitly cleared. Filtered here rather than in the query so the ordering
+  // and slot arithmetic above stay untouched.
+  for (const req of (pending || []).filter((r) => !r.archived)) {
     await attemptDispatch(supabase, req, 'dispatched to GitHub Actions');
   }
 
@@ -1010,11 +1126,28 @@ export async function handleDevPipeline(req, res, deps) {
     if (!text) return json(400, { error: 'text required' });
     try {
       const tasks = await generateProductRequests(anthropic, { directiveText: text });
-      const rows = await insertRequests(supabase, {
-        source: 'directive',
-        userId: resolveUserId ? resolveUserId(body.userId) : body.userId,
-        sessionId: null,
-      }, tasks);
+      const userId = resolveUserId ? resolveUserId(body.userId) : body.userId;
+      const rows = await insertRequests(supabase, { source: 'directive', userId, sessionId: null }, tasks);
+
+      // SILENT DROP GUARD — Mike's submissions were vanishing here.
+      if (rows.length === 0) {
+        if (tasks.length === 0) {
+          // The generator produced nothing usable. Park it so it is visible.
+          const parked = await parkUnprocessedDirective(supabase, { userId }, text, 'spec generation returned nothing');
+          return json(422, {
+            error: 'That could not be turned into a build request. It has been saved for review, not lost.',
+            reason: 'generation_empty',
+            requests: parked ? [publicRow(parked)] : [],
+          });
+        }
+        // Tasks existed but every one collapsed onto something already open.
+        // Not a failure, but the app must say so rather than show nothing.
+        return json(200, {
+          requests: [],
+          deduped: true,
+          message: 'Everything in that directive is already tracked — no new work was created.',
+        });
+      }
 
       if (supabase) {
         const triage = await processSubmission(supabase, anthropic, {
@@ -1039,11 +1172,13 @@ export async function handleDevPipeline(req, res, deps) {
   if (req.method === 'GET' && path === '/dev/requests') {
     if (!checkClientToken(req)) return json(401, { error: 'unauthorized' });
     if (!supabase) return json(200, { requests: [] });
-    const { data } = await supabase
-      .from('dev_build_requests')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(100);
+    // Filterable: the flat newest-100 window hid in-flight rows behind a wall of
+    // backlog, which is exactly how a slot-holding row stays invisible.
+    const statusFilter = url.searchParams.get('status');
+    const limit = Math.min(Number(url.searchParams.get('limit') || 100), 500);
+    let q = supabase.from('dev_build_requests').select('*');
+    if (statusFilter) q = q.in('status', statusFilter.split(',').map((s) => s.trim()).filter(Boolean));
+    const { data } = await q.order('created_at', { ascending: false }).limit(limit);
     return json(200, { requests: (data || []).map(publicRow), enabled: isPipelineEnabled(), dryRun: isDryRun() });
   }
 
@@ -1176,6 +1311,59 @@ export async function handleDevPipeline(req, res, deps) {
       );
       return json(502, { error: err.message });
     }
+  }
+
+  // POST /dev/requests/:id/cancel — terminal, non-destructive stop.
+  // Archiving alone was not enough: `archived` is a display flag, so an archived
+  // row kept status `pending` and runDevBuildWorker would still dispatch it.
+  // Cancelling parks it in `superseded` (terminal) AND archives it.
+  if (req.method === 'POST' && path.startsWith('/dev/requests/') && path.endsWith('/cancel')) {
+    if (!checkClientToken(req)) return json(401, { error: 'unauthorized' });
+    if (!supabase) return json(404, { error: 'not found' });
+    const id = decodeURIComponent(path.slice('/dev/requests/'.length, -'/cancel'.length));
+    const { data: row } = await supabase.from('dev_build_requests').select('*').eq('id', id).single();
+    if (!row) return json(404, { error: 'not found' });
+    if (['deployed', 'superseded'].includes(row.status)) {
+      return json(409, { error: `cannot cancel a request that is ${row.status}` });
+    }
+    await setStatus(supabase, id, { status: 'superseded', archived: true, next_retry_at: null }, 'cancelled by operator');
+    return json(200, { ok: true, id });
+  }
+
+  // POST /dev/backlog/clear — cancel the whole queued backlog at once.
+  // Body: { status?: 'pending', dryRun?: boolean, keep?: [id, ...] }.
+  // Returns the rows it cancelled so nothing is lost silently — the caller can
+  // see exactly what went, and re-queue anything that mattered.
+  if (req.method === 'POST' && path === '/dev/backlog/clear') {
+    if (!checkClientToken(req)) return json(401, { error: 'unauthorized' });
+    if (!supabase) return json(503, { error: 'database not configured' });
+    const body = await readBody(req);
+    const targetStatus = body.status || 'pending';
+    const keep = new Set(body.keep || []);
+
+    const { data: rows, error: selErr } = await supabase
+      .from('dev_build_requests')
+      .select('*')
+      .eq('status', targetStatus)
+      .order('created_at', { ascending: true });
+    if (selErr) return json(500, { error: selErr.message });
+
+    const doomed = (rows || []).filter((r) => !keep.has(r.id));
+    if (body.dryRun) {
+      return json(200, { dryRun: true, wouldCancel: doomed.map(publicRow), kept: [...keep] });
+    }
+    for (const r of doomed) {
+      await setStatus(supabase, r.id, { status: 'superseded', archived: true, next_retry_at: null }, 'backlog cleared');
+    }
+    return json(200, { ok: true, cancelled: doomed.map(publicRow), kept: [...keep] });
+  }
+
+  // GET /dev/reconcile/status — is the reconciler alive and making progress?
+  // The first version stalled silently for hours and was undiagnosable from
+  // outside the container. Never again.
+  if (req.method === 'GET' && path === '/dev/reconcile/status') {
+    if (!checkClientToken(req)) return json(401, { error: 'unauthorized' });
+    return json(200, reconcileStatus());
   }
 
   // POST /dev/pause — runtime kill switch (admin only).
