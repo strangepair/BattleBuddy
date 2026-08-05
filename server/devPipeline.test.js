@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dedupeKey, looksForbidden, patchForEvent, isPipelineEnabled, collapseNearDuplicates, generateProductRequests, insertRequests, insertSubmission, triageSubmission, handleRepetition, processSubmission, classifyFailure, failureSignature, retryDelayMs, applyFailure, runDevBuildWorker, resubmitPlan, RESUBMITTABLE, parkUnprocessedDirective, titleSimilarity, handleDevPipeline } from './devPipeline.js';
+import { dedupeKey, looksForbidden, patchForEvent, isPipelineEnabled, collapseNearDuplicates, generateProductRequests, insertRequests, insertSubmission, triageSubmission, handleRepetition, processSubmission, classifyFailure, failureSignature, retryDelayMs, applyFailure, runDevBuildWorker, resubmitPlan, RESUBMITTABLE, parkUnprocessedDirective, titleSimilarity, handleDevPipeline, workerStatus } from './devPipeline.js';
 
 test('dedupeKey is stable and target-scoped', () => {
   const a = dedupeKey('ui', 'Make the greeting warmer!');
@@ -981,4 +981,128 @@ test('GET /dev/requests: status filter is applied to both total and data', async
   assert.equal(body.total, 2, 'total counts only matching status rows');
   assert.equal(body.data.length, 2, 'data contains only matching status rows');
   assert.ok(body.data.every((r) => r.status === 'pending'), 'all data rows match the status filter');
+});
+
+// ─── Dispatcher: the stalls that were invisible from outside the container ───
+//
+// 2026-08-05: a full queue, a free slot, and no dispatch for hours. The tick was
+// alive the whole time — ghost rows held every slot — but nothing said so. These
+// cover the three ways the dispatcher can go quiet AND the heartbeat that now
+// makes each of them legible.
+
+/** Run one worker tick with the pipeline switched on and GitHub stubbed. */
+async function runWorkerWith(sb, { dispatchFails = false } = {}) {
+  const prevEnabled = process.env.DEV_PIPELINE_ENABLED;
+  const prevToken = process.env.GITHUB_TOKEN;
+  const prevFetch = globalThis.fetch;
+  process.env.DEV_PIPELINE_ENABLED = 'true';
+  process.env.GITHUB_TOKEN = 'test-token';
+  let dispatched = 0;
+  globalThis.fetch = async () => {
+    dispatched += 1;
+    return dispatchFails
+      ? { ok: false, status: 500, text: async () => 'boom' }
+      : { ok: true, text: async () => '' };
+  };
+  try {
+    await runDevBuildWorker({ supabase: sb });
+  } finally {
+    globalThis.fetch = prevFetch;
+    if (prevEnabled === undefined) delete process.env.DEV_PIPELINE_ENABLED; else process.env.DEV_PIPELINE_ENABLED = prevEnabled;
+    if (prevToken === undefined) delete process.env.GITHUB_TOKEN; else process.env.GITHUB_TOKEN = prevToken;
+  }
+  return dispatched;
+}
+
+const pendingRow = (over = {}) => ({
+  id: 'p1', status: 'pending', archived: false, attempts: 0, history: [],
+  target: 'ui', title: 't', spec: {},
+  created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+  ...over,
+});
+
+test('worker dispatches a pending row when a slot is free', async () => {
+  const sb = makeSelfHealSupabase({ dev_build_requests: [pendingRow()] });
+  const dispatched = await runWorkerWith(sb);
+
+  assert.equal(dispatched, 1, 'a free slot with a queued row must produce a dispatch');
+  assert.equal(sb._store.dev_build_requests[0].status, 'building');
+  const st = workerStatus();
+  assert.equal(st.gates.dispatched, 1);
+  assert.equal(st.starved, false);
+});
+
+test('an archived row at the head of the queue no longer starves the rows behind it', async () => {
+  // The regression: `.limit(slots)` selected the archived row, the archived
+  // filter then dropped it, and the tick dispatched nothing — every tick,
+  // forever, with DEV_MAX_CONCURRENT=1.
+  const sb = makeSelfHealSupabase({
+    dev_build_requests: [
+      pendingRow({ id: 'archived-head', archived: true, created_at: '2020-01-01T00:00:00Z' }),
+      pendingRow({ id: 'real-work', created_at: '2020-01-02T00:00:00Z' }),
+    ],
+  });
+
+  const dispatched = await runWorkerWith(sb);
+
+  assert.ok(dispatched >= 1, 'the archived head must not block the queue');
+  assert.equal(sb._store.dev_build_requests.find((r) => r.id === 'real-work').status, 'building');
+  assert.equal(sb._store.dev_build_requests.find((r) => r.id === 'archived-head').status, 'pending',
+    'an archived row is still never built');
+});
+
+test('a failing query fails the tick loudly instead of reading as an empty queue', async () => {
+  const sb = makeSelfHealSupabase({ dev_build_requests: [pendingRow()] });
+  const realFrom = sb.from;
+  sb.from = (name) => {
+    const q = realFrom(name);
+    const realThen = q.then;
+    q.then = (resolve) => realThen.call(q, () => resolve({ data: null, error: { message: 'connection reset' } }));
+    return q;
+  };
+
+  await assert.rejects(() => runWorkerWith(sb), /connection reset/);
+  const st = workerStatus();
+  assert.match(st.lastError.message, /connection reset/);
+  assert.ok(st.consecutiveErrors >= 1, 'the error survives in the heartbeat, not just a log line');
+});
+
+test('the heartbeat names the rows holding the slots, with their age', async () => {
+  // Exactly today's failure: merged PRs whose callbacks never arrived sat in
+  // `merging` and consumed every slot. The number alone was not enough — the
+  // route has to say WHICH rows and for how long.
+  const old = new Date(Date.now() - 6 * 3600 * 1000).toISOString();
+  const sb = makeSelfHealSupabase({
+    dev_build_requests: [
+      { id: 'ghost', status: 'merging', archived: false, pr_number: 110, title: 'merged hours ago', history: [], updated_at: old, created_at: old },
+      pendingRow(),
+      pendingRow({ id: 'p2' }),
+    ],
+  });
+
+  await runWorkerWith(sb);
+
+  const st = workerStatus();
+  assert.equal(st.gates.inflight, 1, 'the in-flight row is counted');
+  assert.ok(st.inflightRows.some((r) => r.id === 'ghost' && r.heldForMinutes >= 300),
+    'the slot-holder is named with its age');
+  assert.ok(st.gates.pending >= 2, 'the queue depth is visible next to it');
+});
+
+test('parked and superseded rows do not spend the daily build budget', async () => {
+  // A double-capture that parks seven near-duplicates must not consume a day of
+  // build headroom for work that was never built.
+  const now = new Date().toISOString();
+  const sb = makeSelfHealSupabase({
+    dev_build_requests: [
+      ...Array.from({ length: 5 }, (_, i) => ({ id: `s${i}`, status: 'superseded', archived: true, history: [], created_at: now, updated_at: now })),
+      ...Array.from({ length: 5 }, (_, i) => ({ id: `n${i}`, status: 'needs_attention', archived: false, history: [], created_at: now, updated_at: now })),
+      pendingRow(),
+    ],
+  });
+
+  await runWorkerWith(sb);
+
+  assert.equal(workerStatus().gates.today, 1, 'only the row that can actually build counts');
+  assert.equal(sb._store.dev_build_requests.find((r) => r.id === 'p1').status, 'building');
 });
