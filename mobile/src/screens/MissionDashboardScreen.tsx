@@ -1,34 +1,39 @@
-import { View, StyleSheet } from 'react-native';
+import { FlatList, View, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { Colors, Spacing } from '../theme';
-import HeroMetric from '../components/dashboard/HeroMetric';
-import DayCalendarView from '../components/dashboard/DayCalendarView';
+import DayTimelineSection from '../components/dashboard/DayTimelineSection';
 import CalendarDetailModal from '../components/dashboard/CalendarDetailModal';
-import MultiDayCalendarView from '../components/dashboard/MultiDayCalendarView';
+import { entryLabel, entryTimestamp } from '../components/dashboard/timelineLayout';
 import { useSmokingLogs } from '../hooks/useSmokingLogs';
-import { useActivityLog, type ActivityLogEntry } from '../hooks/useActivityLog';
+import { useActivityLog, type ActivityLogEntry, type DayBucket } from '../hooks/useActivityLog';
 import { useMemo, useState, useCallback, useEffect } from 'react';
-import type { DayLog } from '../components/dashboard/DayCalendarView';
 import { useDashboardRealtime } from '../hooks/useDashboardRealtime';
 import type { SmokingLog } from '../hooks/useSmokingLogs';
 
 /**
- * MissionDashboardScreen is the redesigned mission dashboard.
- * It renders:
- *   1. HeroMetric — last cigarette timestamp + live elapsed-time counter.
- *   2. DayCalendarView — hourly timeline with projected routine and today's
- *      actuals, plus the last 3 days' patterns as ghost markers.
- *   3. MultiDayCalendarView — infinite backward-scrollable history list,
- *      paginated by date back to account creation. No future dates shown.
+ * MissionDashboardScreen — the mission dashboard is the day calendar, and
+ * nothing else: no hero card, no extra metrics.
+ *
+ * A single FlatList owns all scrolling. Each item is one day rendered as an
+ * hour-by-hour timeline (DayTimelineSection) where EVERY logged event —
+ * cigarettes and generic activities (gym, drive, couch, meals…) — appears as
+ * a labeled block at its time. Today renders first (with a NOW marker);
+ * previous days lazily page in backward to account creation via
+ * useActivityLog's loadMore as the user scrolls.
+ *
+ * There are deliberately no nested scrollables and no fixed-height panes:
+ * the previous layout stacked two scroll regions (a 2,880px 24-hour canvas
+ * and a history FlatList) inside a non-scrolling View whose minHeights
+ * overflowed the pane, clipping the history list to a one-line window.
  *
  * Real-time layer: subscribes to `dashboard:update` SSE broadcasts and merges
- * new events into the actuals list without a manual refresh.
+ * new events into today's section without a manual refresh.
  */
 export default function MissionDashboardScreen() {
-  const { todayLogs, historyLogs } = useSmokingLogs();
+  const { todayLogs } = useSmokingLogs();
   const { realtimeEvents } = useDashboardRealtime(todayLogs);
-  const [selectedLog, setSelectedLog] = useState<SmokingLog | null>(null);
-  const handlePressLog = useCallback((log: SmokingLog) => setSelectedLog(log), []);
-  const handleDismiss = useCallback(() => { setSelectedLog(null); }, []);
+  const [selectedEntry, setSelectedEntry] = useState<ActivityLogEntry | null>(null);
+  const handlePressEntry = useCallback((entry: ActivityLogEntry) => setSelectedEntry(entry), []);
+  const handleDismiss = useCallback(() => { setSelectedEntry(null); }, []);
 
   const mergedTodayLogs: SmokingLog[] = useMemo(() => {
     const fetchedIds = new Set(todayLogs.map((l) => l.id));
@@ -36,56 +41,67 @@ export default function MissionDashboardScreen() {
     return [...extra, ...todayLogs].sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
   }, [todayLogs, realtimeEvents]);
 
-  const previousDays: DayLog[] = useMemo(() => {
-    const today = new Date();
-    const todayKey = today.toDateString();
-
-    const byDay = new Map<string, DayLog>();
-    for (const log of historyLogs) {
-      const d = new Date(log.occurred_at);
-      const key = d.toDateString();
-      if (key === todayKey) continue;
-      const iso = d.toISOString().slice(0, 10);
-      if (!byDay.has(iso)) byDay.set(iso, { date: iso, logs: [] });
-      byDay.get(iso)!.logs.push(log);
-    }
-
-    return Array.from(byDay.values())
-      .sort((a, b) => b.date.localeCompare(a.date))
-      .slice(0, 3);
-  }, [historyLogs]);
-
-  const todayActivityEntries: ActivityLogEntry[] = useMemo(() => {
-    const todayDateStr = new Date().toLocaleDateString('en-CA');
-    return mergedTodayLogs
-      .filter((l) => {
-        const d = new Date(l.occurred_at);
-        return d.toLocaleDateString('en-CA') === todayDateStr;
-      })
-      .map((l) => ({
+  const todayCigaretteEntries: ActivityLogEntry[] = useMemo(
+    () =>
+      mergedTodayLogs.map((l) => ({
         type: 'cigarette' as const,
         id: l.id,
         occurred_at: l.occurred_at,
+        activityLabel: l.activityLabel,
+        location: l.location ?? null,
         metadata: l.metadata,
-      }));
-  }, [mergedTodayLogs]);
+      })),
+    [mergedTodayLogs],
+  );
 
   const { days, loadingInitial, loadingMore, hasMore, loadMore } =
-    useActivityLog(todayActivityEntries);
+    useActivityLog(todayCigaretteEntries);
 
   useEffect(() => {
     loadMore();
   }, [loadMore]);
 
-  const modalTitle = selectedLog
-    ? selectedLog.activityLabel || new Date(selectedLog.occurred_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : '';
-  const modalDescription = selectedLog
+  const todayKey = days[0]?.date;
+  const renderItem = useCallback(
+    ({ item }: { item: DayBucket }) => (
+      <DayTimelineSection
+        bucket={item}
+        isToday={item.date === todayKey}
+        onPressEntry={handlePressEntry}
+      />
+    ),
+    [todayKey, handlePressEntry],
+  );
+  const keyExtractor = useCallback((item: DayBucket) => item.date, []);
+
+  const ListFooter = useCallback(() => {
+    if (loadingInitial || loadingMore) {
+      return (
+        <View style={styles.footer}>
+          <ActivityIndicator size="small" color={Colors.textTertiary} />
+        </View>
+      );
+    }
+    if (!hasMore && days.length > 1) {
+      return (
+        <View style={styles.footer}>
+          <Text style={styles.footerText}>Beginning of history</Text>
+        </View>
+      );
+    }
+    return null;
+  }, [loadingInitial, loadingMore, hasMore, days.length]);
+
+  const modalTitle = selectedEntry ? entryLabel(selectedEntry) : '';
+  const modalDescription = selectedEntry
     ? [
-        selectedLog.location ? `Location: ${selectedLog.location}` : null,
-        selectedLog.occurred_at
-          ? `Time: ${new Date(selectedLog.occurred_at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`
-          : null,
+        selectedEntry.location ? `Location: ${selectedEntry.location}` : null,
+        (() => {
+          const ts = entryTimestamp(selectedEntry);
+          return ts
+            ? `Time: ${new Date(ts).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`
+            : null;
+        })(),
       ]
         .filter(Boolean)
         .join('\n') || 'No additional details.'
@@ -93,27 +109,22 @@ export default function MissionDashboardScreen() {
 
   return (
     <>
-      <View style={styles.root}>
-        <HeroMetric realtimeLogs={mergedTodayLogs} />
-        <View style={styles.dayView}>
-          <DayCalendarView
-            actuals={mergedTodayLogs}
-            previousDays={previousDays}
-            onPressLog={handlePressLog}
-          />
-        </View>
-        <View style={styles.historyView}>
-          <MultiDayCalendarView
-            days={days}
-            loadingInitial={loadingInitial}
-            loadingMore={loadingMore}
-            hasMore={hasMore}
-            onEndReached={loadMore}
-          />
-        </View>
-      </View>
+      <FlatList
+        style={styles.root}
+        contentContainerStyle={styles.content}
+        data={days}
+        keyExtractor={keyExtractor}
+        renderItem={renderItem}
+        ListFooterComponent={ListFooter}
+        onEndReached={loadMore}
+        onEndReachedThreshold={0.5}
+        showsVerticalScrollIndicator={true}
+        initialNumToRender={4}
+        maxToRenderPerBatch={8}
+        windowSize={7}
+      />
       <CalendarDetailModal
-        visible={selectedLog !== null}
+        visible={selectedEntry !== null}
         onDismiss={handleDismiss}
         title={modalTitle}
         description={modalDescription}
@@ -126,18 +137,18 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: Colors.background,
+  },
+  content: {
     paddingHorizontal: Spacing.md,
-    paddingTop: Spacing.md,
-    gap: Spacing.md,
+    paddingTop: Spacing.xs,
+    paddingBottom: Spacing.xl,
   },
-  dayView: {
-    flex: 2,
-    minHeight: 260,
+  footer: {
+    alignItems: 'center',
+    paddingVertical: Spacing.md,
   },
-  historyView: {
-    flex: 1,
-    minHeight: 160,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: Colors.surfaceBorder,
+  footerText: {
+    fontSize: 12,
+    color: Colors.textTertiary,
   },
 });
