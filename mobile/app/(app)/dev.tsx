@@ -412,7 +412,7 @@ export default function DevScreen() {
             </Text>
           </View>
           {view.isClear && view.lastShipped ? (
-            <Text style={styles.bannerSub} numberOfLines={2}>
+            <Text style={styles.bannerSub} numberOfLines={3}>
               Last shipped: {view.lastShipped.request.title}
               {view.lastShipped.request.pr_number ? ` · PR #${view.lastShipped.request.pr_number}` : ''}
               {' · '}{relativeTime(view.lastShipped.request.updated_at ?? view.lastShipped.request.created_at)}
@@ -565,7 +565,7 @@ const styles = StyleSheet.create({
   backButton: { paddingVertical: Spacing.xs, paddingRight: Spacing.sm, minWidth: 60 },
   backText: { color: Colors.coral, fontSize: 16, fontWeight: '600' },
   title: { fontSize: 18, fontWeight: '700', color: Colors.textPrimary },
-  archiveToggle: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  archiveToggle: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm - 2 },
   archiveLabel: { fontSize: 12, color: Colors.textSecondary, fontWeight: '500' },
   scroll: { paddingHorizontal: Spacing.md, paddingTop: Spacing.lg, paddingBottom: Spacing.xxl },
   section: { marginBottom: Spacing.lg },
@@ -615,13 +615,13 @@ const styles = StyleSheet.create({
   submitBtn: {
     backgroundColor: Colors.coral,
     borderRadius: Radii.md,
-    paddingVertical: 12,
+    paddingVertical: Spacing.sm + 4,
     alignItems: 'center',
     marginTop: Spacing.sm,
   },
   submitBtnDisabled: { opacity: 0.5 },
   submitText: { color: '#fff', fontSize: 15, fontWeight: '700' },
-  archiveRowToggle: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: Spacing.sm },
+  archiveRowToggle: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm - 2, marginBottom: Spacing.sm },
   empty: { fontSize: 14, color: Colors.textTertiary, lineHeight: 20, marginTop: Spacing.sm },
   unreleasedGroup: {
     backgroundColor: Colors.surface,
@@ -648,28 +648,29 @@ const styles = StyleSheet.create({
   cardTitle: { flex: 1, fontSize: 15, fontWeight: '600', color: Colors.textPrimary, lineHeight: 20 },
   badge: {
     borderWidth: 1,
-    borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
+    borderRadius: Radii.full,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.xs / 2,
+    flexShrink: 1,
   },
-  badgeText: { fontSize: 11, fontWeight: '700' },
-  cardMeta: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  badgeText: { fontSize: 11, fontWeight: '700', flexShrink: 1 },
+  cardMeta: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm, flexWrap: 'wrap' },
   targetPill: {
     backgroundColor: Colors.background,
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
+    borderRadius: Radii.sm,
+    paddingHorizontal: Spacing.sm,
+    paddingVertical: Spacing.xs / 2,
   },
   targetText: { fontSize: 11, fontWeight: '600', color: Colors.textSecondary },
   sourceText: { flex: 1, fontSize: 12, color: Colors.textTertiary },
   collapsedText: { fontSize: 12, color: Colors.textTertiary },
   errorText: { fontSize: 12, color: Colors.error, lineHeight: 16 },
-  retryText: { fontSize: 12, color: Colors.textTertiary, marginTop: 4 },
+  retryText: { fontSize: 12, color: Colors.textTertiary, marginTop: Spacing.xs },
   resubmitBtn: {
     marginTop: Spacing.sm,
     alignSelf: 'flex-start',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
+    paddingVertical: Spacing.sm - 2,
+    paddingHorizontal: Spacing.sm + 4,
     borderRadius: Radii.sm,
     borderWidth: 1,
     borderColor: Colors.coral,
