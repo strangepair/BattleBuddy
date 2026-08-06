@@ -10,6 +10,7 @@ export interface ActivityLogEntry {
   start_time?: string;
   end_time?: string | null;
   activity_name?: string;
+  activityLabel?: string;
   location?: string | null;
   metadata?: Record<string, unknown>;
 }
@@ -21,8 +22,19 @@ export interface DayBucket {
 
 const PAGE_SIZE = 50;
 
+function pad2(n: number): string {
+  return n < 10 ? `0${n}` : String(n);
+}
+
+/**
+ * Local calendar date (YYYY-MM-DD) of a timestamp. Uses the device timezone
+ * so an evening entry lands on the day the user experienced it — a plain
+ * `.slice(0, 10)` on a UTC instant puts anything after ~5 PM US time on
+ * "tomorrow", which is how entries used to jump days.
+ */
 function isoDate(ts: string): string {
-  return ts.slice(0, 10);
+  const d = new Date(ts);
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
 function entryTimestamp(e: ActivityLogEntry): string {
@@ -44,7 +56,8 @@ function bucketByDay(entries: ActivityLogEntry[]): DayBucket[] {
 }
 
 function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
+  const d = new Date();
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
 function fillEmptyDays(buckets: DayBucket[], from: string, to: string): DayBucket[] {
@@ -68,6 +81,14 @@ interface UseActivityLogResult {
   loadMore: () => void;
 }
 
+/**
+ * Assembles the day-bucketed mission timeline.
+ *
+ * Today's cigarettes arrive via `todayEntries` (the realtime-merged feed from
+ * useSmokingLogs — authoritative for today's cigarette count). Today's generic
+ * *activity* entries, and all past days, come from GET /logs, paginated
+ * backward on demand (`loadMore`) down to the account creation date.
+ */
 export function useActivityLog(
   todayEntries: ActivityLogEntry[],
 ): UseActivityLogResult {
@@ -77,6 +98,7 @@ export function useActivityLog(
   );
 
   const [historyBuckets, setHistoryBuckets] = useState<DayBucket[]>([]);
+  const [todayActivities, setTodayActivities] = useState<ActivityLogEntry[]>([]);
   const [loadingInitial, setLoadingInitial] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
@@ -114,6 +136,22 @@ export function useActivityLog(
           const ts = entryTimestamp(e);
           return ts && isoDate(ts) < today;
         });
+
+        // Today's activity entries only live in /logs (the realtime feed
+        // carries cigarettes alone) — keep them for the today bucket instead
+        // of dropping the whole day. Today's /logs cigarettes ARE dropped:
+        // the realtime-merged feed owns those, avoiding double-counts.
+        const todaysActivities = entries.filter((e) => {
+          const ts = entryTimestamp(e);
+          return e.type === 'activity' && ts && isoDate(ts) === today;
+        });
+        if (todaysActivities.length > 0) {
+          setTodayActivities((prev) => {
+            const ids = new Set(prev.map((e) => e.id));
+            const fresh = todaysActivities.filter((e) => !ids.has(e.id));
+            return fresh.length > 0 ? [...prev, ...fresh] : prev;
+          });
+        }
 
         const newBuckets = bucketByDay(pastEntries);
 
@@ -182,7 +220,14 @@ export function useActivityLog(
     return ts ? isoDate(ts) === today : false;
   });
 
-  const todayBucket: DayBucket = { date: today, entries: todayOnlyEntries };
+  const seenToday = new Set(todayOnlyEntries.map((e) => e.id));
+  const todayBucket: DayBucket = {
+    date: today,
+    entries: [
+      ...todayOnlyEntries,
+      ...todayActivities.filter((e) => !seenToday.has(e.id) && isoDate(entryTimestamp(e)) === today),
+    ],
+  };
 
   const allDays = (() => {
     if (historyBuckets.length === 0) return [todayBucket];
