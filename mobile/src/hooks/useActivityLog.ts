@@ -83,6 +83,7 @@ export function useActivityLog(
   const cursorRef = useRef<string | null>(null);
   const fetchingRef = useRef(false);
   const initializedRef = useRef(false);
+  const dayCache = useRef<Map<string, DayBucket>>(new Map());
 
   const fetchPage = useCallback(
     async (before: string | null) => {
@@ -122,12 +123,15 @@ export function useActivityLog(
             if (merged.has(b.date)) {
               const existing = merged.get(b.date)!;
               const ids = new Set(existing.entries.map((e) => e.id));
-              merged.set(b.date, {
+              const merged_bucket: DayBucket = {
                 date: b.date,
                 entries: [...existing.entries, ...b.entries.filter((e) => !ids.has(e.id))],
-              });
+              };
+              merged.set(b.date, merged_bucket);
+              dayCache.current.set(b.date, merged_bucket);
             } else {
               merged.set(b.date, b);
+              dayCache.current.set(b.date, b);
             }
           }
           return Array.from(merged.values()).sort((a, b) => b.date.localeCompare(a.date));
@@ -159,7 +163,14 @@ export function useActivityLog(
       initializedRef.current = true;
       fetchPage(null);
     } else if (hasMore && !fetchingRef.current) {
-      fetchPage(cursorRef.current);
+      const cursor = cursorRef.current;
+      if (cursor) {
+        const nextDay = isoDate(cursor);
+        if (dayCache.current.has(nextDay)) {
+          return;
+        }
+      }
+      fetchPage(cursor);
     }
   }, [fetchPage, hasMore]);
 

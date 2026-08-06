@@ -174,6 +174,7 @@ export default function MultiDayCalendarView({
       initialNumToRender={7}
       maxToRenderPerBatch={14}
       windowSize={10}
+      maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
     />
   );
 }
