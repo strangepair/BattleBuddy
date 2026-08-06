@@ -23,6 +23,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { githubFetch } from './githubApi.js';
 import { startRelease, completeRelease } from './devRelease.js';
 import { reconcileStatus } from './devReconcile.js';
+import { summarize, digestLine } from './pipelineSummary.js';
 
 const SPEC_MODEL = 'claude-sonnet-4-6';
 
@@ -1876,6 +1877,26 @@ export async function handleDevPipeline(req, res, deps) {
       await setStatus(supabase, r.id, { status: 'superseded', archived: true, next_retry_at: null }, 'backlog cleared');
     }
     return json(200, { ok: true, cancelled: doomed.map(publicRow), kept: [...keep] });
+  }
+
+  // GET /dev/summary — what is the pipeline doing, in counts.
+  //
+  // Same reconciled table, same archived filter and same per-change collapsing
+  // as the cards on the Dev tab, so the summary strip and the cards cannot
+  // disagree. Counts are per CHANGE, not per row: one change routinely owns
+  // several rows (a callback row, a reconciled row, a superseded retry).
+  if (req.method === 'GET' && path === '/dev/summary') {
+    if (!checkClientToken(req)) return json(401, { error: 'unauthorized' });
+    if (!supabase) return json(200, { ...summarize([]), digest: 'No pipeline activity yet.' });
+    const { data: rows, error } = await supabase
+      .from('dev_build_requests')
+      .select('id, title, status, source, archived, pr_number, work_item_id, branch, error, created_at, updated_at')
+      .eq('archived', false)
+      .order('created_at', { ascending: false })
+      .limit(500);
+    if (error) return json(500, { error: error.message });
+    const summary = summarize(rows || []);
+    return json(200, { ...summary, digest: digestLine(summary) });
   }
 
   // GET /dev/worker/status — is the DISPATCHER alive, and if it dispatched
