@@ -3451,69 +3451,6 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     }
   }
 
-  // GET /api/pipeline/digest
-  // Returns a short plain-English summary of recent pipeline activity.
-  if (req.method === 'GET' && req.url === '/api/pipeline/digest') {
-    if (!checkClientToken(req)) return send401Unauthorized(res);
-    if (!supabase) {
-      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ digest: 'No pipeline activity yet.' }));
-    }
-    try {
-      const [{ data: items }, { data: rels }] = await Promise.all([
-        supabase
-          .from('work_items')
-          .select('id, title, stage, exception, created_at')
-          .order('created_at', { ascending: false })
-          .limit(20),
-        supabase
-          .from('releases')
-          .select('id, version, status, created_at')
-          .order('created_at', { ascending: false })
-          .limit(10),
-      ]);
-
-      const workItems = items || [];
-      const releases = rels || [];
-
-      if (workItems.length === 0 && releases.length === 0) {
-        res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ digest: 'No pipeline activity yet.' }));
-      }
-
-      const stageCounts = {};
-      let exceptions = 0;
-      for (const wi of workItems) {
-        stageCounts[wi.stage] = (stageCounts[wi.stage] || 0) + 1;
-        if (wi.exception) exceptions++;
-      }
-
-      const parts = [];
-      if (workItems.length > 0) {
-        parts.push(`${workItems.length} work item${workItems.length === 1 ? '' : 's'} in flight`);
-        const stageList = Object.entries(stageCounts)
-          .map(([s, n]) => `${n} ${s}`)
-          .join(', ');
-        if (stageList) parts.push(`(${stageList})`);
-      }
-      if (exceptions > 0) {
-        parts.push(`${exceptions} item${exceptions === 1 ? '' : 's'} need${exceptions === 1 ? 's' : ''} attention`);
-      }
-      if (releases.length > 0) {
-        const latest = releases[0];
-        parts.push(`latest release: ${latest.version} (${latest.status})`);
-      }
-
-      const digest = parts.join(' — ').slice(0, 600);
-
-      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ digest }));
-    } catch (err) {
-      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ digest: 'No pipeline activity yet.' }));
-    }
-  }
-
   if (req.method === 'GET' && req.url.startsWith('/api/sessions')) {
     if (!supabase) {
       res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
