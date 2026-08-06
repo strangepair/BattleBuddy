@@ -56,6 +56,7 @@ import asyncio
 #     in a method body is invisible to it. PR #101 put one inside
 #     SessionAgent.__init__ and crash-looped every voice job for ~18 hours.
 from utils.deduplication import EventDeduplicator
+from utils.retry import with_retry, CONN_FALLBACK
 from tools.log_activity import log_activity as _log_activity
 
 logger = logging.getLogger(__name__)
@@ -322,7 +323,8 @@ async def fetch_greeting_text(room_name, config_token):
     """
     if not room_name or not config_token:
         return None
-    try:
+
+    async def _do():
         async with aiohttp.ClientSession() as http:
             resp = await http.post(
                 f"{SERVER_URL}/voice/greeting",
@@ -333,9 +335,12 @@ async def fetch_greeting_text(room_name, config_token):
                 data = await resp.json()
                 return (data.get("text") or "").strip() or None
             _vlog(f"greeting: /voice/greeting returned {resp.status}")
-    except Exception as e:
-        _vlog(f"greeting: /voice/greeting failed: {e}")
-    return None
+            return None
+
+    result = await with_retry(_do, label="fetch_greeting_text", fallback=None)
+    if result is None:
+        _vlog("greeting: /voice/greeting failed after retries")
+    return result
 
 
 def get_voice():
@@ -364,25 +369,30 @@ async def fetch_agent_config(room_name, config_token):
     server hiccup degrades the greeting, never the whole session."""
     if not room_name or not config_token:
         return None
-    for attempt in range(3):
-        try:
-            async with aiohttp.ClientSession() as http:
-                resp = await http.post(
-                    f"{SERVER_URL}/livekit/agent-config",
-                    json={"room": room_name, "token": config_token},
-                    timeout=aiohttp.ClientTimeout(total=5),
-                )
-                if resp.status == 200:
-                    return await resp.json()
-                print(f"[Agent] agent-config fetch got {resp.status} (attempt {attempt + 1})")
-        except Exception as e:
-            print(f"[Agent] agent-config fetch failed (attempt {attempt + 1}): {e}")
-        await asyncio.sleep(1)
-    return None
+
+    _attempt_counter = [0]
+
+    async def _do():
+        _attempt_counter[0] += 1
+        async with aiohttp.ClientSession() as http:
+            resp = await http.post(
+                f"{SERVER_URL}/livekit/agent-config",
+                json={"room": room_name, "token": config_token},
+                timeout=aiohttp.ClientTimeout(total=5),
+            )
+            if resp.status == 200:
+                return await resp.json()
+            print(f"[Agent] agent-config fetch got {resp.status} (attempt {_attempt_counter[0]})")
+            return None
+
+    result = await with_retry(_do, label="fetch_agent_config", fallback=None)
+    if result is None:
+        print(f"[Agent] agent-config fetch failed after retries")
+    return result
 
 
 async def send_to_context_agent(user_id, messages, session_id=None, is_session_end=False, timezone="America/Chicago", dev_mode=False):
-    try:
+    async def _do():
         async with aiohttp.ClientSession() as http:
             resp = await http.post(
                 f"{SERVER_URL}/context/analyze",
@@ -391,8 +401,10 @@ async def send_to_context_agent(user_id, messages, session_id=None, is_session_e
                 timeout=aiohttp.ClientTimeout(total=30),
             )
             print(f"[Agent] Context agent responded: {resp.status} (end={is_session_end}, msgs={len(messages)})")
-    except Exception as e:
-        print(f"[Agent] Context agent call failed: {e}")
+
+    result = await with_retry(_do, label="send_to_context_agent", fallback=None)
+    if result is None:
+        print(f"[Agent] Context agent call failed after retries")
 
 
 server = AgentServer()
@@ -496,7 +508,7 @@ async def battlebuddy_session(ctx: agents.JobContext):
         @function_tool()
         async def get_usage_stats(self):
             """Get the user's deterministic cigarette/usage counts, gaps between cigarettes, and averages. Always call this for any numeric usage question instead of counting manually."""
-            try:
+            async def _do():
                 async with aiohttp.ClientSession() as http:
                     resp = await http.get(
                         f"{SERVER_URL}/context/stats/{user_id}?timezone={timezone}",
@@ -505,14 +517,17 @@ async def battlebuddy_session(ctx: agents.JobContext):
                     data = await resp.json()
                     print(f"[Agent] Usage stats for {user_id}: {data}")
                     return json.dumps(data)
-            except Exception as e:
-                print(f"[Agent] get_usage_stats failed: {e}")
-                return json.dumps({"error": str(e)})
+
+            result = await with_retry(_do, label="get_usage_stats", fallback=None)
+            if result is None:
+                print(f"[Agent] get_usage_stats failed after retries")
+                return json.dumps({"error": CONN_FALLBACK})
+            return result
 
         async def _fact_tool(self, name, tool_input):
             """Shared transport for the canonical-memory tools — one server
             executor (factTools.js) serves text and voice so they can't drift."""
-            try:
+            async def _do():
                 async with aiohttp.ClientSession() as http:
                     resp = await http.post(
                         f"{SERVER_URL}/context/facts/tool",
@@ -522,9 +537,12 @@ async def battlebuddy_session(ctx: agents.JobContext):
                     data = await resp.json()
                     print(f"[Agent] {name} for {user_id}: {data}")
                     return json.dumps(data)
-            except Exception as e:
-                print(f"[Agent] {name} failed: {e}")
-                return json.dumps({"error": str(e)})
+
+            result = await with_retry(_do, label=f"_fact_tool:{name}", fallback=None)
+            if result is None:
+                print(f"[Agent] {name} failed after retries")
+                return json.dumps({"error": CONN_FALLBACK})
+            return result
 
         @function_tool()
         async def remember(self, category: str, statement: str, user_words: str):
@@ -554,7 +572,7 @@ async def battlebuddy_session(ctx: agents.JobContext):
         @function_tool()
         async def recall_episodes(self, query: str, date: str = ""):
             """Search past conversations with this user — full transcript history plus distilled memory entries, all dated. Use whenever the user references something discussed before ('remember when...', 'what did we talk about', 'you said...'), on any memory probe, or when past context would materially improve the response. Cite dates conservatively from what it returns. For durable FACTS use your memory document or lookup_fact — this tool is for episodes and moments. query: keywords/topics/names. date: optional YYYY-MM-DD filter."""
-            try:
+            async def _do():
                 params = f"userId={user_id}&query={query}"
                 if date:
                     params += f"&date={date}"
@@ -566,9 +584,12 @@ async def battlebuddy_session(ctx: agents.JobContext):
                     data = await resp.json()
                     print(f"[Agent] recall_episodes '{query}' for {user_id}: {len(data.get('memory_entries', []))} memories, {len(data.get('transcript_excerpts', []))} excerpts")
                     return json.dumps(data)
-            except Exception as e:
-                print(f"[Agent] recall_episodes failed: {e}")
-                return json.dumps({"error": str(e)})
+
+            result = await with_retry(_do, label="recall_episodes", fallback=None)
+            if result is None:
+                print(f"[Agent] recall_episodes failed after retries")
+                return json.dumps({"error": CONN_FALLBACK})
+            return result
 
         @function_tool()
         async def log_event(self, event_type: str, occurred_at: str = "", notes: str = "", trigger: str = "", location: str = ""):
@@ -576,22 +597,23 @@ async def battlebuddy_session(ctx: agents.JobContext):
             if self._event_dedup.should_skip(event_type):
                 print(f"[Agent] log_event {event_type} deduplicated — skipping backend call")
                 return json.dumps({"ok": True, "deduplicated": True})
-            try:
-                metadata: dict = {"source": "voice"}
-                if notes:
-                    metadata["notes"] = notes
-                if location:
-                    metadata["location"] = location
-                if trigger:
-                    metadata["trigger"] = {"label": trigger}
-                payload = {
-                    "userId": user_id,
-                    "eventType": event_type,
-                    "timezone": timezone,
-                    "metadata": metadata,
-                }
-                if occurred_at:
-                    payload["occurredAt"] = occurred_at
+            metadata: dict = {"source": "voice"}
+            if notes:
+                metadata["notes"] = notes
+            if location:
+                metadata["location"] = location
+            if trigger:
+                metadata["trigger"] = {"label": trigger}
+            payload = {
+                "userId": user_id,
+                "eventType": event_type,
+                "timezone": timezone,
+                "metadata": metadata,
+            }
+            if occurred_at:
+                payload["occurredAt"] = occurred_at
+
+            async def _do():
                 async with aiohttp.ClientSession() as http:
                     resp = await http.post(
                         f"{SERVER_URL}/events",
@@ -601,11 +623,14 @@ async def battlebuddy_session(ctx: agents.JobContext):
                     )
                     data = await resp.json()
                     print(f"[Agent] log_event {event_type} for {user_id}: {data}")
-                    self._event_dedup.record(event_type)
-                    return json.dumps(data)
-            except Exception as e:
-                print(f"[Agent] log_event failed: {e}")
-                return json.dumps({"error": str(e)})
+                    return data
+
+            result = await with_retry(_do, label="log_event", fallback=None)
+            if result is None:
+                print(f"[Agent] log_event failed after retries")
+                return json.dumps({"error": CONN_FALLBACK})
+            self._event_dedup.record(event_type)
+            return json.dumps(result)
 
         @function_tool()
         async def log_activity(self, activity_name: str, start_time: str, end_time: str = "", location: str = ""):
@@ -631,7 +656,8 @@ async def battlebuddy_session(ctx: agents.JobContext):
                 valid_types = ("bug", "feature", "task")
                 if type not in valid_types:
                     return json.dumps({"error": f"type must be one of: {', '.join(valid_types)}"})
-                try:
+
+                async def _do():
                     async with aiohttp.ClientSession() as http:
                         resp = await http.post(
                             f"{SERVER_URL}/api/dev-items",
@@ -644,23 +670,27 @@ async def battlebuddy_session(ctx: agents.JobContext):
                         if resp.status in (200, 201) and data.get("id"):
                             return json.dumps({"ok": True, "id": data["id"], "title": data.get("title", title)})
                         return json.dumps({"error": data.get("error", f"Server returned {resp.status}")})
-                except Exception as e:
-                    print(f"[Agent] create_dev_item failed: {e}")
-                    return json.dumps({"error": str(e)})
+
+                result = await with_retry(_do, label="create_dev_item", fallback=None)
+                if result is None:
+                    print(f"[Agent] create_dev_item failed after retries")
+                    return json.dumps({"error": CONN_FALLBACK})
+                return result
 
         @function_tool()
         async def update_event(self, event_id: str, action: str, event_type: str = "", occurred_at: str = "", notes: str = "", location: str = ""):
             """Correct or delete a mislogged event. action is 'update' or 'delete'. Get the event_id from get_usage_stats first. If correcting the time, pass occurred_at as the user's LOCAL wall-clock time exactly as they said it (e.g. '2026-07-29T16:43:00') — no timezone conversion, no UTC offset. location: optional corrected location label. Tell the user what changed."""
-            try:
-                payload = {"userId": user_id, "eventId": event_id, "action": action, "timezone": timezone}
-                if event_type:
-                    payload["eventType"] = event_type
-                if occurred_at:
-                    payload["occurredAt"] = occurred_at
-                if notes:
-                    payload["notes"] = notes
-                if location:
-                    payload["location"] = location
+            payload = {"userId": user_id, "eventId": event_id, "action": action, "timezone": timezone}
+            if event_type:
+                payload["eventType"] = event_type
+            if occurred_at:
+                payload["occurredAt"] = occurred_at
+            if notes:
+                payload["notes"] = notes
+            if location:
+                payload["location"] = location
+
+            async def _do():
                 async with aiohttp.ClientSession() as http:
                     resp = await http.post(
                         f"{SERVER_URL}/events/update",
@@ -671,9 +701,12 @@ async def battlebuddy_session(ctx: agents.JobContext):
                     data = await resp.json()
                     print(f"[Agent] update_event {action} {event_id} for {user_id}: {data}")
                     return json.dumps(data)
-            except Exception as e:
-                print(f"[Agent] update_event failed: {e}")
-                return json.dumps({"error": str(e)})
+
+            result = await with_retry(_do, label="update_event", fallback=None)
+            if result is None:
+                print(f"[Agent] update_event failed after retries")
+                return json.dumps({"error": CONN_FALLBACK})
+            return result
 
         async def llm_node(self, *args, **kwargs):
             """Should never run. Kept as the tripwire for a second brain.
@@ -979,22 +1012,24 @@ async def battlebuddy_session(ctx: agents.JobContext):
 
 async def _send_final_transcript(user_id, messages, session_id=None, timezone="America/Chicago", dev_mode=False):
     """Send the final transcript with retries — this is the most important call."""
-    for attempt in range(3):
-        try:
-            async with aiohttp.ClientSession() as http:
-                resp = await http.post(
-                    f"{SERVER_URL}/context/analyze",
-                    json={"userId": user_id, "sessionId": session_id, "messages": messages, "isSessionEnd": True, "timezone": timezone, "devMode": dev_mode},
-                    headers=auth_headers(),
-                    timeout=aiohttp.ClientTimeout(total=30),
-                )
-                print(f"[Agent] Final transcript sent: {resp.status} ({len(messages)} msgs, attempt {attempt + 1})")
-                if resp.status == 200:
-                    return
-        except Exception as e:
-            print(f"[Agent] Final transcript attempt {attempt + 1} failed: {e}")
-            if attempt < 2:
-                await asyncio.sleep(2)
+    _attempt_counter = [0]
+
+    async def _do():
+        _attempt_counter[0] += 1
+        async with aiohttp.ClientSession() as http:
+            resp = await http.post(
+                f"{SERVER_URL}/context/analyze",
+                json={"userId": user_id, "sessionId": session_id, "messages": messages, "isSessionEnd": True, "timezone": timezone, "devMode": dev_mode},
+                headers=auth_headers(),
+                timeout=aiohttp.ClientTimeout(total=30),
+            )
+            print(f"[Agent] Final transcript sent: {resp.status} ({len(messages)} msgs, attempt {_attempt_counter[0]})")
+            if resp.status != 200:
+                raise aiohttp.ClientResponseError(None, (), status=resp.status)
+
+    result = await with_retry(_do, label="_send_final_transcript", fallback=None)
+    if result is None and _attempt_counter[0] >= 3:
+        print(f"[Agent] Final transcript failed after retries")
 
 
 async def _end_session(session, ctx, user_id, messages, session_id=None, timezone="America/Chicago", dev_mode=False):

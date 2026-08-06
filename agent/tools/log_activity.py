@@ -3,6 +3,8 @@
 import json
 import aiohttp
 
+from utils.retry import with_retry, CONN_FALLBACK
+
 
 async def log_activity(server_url: str, user_id: str, auth_headers: dict, activity_name: str, start_time: str, end_time: str = "", location: str = "") -> str:
     """Call POST /logs/activity with activity_name, start_time, end_time, and location.
@@ -20,7 +22,8 @@ async def log_activity(server_url: str, user_id: str, auth_headers: dict, activi
         payload["end_time"] = end_time
     if location:
         payload["location"] = location
-    try:
+
+    async def _do():
         async with aiohttp.ClientSession() as http:
             resp = await http.post(
                 f"{server_url}/logs/activity",
@@ -30,5 +33,8 @@ async def log_activity(server_url: str, user_id: str, auth_headers: dict, activi
             )
             data = await resp.json()
             return json.dumps(data)
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+
+    result = await with_retry(_do, label="log_activity", fallback=None)
+    if result is None:
+        return json.dumps({"error": CONN_FALLBACK})
+    return result
