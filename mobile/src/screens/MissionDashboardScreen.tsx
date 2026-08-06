@@ -1,15 +1,19 @@
-import { View, StyleSheet } from 'react-native';
-import { Colors, Spacing } from '../theme';
+import { View, StyleSheet, Pressable, Text } from 'react-native';
+import { Colors, Spacing, Radii } from '../theme';
 import HeroMetric from '../components/dashboard/HeroMetric';
 import DayCalendarView from '../components/dashboard/DayCalendarView';
 import CalendarDetailModal from '../components/dashboard/CalendarDetailModal';
-import MultiDayCalendarView from '../components/dashboard/MultiDayCalendarView';
+import MultiDayCalendarView, { type MultiDayCalendarViewHandle } from '../components/dashboard/MultiDayCalendarView';
 import { useSmokingLogs } from '../hooks/useSmokingLogs';
 import { useActivityLog, type ActivityLogEntry } from '../hooks/useActivityLog';
-import { useMemo, useState, useCallback, useEffect } from 'react';
+import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import type { DayLog } from '../components/dashboard/DayCalendarView';
 import { useDashboardRealtime } from '../hooks/useDashboardRealtime';
 import type { SmokingLog } from '../hooks/useSmokingLogs';
+
+function todayISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 /**
  * MissionDashboardScreen is the redesigned mission dashboard.
@@ -29,6 +33,15 @@ export default function MissionDashboardScreen() {
   const [selectedLog, setSelectedLog] = useState<SmokingLog | null>(null);
   const handlePressLog = useCallback((log: SmokingLog) => setSelectedLog(log), []);
   const handleDismiss = useCallback(() => { setSelectedLog(null); }, []);
+
+  const [visibleDate, setVisibleDate] = useState<string>(todayISO());
+  const multiDayRef = useRef<MultiDayCalendarViewHandle>(null);
+  const isViewingToday = visibleDate === todayISO();
+
+  const handleJumpToToday = useCallback(() => {
+    multiDayRef.current?.scrollToToday();
+    setVisibleDate(todayISO());
+  }, []);
 
   const mergedTodayLogs: SmokingLog[] = useMemo(() => {
     const fetchedIds = new Set(todayLogs.map((l) => l.id));
@@ -104,12 +117,24 @@ export default function MissionDashboardScreen() {
         </View>
         <View style={styles.historyView}>
           <MultiDayCalendarView
+            ref={multiDayRef}
             days={days}
             loadingInitial={loadingInitial}
             loadingMore={loadingMore}
             hasMore={hasMore}
             onEndReached={loadMore}
+            onViewableDateChange={setVisibleDate}
           />
+          {!isViewingToday && (
+            <Pressable
+              style={styles.jumpToTodayBtn}
+              onPress={handleJumpToToday}
+              accessibilityLabel="Jump to today"
+              accessibilityRole="button"
+            >
+              <Text style={styles.jumpToTodayText}>⬆ Today</Text>
+            </Pressable>
+          )}
         </View>
       </View>
       <CalendarDetailModal
@@ -139,5 +164,26 @@ const styles = StyleSheet.create({
     minHeight: 160,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: Colors.surfaceBorder,
+  },
+  jumpToTodayBtn: {
+    position: 'absolute',
+    bottom: Spacing.md,
+    alignSelf: 'center',
+    backgroundColor: Colors.stateIdle,
+    borderRadius: Radii.full,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs + 2,
+    zIndex: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 4,
+  },
+  jumpToTodayText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    letterSpacing: 0.3,
   },
 });

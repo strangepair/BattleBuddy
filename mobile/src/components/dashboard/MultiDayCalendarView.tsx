@@ -1,7 +1,11 @@
-import { useCallback, useRef, useEffect } from 'react';
-import { FlatList, View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import { useCallback, useRef, useEffect, useImperativeHandle, forwardRef } from 'react';
+import { FlatList, View, Text, StyleSheet, ActivityIndicator, ViewToken } from 'react-native';
 import { Colors, Spacing, Radii } from '../../theme';
 import type { DayBucket, ActivityLogEntry } from '../../hooks/useActivityLog';
+
+export interface MultiDayCalendarViewHandle {
+  scrollToToday: () => void;
+}
 
 interface MultiDayCalendarViewProps {
   days: DayBucket[];
@@ -9,6 +13,7 @@ interface MultiDayCalendarViewProps {
   loadingMore: boolean;
   hasMore: boolean;
   onEndReached: () => void;
+  onViewableDateChange?: (date: string) => void;
 }
 
 const DAY_HEADER_HEIGHT = 36;
@@ -90,21 +95,43 @@ function DayRow({ bucket, isToday }: DayRowProps) {
   );
 }
 
-export default function MultiDayCalendarView({
-  days,
-  loadingInitial,
-  loadingMore,
-  hasMore,
-  onEndReached,
-}: MultiDayCalendarViewProps) {
+const MultiDayCalendarView = forwardRef<MultiDayCalendarViewHandle, MultiDayCalendarViewProps>(
+  function MultiDayCalendarView({
+    days,
+    loadingInitial,
+    loadingMore,
+    hasMore,
+    onEndReached,
+    onViewableDateChange,
+  }, ref) {
   const flatListRef = useRef<FlatList<DayBucket>>(null);
   const today = todayISO();
+
+  useImperativeHandle(ref, () => ({
+    scrollToToday: () => {
+      if (days.length > 0) {
+        flatListRef.current?.scrollToIndex({ index: 0, animated: true });
+      }
+    },
+  }), [days]);
 
   useEffect(() => {
     if (days.length > 0 && days[0].date === today) {
       flatListRef.current?.scrollToIndex({ index: 0, animated: false });
     }
   }, []);
+
+  const onViewableItemsChanged = useCallback(
+    ({ viewableItems }: { viewableItems: ViewToken[] }) => {
+      if (viewableItems.length > 0 && onViewableDateChange) {
+        const topItem = viewableItems[0].item as DayBucket;
+        onViewableDateChange(topItem.date);
+      }
+    },
+    [onViewableDateChange],
+  );
+
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 50 }).current;
 
   const renderItem = useCallback(
     ({ item }: { item: DayBucket }) => (
@@ -174,9 +201,13 @@ export default function MultiDayCalendarView({
       initialNumToRender={7}
       maxToRenderPerBatch={14}
       windowSize={10}
+      onViewableItemsChanged={onViewableItemsChanged}
+      viewabilityConfig={viewabilityConfig}
     />
   );
-}
+});
+
+export default MultiDayCalendarView;
 
 const styles = StyleSheet.create({
   list: {
