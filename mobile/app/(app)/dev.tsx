@@ -24,7 +24,6 @@ import {
   resubmitRequest,
   fetchWorkItems,
   fetchReleases,
-  fetchDigest,
   type DevRequest,
   type DevRequestStatus,
   type WorkItem,
@@ -39,7 +38,6 @@ import {
 } from '../../src/services/pipelineView';
 import { Colors, Spacing, Radii } from '../../src/theme';
 import { PRDetailView } from '../../src/components/dev/PRDetailView';
-import { AiDigest } from '../../src/components/pipeline/AiDigest';
 import { WorkItemCard } from '../../src/components/pipeline/WorkItemCard';
 import { ReleaseGroup } from '../../src/components/pipeline/ReleaseGroup';
 import { ExceptionCard } from '../../src/components/pipeline/ExceptionCard';
@@ -125,7 +123,6 @@ export default function DevScreen() {
   const [requests, setRequests] = useState<DevRequest[]>([]);
   const [workItems, setWorkItems] = useState<WorkItem[]>([]);
   const [releases, setReleases] = useState<Release[]>([]);
-  const [digest, setDigest] = useState<string>('');
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -143,17 +140,15 @@ export default function DevScreen() {
     // what history is drawn from; the second asks the server for EVERY in-flight
     // row whatever its age, so a change stuck since last week cannot fall off
     // the back of the window and leave the screen claiming the pipeline is clear.
-    const [list, active, wis, rels, dg] = await Promise.all([
+    const [list, active, wis, rels] = await Promise.all([
       listRequests(userId),
       listRequests(userId, { statuses: ACTIVE_STATUSES, limit: 100 }),
       fetchWorkItems(),
       fetchReleases(),
-      fetchDigest(),
     ]);
     setRequests([...list, ...active]);
     setWorkItems(wis);
     setReleases(rels);
-    setDigest(dg);
     setLoading(false);
   }, [userId]);
 
@@ -403,7 +398,21 @@ export default function DevScreen() {
       >
         {/* The verdict, before any card. Whether the pipeline is clear is the
             question this screen exists to answer, and it should never have to be
-            inferred from how many cards happen to be on screen. */}
+            inferred from how many cards happen to be on screen.
+
+            Derived from `view` — the SAME rows the cards below are rendered
+            from — rather than fetched as its own number. A separately-fetched
+            summary is a second opinion, and two opinions taken a few seconds
+            apart will eventually disagree in front of the user; the server's
+            /dev/summary exists for callers that have no card list, not for this
+            banner. It refreshes for free with every load(): pull-to-refresh, the
+            10 s focused poll, and the foreground re-read all update it and the
+            cards in the same setState, so they cannot drift even for a frame.
+
+            This also replaces the old AI digest strip, which was a SECOND
+            summary line saying the same thing from a different source
+            (work_items, via /api/pipeline/digest) — and saying it wrongly:
+            "20 work items in flight" against two. One summary, one source. */}
         <View style={[styles.banner, view.isClear ? styles.bannerClear : styles.bannerBusy]}>
           <View style={styles.bannerRow}>
             <View style={[styles.dot, { backgroundColor: view.isClear ? Colors.success : Colors.coral }]} />
@@ -419,8 +428,6 @@ export default function DevScreen() {
             </Text>
           ) : null}
         </View>
-
-        <AiDigest digest={digest} />
 
         {exceptions.length > 0 ? (
           <View style={styles.section}>
