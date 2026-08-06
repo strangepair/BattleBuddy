@@ -748,7 +748,12 @@ export async function sweepStageTimeouts(supabase, now = Date.now()) {
 
   const { data, error } = await supabase
     .from('dev_build_requests')
-    .select('id, title, status, pr_number, entered_at, updated_at, created_at')
+    // `select('*')`, not a column list: deploy.yml ships the server BEFORE it
+    // applies migrations, so for a few minutes the new code queries the old
+    // schema — and PostgREST fails a select that NAMES a column the table does
+    // not have yet. A star select degrades to "entered_at is undefined", which
+    // the fallback below already handles.
+    .select('*')
     .in('status', INFLIGHT_STATUSES)
     .limit(100);
   if (error) throw new Error(`stage timeout scan failed: ${error.message}`);
@@ -992,7 +997,9 @@ async function workerTick(supabase) {
   const dayAgo = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
   const [inflightRes, todayRes, pendingCountRes] = await Promise.all([
     supabase.from('dev_build_requests')
-      .select('id, title, status, pr_number, entered_at, updated_at')
+      // select('*') for the same reason as the sweep: naming a column that a
+      // not-yet-applied migration adds fails the whole tick.
+      .select('*')
       .in('status', INFLIGHT_STATUSES)
       .order('updated_at', { ascending: true })
       .limit(50),
