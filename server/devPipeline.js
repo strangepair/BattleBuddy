@@ -1884,7 +1884,19 @@ export async function handleDevPipeline(req, res, deps) {
   // and a free slot, and cost hours of guesswork. Symmetry is the fix.
   if (req.method === 'GET' && path === '/dev/worker/status') {
     if (!checkClientToken(req)) return json(401, { error: 'unauthorized' });
-    return json(200, workerStatus());
+    const queueDepth = { pending: 0, building: 0, in_review: 0, merging: 0, deploying: 0 };
+    if (supabase) {
+      await Promise.all(
+        Object.keys(queueDepth).map(async (s) => {
+          const { count } = await supabase
+            .from('dev_build_requests')
+            .select('*', { count: 'exact', head: true })
+            .eq('status', s);
+          queueDepth[s] = count || 0;
+        }),
+      );
+    }
+    return json(200, { ...workerStatus(), queueDepth });
   }
 
   // GET /dev/reconcile/status — is the reconciler alive and making progress?
