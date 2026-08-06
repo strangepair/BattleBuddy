@@ -15,9 +15,17 @@ export type DevRequestStatus =
   | 'needs_attention'
   // Terminal: triage matched this submission to an existing work item, so the
   // request was parked instead of built. See holdDuplicateRequests (server).
-  | 'duplicate';
+  | 'duplicate'
+  // Terminal: the PR was closed without merging, or an operator cancelled the
+  // row. Added by migration 022 — the client not knowing it is why 31 dead rows
+  // rendered as "Pending development".
+  | 'superseded';
 
 export type DevTarget = 'backend' | 'agent' | 'ui' | 'prompt';
+
+/** Where a request came from. `github` is a PR the reconciler adopted — a change
+    raised straight on GitHub with no app intake path. Every change is tracked. */
+export type DevSource = 'transcript' | 'directive' | 'github';
 
 /** The work item a duplicate submission was attached to as evidence. */
 export interface AttachedWorkItem {
@@ -39,11 +47,15 @@ export interface DevRequest {
   title: string;
   target: DevTarget;
   status: DevRequestStatus;
-  source: 'transcript' | 'directive';
+  source: DevSource;
   description?: string;
   pr_url?: string | null;
   pr_number?: number | null;
   branch?: string | null;
+  /** Release that carried this change to TestFlight, if any (migration 022). */
+  release_id?: string | null;
+  /** The work item this request implements. */
+  work_item_id?: string | null;
   deploy_status?: string | null;
   error?: string | null;
   /** How many dispatch attempts this request has had (auto-retry + manual). */
@@ -112,10 +124,25 @@ export async function submitDirective(input: {
   };
 }
 
-/** List all build requests (newest first) for the Dev tab. */
-export async function listRequests(userId: string | null): Promise<DevRequest[]> {
+/**
+ * List build requests (newest first) for the Dev tab.
+ *
+ * `statuses` maps to the server's `?status=` filter. The screen uses it to ask
+ * for every in-flight row SEPARATELY from the newest-100 window: without that, a
+ * row that has been stuck for a few days falls off the back of the window and
+ * the screen reports a clear pipeline while the queue is jammed — the exact
+ * failure the window was added to prevent.
+ */
+export async function listRequests(
+  userId: string | null,
+  opts: { statuses?: DevRequestStatus[]; limit?: number } = {},
+): Promise<DevRequest[]> {
   try {
-    const q = userId ? `?userId=${encodeURIComponent(userId)}` : '';
+    const params = new URLSearchParams();
+    if (userId) params.set('userId', userId);
+    if (opts.statuses?.length) params.set('status', opts.statuses.join(','));
+    if (opts.limit) params.set('limit', String(opts.limit));
+    const q = params.toString() ? `?${params.toString()}` : '';
     const res = await fetch(`${ApiConfig.DEV_URL}/dev/requests${q}`, {
       headers: authHeaders(),
     });
