@@ -1,5 +1,6 @@
 import { FlatList, View, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { Colors, Spacing } from '../theme';
+import HeroMetric from '../components/dashboard/HeroMetric';
 import DayTimelineSection from '../components/dashboard/DayTimelineSection';
 import CalendarDetailModal from '../components/dashboard/CalendarDetailModal';
 import { entryLabel, entryTimestamp } from '../components/dashboard/timelineLayout';
@@ -10,10 +11,12 @@ import { useDashboardRealtime } from '../hooks/useDashboardRealtime';
 import type { SmokingLog } from '../hooks/useSmokingLogs';
 
 /**
- * MissionDashboardScreen — the mission dashboard is the day calendar, and
- * nothing else: no hero card, no extra metrics.
+ * MissionDashboardScreen — the "time since last cigarette" hero on top,
+ * day calendar below, as ONE continuous scroll.
  *
- * A single FlatList owns all scrolling. Each item is one day rendered as an
+ * A single FlatList owns all scrolling. HeroMetric is the list's
+ * ListHeaderComponent — it rides the same scroll as the timeline, never a
+ * fixed sibling above a second scroll region. Each item is one day rendered as an
  * hour-by-hour timeline (DayTimelineSection) where EVERY logged event —
  * cigarettes and generic activities (gym, drive, couch, meals…) — appears as
  * a labeled block at its time. Today renders first (with a NOW marker);
@@ -29,7 +32,7 @@ import type { SmokingLog } from '../hooks/useSmokingLogs';
  * new events into today's section without a manual refresh.
  */
 export default function MissionDashboardScreen() {
-  const { todayLogs } = useSmokingLogs();
+  const { todayLogs, historyLogs, loading } = useSmokingLogs();
   const { realtimeEvents } = useDashboardRealtime(todayLogs);
   const [selectedEntry, setSelectedEntry] = useState<ActivityLogEntry | null>(null);
   const handlePressEntry = useCallback((entry: ActivityLogEntry) => setSelectedEntry(entry), []);
@@ -40,6 +43,11 @@ export default function MissionDashboardScreen() {
     const extra = realtimeEvents.filter((l) => !fetchedIds.has(l.id));
     return [...extra, ...todayLogs].sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
   }, [todayLogs, realtimeEvents]);
+
+  const heroLogs = useMemo(
+    () => [...mergedTodayLogs, ...historyLogs],
+    [mergedTodayLogs, historyLogs],
+  );
 
   const todayCigaretteEntries: ActivityLogEntry[] = useMemo(
     () =>
@@ -115,6 +123,7 @@ export default function MissionDashboardScreen() {
         data={days}
         keyExtractor={keyExtractor}
         renderItem={renderItem}
+        ListHeaderComponent={<HeroMetric logs={heroLogs} loading={loading} />}
         ListFooterComponent={ListFooter}
         onEndReached={loadMore}
         onEndReachedThreshold={0.5}
