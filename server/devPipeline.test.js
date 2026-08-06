@@ -4,7 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dedupeKey, looksForbidden, patchForEvent, isPipelineEnabled, collapseNearDuplicates, generateProductRequests, insertRequests, insertSubmission, triageSubmission, handleRepetition, processSubmission, classifyFailure, failureSignature, retryDelayMs, applyFailure, runDevBuildWorker, resubmitPlan, RESUBMITTABLE, parkUnprocessedDirective, titleSimilarity, handleDevPipeline, workerStatus, sweepStageTimeouts, runWorkerWatchdog } from './devPipeline.js';
+import { dedupeKey, looksForbidden, patchForEvent, isPipelineEnabled, collapseNearDuplicates, generateProductRequests, insertRequests, insertSubmission, triageSubmission, handleRepetition, processSubmission, classifyFailure, failureSignature, retryDelayMs, applyFailure, runDevBuildWorker, resubmitPlan, RESUBMITTABLE, parkUnprocessedDirective, titleSimilarity, handleDevPipeline, workerStatus, sweepStageTimeouts, runWorkerWatchdog, runExclusively, recentIdenticalSubmission } from './devPipeline.js';
 
 test('dedupeKey is stable and target-scoped', () => {
   const a = dedupeKey('ui', 'Make the greeting warmer!');
@@ -220,6 +220,7 @@ function makeTriageSupabase() {
   const makeTable = (tableName) => {
     let _filters = [];
     let _notFilters = [];
+    let _inFilters = [];
     let _orderBy = null;
     let _limitN = null;
     let _selectCols = '*';
@@ -238,6 +239,8 @@ function makeTriageSupabase() {
         return self;
       },
       eq(col, val) { _filters.push({ col, val }); return self; },
+      neq(col, val) { _notFilters.push({ col, op: 'neq', val }); return self; },
+      in(col, vals) { _inFilters.push({ col, vals }); return self; },
       not(col, op, val) { _notFilters.push({ col, op, val }); return self; },
       gte(col, val) { return self; },
       order() { return self; },
@@ -246,7 +249,9 @@ function makeTriageSupabase() {
       then(resolve) {
         // handle insert
         if (_pendingInsert) {
-          const rows = _pendingInsert.map((r) => ({ id: `uuid-${Date.now()}-${Math.random()}`, ...r }));
+          // created_at is stamped by the database in production; the intake
+          // dedup window reads it, so the fake has to have one too.
+          const rows = _pendingInsert.map((r) => ({ id: `uuid-${Date.now()}-${Math.random()}`, created_at: new Date().toISOString(), ...r }));
           store[tableName].push(...rows);
           const result = _isSingle
             ? { data: rows[0], error: null }
@@ -264,10 +269,13 @@ function makeTriageSupabase() {
         // handle select
         let rows = store[tableName].slice();
         for (const f of _filters) rows = rows.filter((r) => r[f.col] === f.val);
+        for (const f of _inFilters) rows = rows.filter((r) => f.vals.includes(r[f.col]));
         for (const f of _notFilters) {
           if (f.op === 'in') {
             const vals = f.val.replace(/[()""]/g, '').split(',').map((s) => s.trim());
             rows = rows.filter((r) => !vals.includes(r[f.col]));
+          } else if (f.op === 'neq') {
+            rows = rows.filter((r) => r[f.col] !== f.val);
           }
         }
         if (_limitN) rows = rows.slice(0, _limitN);
@@ -1275,4 +1283,89 @@ test('watchdog fires when every tick throws', async () => {
 
   assert.equal(r.healthy, false);
   assert.match(r.reasons[0], /4 consecutive tick failures: connection reset/);
+});
+
+// ─── Intake: durable first, no silent drop, no double-build ─────────────────
+
+async function postDirective(supabase, anthropic, text) {
+  let statusCode; let body;
+  const req = {
+    method: 'POST',
+    url: 'http://x/dev/directive',
+    headers: { 'content-type': 'application/json' },
+    async *[Symbol.asyncIterator]() { yield Buffer.from(JSON.stringify({ text })); },
+  };
+  const res = { writeHead(s) { statusCode = s; }, end(b) { body = JSON.parse(b); } };
+  await handleDevPipeline(req, res, { ...makeDevDeps(supabase), anthropic });
+  return { statusCode, body };
+}
+
+const modelReturning = (tasks) => ({
+  messages: { create: async () => ({ stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify(tasks) }] }) },
+});
+
+test('a directive is recorded before generation runs, so a throw cannot lose it', async () => {
+  const sb = makeTriageSupabase();
+  const exploding = { messages: { create: async () => { throw new Error('anthropic 529 overloaded'); } } };
+
+  const { statusCode, body } = await postDirective(sb, exploding, 'make the pipeline heal itself');
+
+  assert.equal(sb._store.submissions.length, 1, 'the raw words are durable before anything can fail');
+  assert.equal(sb._store.submissions[0].raw_text, 'make the pipeline heal itself');
+  assert.equal(statusCode, 502, 'never 200 with an empty list — the caller must know it failed');
+  assert.equal(body.reason, 'generation_failed');
+
+  const parked = sb._store.dev_build_requests[0];
+  assert.equal(parked.status, 'needs_attention', 'and it is visible on the board, not just in a log');
+  assert.equal(parked.spec.rawDirective, 'make the pipeline heal itself', 'with the original wording intact');
+});
+
+test('the same directive twice in a minute is answered as a duplicate, not built twice', async () => {
+  const sb = makeTriageSupabase();
+  let generations = 0;
+  const model = {
+    messages: {
+      create: async () => {
+        generations += 1;
+        return { stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify([{ title: 'Add a heartbeat route', target: 'backend', description: 'x', confidence: 0.9, claudeCodePrompt: 'do it' }]) }] };
+      },
+    },
+  };
+
+  const first = await postDirective(sb, model, 'add a heartbeat route');
+  const afterFirst = generations;              // generation + triage
+  const rowsAfterFirst = sb._store.dev_build_requests.length;
+  const second = await postDirective(sb, model, 'add a heartbeat route');
+
+  assert.equal(first.statusCode, 200);
+  assert.equal(second.body.duplicate, true, 'the second is recognised as the same submission');
+  assert.equal(second.body.requests.length, 0, 'and creates no second build');
+  assert.equal(generations, afterFirst, 'the model is not asked again for the same words');
+  assert.equal(sb._store.dev_build_requests.length, rowsAfterFirst, 'no second row is created');
+  assert.ok(second.body.firstSeenAt, 'the caller is told when it was first seen');
+});
+
+test('intake is serialised, so concurrent captures cannot race the duplicate scan', async () => {
+  // The 2026-08-05 double-capture: three flushes generated concurrently, each
+  // scanning a backlog that did not yet contain the others' rows.
+  const order = [];
+  const slow = () => runExclusively(async () => {
+    order.push('start-a');
+    await new Promise((r) => setTimeout(r, 20));
+    order.push('end-a');
+  });
+  const fast = () => runExclusively(async () => {
+    order.push('start-b');
+    order.push('end-b');
+  });
+
+  await Promise.all([slow(), fast()]);
+
+  assert.deepEqual(order, ['start-a', 'end-a', 'start-b', 'end-b'],
+    'the second intake must not begin until the first has inserted its rows');
+});
+
+test('a failing intake does not poison the queue behind it', async () => {
+  await assert.rejects(() => runExclusively(async () => { throw new Error('boom'); }));
+  assert.equal(await runExclusively(async () => 'ran'), 'ran');
 });
