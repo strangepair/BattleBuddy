@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Colors, Spacing, Radii } from '../../theme';
-import { useSmokingLogs } from '../../hooks/useSmokingLogs';
 import type { SmokingLog } from '../../hooks/useSmokingLogs';
 
 function formatElapsed(ms: number): string {
@@ -23,21 +22,22 @@ function formatAbsolute(iso: string): string {
 }
 
 interface HeroMetricProps {
-  realtimeLogs?: SmokingLog[];
+  /** All known cigarette logs (realtime-merged today + history), any order. */
+  logs: SmokingLog[];
+  loading: boolean;
 }
 
 /**
- * HeroMetric renders the "Last cigarette" hero card.
- * Displays the absolute timestamp of the most recent log entry and a
- * live-updating elapsed-time counter that ticks every minute.
+ * HeroMetric renders the "Last cigarette" hero card: the absolute timestamp
+ * of the most recent log entry and a live elapsed-time counter that ticks
+ * every minute.
  *
- * Accepts an optional `realtimeLogs` prop (realtime-merged today-logs from
- * the parent dashboard). When provided these are included in the latest-entry
- * calculation so the gap updates immediately after a new cigarette is logged
- * via voice or a direct UI action, without waiting for a full re-fetch.
+ * Purely presentational: the dashboard owns the (single) fetch and realtime
+ * merge and passes the combined log list down. Mounted as the calendar
+ * FlatList's ListHeaderComponent so it rides the same scroll as the timeline
+ * — never as a fixed sibling above a second scroll region.
  */
-export default function HeroMetric({ realtimeLogs }: HeroMetricProps = {}) {
-  const { todayLogs, historyLogs, loading } = useSmokingLogs();
+export default function HeroMetric({ logs, loading }: HeroMetricProps) {
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -45,9 +45,7 @@ export default function HeroMetric({ realtimeLogs }: HeroMetricProps = {}) {
     return () => clearInterval(t);
   }, []);
 
-  const effectiveTodayLogs = realtimeLogs ?? todayLogs;
-  const allLogs = [...effectiveTodayLogs, ...historyLogs];
-  const latest = allLogs.reduce<string | null>((best, log) => {
+  const latest = logs.reduce<string | null>((best, log) => {
     if (!best) return log.occurred_at;
     return log.occurred_at > best ? log.occurred_at : best;
   }, null);
@@ -81,6 +79,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     alignItems: 'center',
     gap: 6,
+    marginBottom: Spacing.sm,
   },
   label: {
     fontSize: 10,
