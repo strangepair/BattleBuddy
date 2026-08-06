@@ -825,6 +825,7 @@ export function workerStatus() {
       && heartbeat.gates.dispatched === 0
       && !['paused', 'disabled', 'daily_cap'].includes(heartbeat.skipReason),
     ),
+    ttlMinutes: STAGE_TTL_MINUTES,
   };
 }
 
