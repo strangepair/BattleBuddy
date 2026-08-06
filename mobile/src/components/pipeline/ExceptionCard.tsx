@@ -87,7 +87,8 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     color: Colors.warning,
-    width: 100,
+    minWidth: 100,
+    flexShrink: 0,
   },
   metaValue: {
     flex: 1,
