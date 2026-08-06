@@ -36,7 +36,7 @@
 //     pending segments before exit via registerShutdownFlush().
 // Only a hard kill of a TEXT dev session mid-flight can still drop the tail.
 
-import { generateProductRequests, insertRequests } from './devPipeline.js';
+import { generateProductRequests, insertRequests, runExclusively } from './devPipeline.js';
 
 const IDLE_FLUSH_MS = Number(process.env.DEV_CAPTURE_IDLE_MS || 10 * 60 * 1000);
 const MAX_MESSAGES = 100; // per-segment snapshot cap
@@ -71,12 +71,27 @@ async function flushSegment(deps, key, note) {
     return null;
   }
   try {
-    const tasks = await generateProductRequests(deps.anthropic, { transcript: seg.messages });
-    const rows = await insertRequests(deps.supabase, {
-      source: 'transcript',
-      userId: seg.uid,
-      sessionId: seg.sessionId,
-    }, tasks);
+    // Serialised with every other intake. On 2026-08-05 three flushes of one
+    // conversation ran 18 seconds apart — a toggle-off, a voice session end and
+    // an idle sweep — and `flushAllForUser` runs its text and voice flushes with
+    // Promise.all on top of that. insertRequests scans the open backlog for near
+    // duplicates, but each of those generations scanned a backlog that did not
+    // yet contain the others' rows, so seven near-identical requests landed.
+    // A duplicate check that races is not a duplicate check.
+    const { tasks, rows } = await runExclusively(async () => {
+      const generated = await generateProductRequests(deps.anthropic, { transcript: seg.messages });
+      return {
+        tasks: generated,
+        rows: await insertRequests(deps.supabase, {
+          source: 'transcript',
+          userId: seg.uid,
+          sessionId: seg.sessionId,
+        }, generated),
+      };
+    });
+    if (tasks.length > 0 && rows.length === 0) {
+      console.log(`[devCapture] ${key}: every generated task collapsed onto an open request — nothing new`);
+    }
     segments.delete(key);
     console.log(`[devCapture] flushed ${key} (${note}): ${seg.messages.length} msgs → ${rows.length} request(s)`);
     return rows;
