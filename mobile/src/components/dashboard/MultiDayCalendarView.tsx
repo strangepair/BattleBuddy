@@ -40,12 +40,19 @@ interface DayRowProps {
   isToday: boolean;
 }
 
+function entryDateISO(e: ActivityLogEntry): string {
+  const ts = entryTimestamp(e);
+  return ts ? ts.slice(0, 10) : '';
+}
+
 function DayRow({ bucket, isToday }: DayRowProps) {
-  const sorted = [...bucket.entries].sort((a, b) => {
-    const ta = entryTimestamp(a);
-    const tb = entryTimestamp(b);
-    return ta < tb ? -1 : ta > tb ? 1 : 0;
-  });
+  const sorted = [...bucket.entries]
+    .filter((e) => entryDateISO(e) === bucket.date)
+    .sort((a, b) => {
+      const ta = entryTimestamp(a);
+      const tb = entryTimestamp(b);
+      return ta < tb ? -1 : ta > tb ? 1 : 0;
+    });
 
   return (
     <View style={styles.dayRow}>
