@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   RefreshControl,
   Alert,
   Switch,
+  AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Swipeable from 'react-native-gesture-handler/Swipeable';
@@ -29,6 +30,13 @@ import {
   type WorkItem,
   type Release,
 } from '../../src/services/devService';
+import {
+  ACTIVE_STATUSES,
+  buildPipelineView,
+  relativeTime,
+  summaryLine,
+  type PipelineCard,
+} from '../../src/services/pipelineView';
 import { Colors, Spacing, Radii } from '../../src/theme';
 import { PRDetailView } from '../../src/components/dev/PRDetailView';
 import { AiDigest } from '../../src/components/pipeline/AiDigest';
@@ -40,6 +48,11 @@ import { ExceptionCard } from '../../src/components/pipeline/ExceptionCard';
 // Fast enough that a status change feels immediate, slow enough that a screen
 // left open is not a load problem: the reconciler itself only ticks every 60 s.
 const PIPELINE_POLL_MS = 10000;
+
+// Work-item stages that are over. An exception raised against a shipped or
+// abandoned item is history, and history does not get to sit in the one section
+// that means "you have to look at this".
+const CLOSED_STAGES = ['live', 'archived', 'released', 'done'];
 
 const STATUS_META: Record<
   DevRequestStatus,
@@ -54,6 +67,9 @@ const STATUS_META: Record<
   failed: { label: 'Failed', color: Colors.error, bucket: 'attention' },
   needs_attention: { label: 'Needs attention', color: Colors.error, bucket: 'attention' },
   duplicate: { label: 'Already tracked', color: Colors.textTertiary, bucket: 'done' },
+  // Closed unmerged or cancelled. Without this entry the lookup fell through to
+  // `pending`, so every dead row on the screen claimed to be queued work.
+  superseded: { label: 'Superseded', color: Colors.textTertiary, bucket: 'done' },
 };
 
 const TARGET_LABEL: Record<string, string> = {
@@ -61,6 +77,12 @@ const TARGET_LABEL: Record<string, string> = {
   agent: 'Agent',
   ui: 'UI',
   prompt: 'Prompt',
+};
+
+const SOURCE_LABEL: Record<string, string> = {
+  directive: 'from directive',
+  transcript: 'from conversation',
+  github: 'raised on GitHub',
 };
 
 const RESUBMITTABLE_STATUSES: DevRequestStatus[] = ['failed', 'needs_attention'];
@@ -110,19 +132,25 @@ export default function DevScreen() {
   const [selectedRequest, setSelectedRequest] = useState<DevRequest | null>(null);
   const [directive, setDirective] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [showRecent, setShowRecent] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [resubmitting, setResubmitting] = useState<string | null>(null);
   const swipeableRefs = useRef<Record<string, Swipeable | null>>({});
   const isSwipingMap = useRef<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
-    const [list, wis, rels, dg] = await Promise.all([
+    // Two request feeds on purpose. The window is the newest 100 rows, which is
+    // what history is drawn from; the second asks the server for EVERY in-flight
+    // row whatever its age, so a change stuck since last week cannot fall off
+    // the back of the window and leave the screen claiming the pipeline is clear.
+    const [list, active, wis, rels, dg] = await Promise.all([
       listRequests(userId),
+      listRequests(userId, { statuses: ACTIVE_STATUSES, limit: 100 }),
       fetchWorkItems(),
       fetchReleases(),
       fetchDigest(),
     ]);
-    setRequests(list);
+    setRequests([...list, ...active]);
     setWorkItems(wis);
     setReleases(rels);
     setDigest(dg);
@@ -130,9 +158,9 @@ export default function DevScreen() {
   }, [userId]);
 
   // The pipeline moves on its own — a build lands, the reconciler flips a status
-  // from GitHub truth — so a screen that only loads on focus is stale the moment
-  // it finishes rendering. Poll while focused, stop on blur so a backgrounded
-  // screen costs nothing.
+  // from GitHub truth, a PR raised straight on GitHub gets adopted — so a screen
+  // that only loads on focus is stale the moment it finishes rendering. Poll
+  // while focused, stop on blur so a backgrounded screen costs nothing.
   //
   // Polling rather than the SSE broadcast is deliberate as the PRIMARY path: the
   // server also pushes these transitions, but a push channel that quietly stops
@@ -147,6 +175,16 @@ export default function DevScreen() {
       return () => { cancelled = true; clearInterval(timer); };
     }, [load]),
   );
+
+  // Coming back from the background is the case the interval cannot cover: iOS
+  // suspends timers, so a screen left open overnight would otherwise show
+  // yesterday's pipeline until the next tick fires.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') load();
+    });
+    return () => sub.remove();
+  }, [load]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -192,20 +230,6 @@ export default function DevScreen() {
           : r,
       ),
     );
-    setWorkItems((prev) =>
-      prev.map((wi) => {
-        const linked = requests.find((r) => r.id === id);
-        if (!linked) return wi;
-        const isLinked = wi.title === linked.title || wi.subsystem === linked.target;
-        if (!isLinked) return wi;
-        return {
-          ...wi,
-          stage: result.plan === 'rerun_deploy' ? 'deploying' : 'building',
-          latest_event: { kind: result.plan === 'rerun_deploy' ? 'deploy_started' : 'build_started', created_at: submittedAt },
-          updated_at: submittedAt,
-        };
-      }),
-    );
     await load();
     Alert.alert(
       'Resubmitted',
@@ -213,7 +237,7 @@ export default function DevScreen() {
         ? 'The code was already merged, so the deploy is being re-run.'
         : 'A fresh build has been dispatched from current main.',
     );
-  }, [resubmitting, requests, load]);
+  }, [resubmitting, load]);
 
   const onArchive = useCallback(async (id: string) => {
     swipeableRefs.current[id]?.close();
@@ -228,34 +252,132 @@ export default function DevScreen() {
     }
   }, []);
 
+  // ── What the screen shows ──────────────────────────────────────────────────
+
+  const view = useMemo(() => buildPipelineView(requests), [requests]);
+
+  const archivedRequests = useMemo(() => {
+    const byId = new Map<string, DevRequest>();
+    for (const r of requests) if (r.archived) byId.set(r.id, r);
+    return [...byId.values()].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    );
+  }, [requests]);
+
   const exceptions: ExceptionItem[] = workItems
+    .filter((wi) => !CLOSED_STAGES.includes(String(wi.stage)))
     .map(parseException)
     .filter((e): e is ExceptionItem => e !== null);
 
-  const workItemsByReleaseId: Record<string, WorkItem[]> = {};
-  const unreleasedItems: WorkItem[] = [];
-  for (const wi of workItems) {
-    const change = releases
-      .flatMap((r) => r.changes.map((c) => ({ releaseId: r.id, workItemId: c.work_item_id })))
-      .find((c) => c.workItemId === wi.id);
-    if (change) {
-      if (!workItemsByReleaseId[change.releaseId]) workItemsByReleaseId[change.releaseId] = [];
-      workItemsByReleaseId[change.releaseId].push(wi);
-    } else {
-      unreleasedItems.push(wi);
-    }
-  }
-
-  const changeRefForItem = (wi: WorkItem): string | undefined => {
-    for (const rel of releases) {
-      const ch = rel.changes.find((c) => c.work_item_id === wi.id);
-      if (ch) {
-        if (ch.pr_number) return `PR #${ch.pr_number}`;
-        if (ch.branch) return ch.branch;
+  // History, grouped by the release that shipped it. Only rendered once the
+  // operator asks for it.
+  const releaseById = useMemo(
+    () => new Map<string, Release>(releases.map((r) => [r.id, r] as [string, Release])),
+    [releases],
+  );
+  const recentByRelease = useMemo(() => {
+    const grouped = new Map<string, PipelineCard[]>();
+    const loose: PipelineCard[] = [];
+    for (const card of view.recent) {
+      const relId = card.request.release_id;
+      if (relId && releaseById.has(relId)) {
+        const g = grouped.get(relId);
+        if (g) g.push(card); else grouped.set(relId, [card]);
+      } else {
+        loose.push(card);
       }
     }
-    return undefined;
+    return { grouped, loose };
+  }, [view.recent, releaseById]);
+
+  const renderRequestCard = (card: PipelineCard) => {
+    const r = card.request;
+    const meta = STATUS_META[r.status] ?? STATUS_META.pending;
+    const renderRightActions = () => (
+      <TouchableOpacity
+        style={styles.archiveAction}
+        onPress={() => onArchive(r.id)}
+        activeOpacity={0.85}
+      >
+        <Text style={styles.archiveActionText}>Archive</Text>
+      </TouchableOpacity>
+    );
+    return (
+      <Swipeable
+        key={card.key}
+        ref={(ref) => { swipeableRefs.current[r.id] = ref; }}
+        renderRightActions={renderRightActions}
+        overshootRight={false}
+        friction={2}
+        onSwipeableWillOpen={() => { isSwipingMap.current[r.id] = true; }}
+        onSwipeableClose={() => { isSwipingMap.current[r.id] = false; }}
+      >
+        <TouchableOpacity
+          style={styles.card}
+          onPress={() => { if (!isSwipingMap.current[r.id]) setSelectedRequest(r); }}
+          activeOpacity={0.75}
+        >
+          <View style={styles.cardTop}>
+            <Text style={styles.cardTitle} numberOfLines={2}>{r.title}</Text>
+            <View style={[styles.badge, { borderColor: meta.color }]}>
+              <Text style={[styles.badgeText, { color: meta.color }]}>{meta.label}</Text>
+            </View>
+          </View>
+          <View style={styles.cardMeta}>
+            <View style={styles.targetPill}>
+              <Text style={styles.targetText}>{TARGET_LABEL[r.target] ?? r.target}</Text>
+            </View>
+            <Text style={styles.sourceText}>
+              {SOURCE_LABEL[r.source] ?? 'from conversation'}
+              {r.updated_at ? ` · ${relativeTime(r.updated_at)}` : ''}
+            </Text>
+          </View>
+          {card.collapsed.length > 0 ? (
+            <Text style={styles.collapsedText}>
+              +{card.collapsed.length} earlier attempt{card.collapsed.length === 1 ? '' : 's'} for this change
+            </Text>
+          ) : null}
+          {r.error ? <Text style={styles.errorText}>{r.error}</Text> : null}
+          {r.next_retry_at ? (
+            <Text style={styles.retryText}>
+              Retrying automatically{r.attempts ? ` (attempt ${r.attempts + 1})` : ''}…
+            </Text>
+          ) : null}
+          {r.pr_url ? (
+            <Text style={styles.prLink}>
+              View PR{r.pr_number ? ` #${r.pr_number}` : ''} ›
+            </Text>
+          ) : null}
+          {RESUBMITTABLE_STATUSES.includes(r.status) && !r.next_retry_at ? (
+            <TouchableOpacity
+              style={styles.resubmitBtn}
+              onPress={() => onResubmit(r.id)}
+              disabled={resubmitting === r.id}
+              hitSlop={8}
+            >
+              {resubmitting === r.id ? (
+                <ActivityIndicator color={Colors.coral} size="small" />
+              ) : (
+                <Text style={styles.resubmitText}>
+                  Resubmit{r.attempts ? ` · ${r.attempts} attempt${r.attempts === 1 ? '' : 's'}` : ''}
+                </Text>
+              )}
+            </TouchableOpacity>
+          ) : null}
+        </TouchableOpacity>
+      </Swipeable>
+    );
   };
+
+  const renderRecentCard = (card: PipelineCard) => (
+    <WorkItemCard
+      key={card.key}
+      title={card.request.title}
+      status={(STATUS_META[card.request.status] ?? STATUS_META.pending).label}
+      evidenceCount={card.collapsed.length + 1}
+      changeRef={card.request.pr_number ? `PR #${card.request.pr_number}` : undefined}
+    />
+  );
 
   return (
     <SafeAreaView style={styles.container}>
@@ -279,11 +401,30 @@ export default function DevScreen() {
         contentContainerStyle={styles.scroll}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.coral} />}
       >
+        {/* The verdict, before any card. Whether the pipeline is clear is the
+            question this screen exists to answer, and it should never have to be
+            inferred from how many cards happen to be on screen. */}
+        <View style={[styles.banner, view.isClear ? styles.bannerClear : styles.bannerBusy]}>
+          <View style={styles.bannerRow}>
+            <View style={[styles.dot, { backgroundColor: view.isClear ? Colors.success : Colors.coral }]} />
+            <Text style={styles.bannerText}>
+              {loading && requests.length === 0 ? 'Checking the pipeline…' : summaryLine(view)}
+            </Text>
+          </View>
+          {view.isClear && view.lastShipped ? (
+            <Text style={styles.bannerSub} numberOfLines={2}>
+              Last shipped: {view.lastShipped.request.title}
+              {view.lastShipped.request.pr_number ? ` · PR #${view.lastShipped.request.pr_number}` : ''}
+              {' · '}{relativeTime(view.lastShipped.request.updated_at ?? view.lastShipped.request.created_at)}
+            </Text>
+          ) : null}
+        </View>
+
         <AiDigest digest={digest} />
 
         {exceptions.length > 0 ? (
           <View style={styles.section}>
-            <Text style={styles.sectionHeader}>NEEDS ATTENTION</Text>
+            <Text style={styles.sectionHeader}>NEEDS YOUR INPUT</Text>
             {exceptions.map((ex) => (
               <ExceptionCard
                 key={ex.id}
@@ -297,59 +438,63 @@ export default function DevScreen() {
         ) : null}
 
         <View style={styles.section}>
-          <Text style={styles.sectionHeader}>WORK ITEMS</Text>
-          {loading ? (
-            <Text style={styles.empty}>Loading…</Text>
-          ) : workItems.length === 0 ? (
-            <Text style={styles.empty}>No work items yet — submissions will appear here.</Text>
+          <Text style={styles.sectionHeader}>IN FLIGHT</Text>
+          {loading && requests.length === 0 ? (
+            <ActivityIndicator color={Colors.coral} style={{ marginTop: Spacing.md }} />
+          ) : view.isClear ? (
+            <View style={styles.clearCard}>
+              <Text style={styles.clearTitle}>Pipeline clear — nothing in flight</Text>
+              <Text style={styles.clearBody}>
+                Nothing is building, reviewing or deploying right now. New work appears here
+                within a minute — whether you send it from the app or raise the PR yourself
+                on GitHub.
+              </Text>
+            </View>
           ) : (
-            <>
-              {releases.map((rel) => {
-                const relItems = workItemsByReleaseId[rel.id];
-                if (!relItems || relItems.length === 0) return null;
-                return (
-                  <ReleaseGroup
-                    key={rel.id}
-                    releaseLabel={rel.version}
-                    releasedAt={rel.created_at}
-                  >
-                    {relItems.map((wi) => (
-                      <WorkItemCard
-                        key={wi.id}
-                        title={wi.title}
-                        status={wi.stage}
-                        evidenceCount={wi.submission_count}
-                        changeRef={changeRefForItem(wi)}
-                      />
-                    ))}
-                  </ReleaseGroup>
-                );
-              })}
-              {unreleasedItems.length > 0 ? (
-                <View style={styles.unreleasedGroup}>
-                  <Text style={styles.unreleasedLabel}>UNRELEASED</Text>
-                  {unreleasedItems.map((wi) => (
-                    <WorkItemCard
-                      key={wi.id}
-                      title={wi.title}
-                      status={wi.stage}
-                      evidenceCount={wi.submission_count}
-                      changeRef={changeRefForItem(wi)}
-                    />
-                  ))}
-                </View>
-              ) : null}
-            </>
+            view.active.map(renderRequestCard)
           )}
         </View>
 
-        {!loading && releases.length === 0 ? (
-          <Text style={styles.empty}>No releases yet.</Text>
+        {/* History, collapsed. It is evidence, not work, and it was the wall of
+            cards that made a clear pipeline unreadable. */}
+        {view.recent.length > 0 ? (
+          <View style={styles.section}>
+            <TouchableOpacity
+              style={styles.disclosure}
+              onPress={() => setShowRecent((v) => !v)}
+              activeOpacity={0.7}
+              hitSlop={8}
+            >
+              <Text style={styles.sectionHeader}>
+                RECENT RELEASES · {view.recent.length}
+              </Text>
+              <Text style={styles.disclosureChevron}>{showRecent ? '▾' : '▸'}</Text>
+            </TouchableOpacity>
+            {showRecent ? (
+              <>
+                {[...recentByRelease.grouped.entries()].map(([relId, cards]) => {
+                  const rel = releaseById.get(relId);
+                  if (!rel) return null;
+                  return (
+                    <ReleaseGroup key={relId} releaseLabel={rel.version} releasedAt={rel.created_at}>
+                      {cards.map(renderRecentCard)}
+                    </ReleaseGroup>
+                  );
+                })}
+                {recentByRelease.loose.length > 0 ? (
+                  <View style={styles.unreleasedGroup}>
+                    <Text style={styles.unreleasedLabel}>EARLIER CHANGES</Text>
+                    {recentByRelease.loose.map(renderRecentCard)}
+                  </View>
+                ) : null}
+              </>
+            ) : null}
+          </View>
         ) : null}
 
         {developerMode ? (
           <View style={styles.section}>
-            <Text style={styles.sectionHeader}>PLUMBING — PIPELINE REQUESTS</Text>
+            <Text style={styles.sectionHeader}>PLUMBING — SEND A DIRECTIVE</Text>
             <Text style={styles.blurb}>
               Developer mode is recording your conversations and turning them into changes
               that build and deploy automatically. Type a directive below to request one directly.
@@ -389,89 +534,15 @@ export default function DevScreen() {
               />
             </View>
 
-            {loading ? (
-              <ActivityIndicator color={Colors.coral} style={{ marginTop: Spacing.xl }} />
-            ) : requests.filter((r) => showArchived ? r.archived : !r.archived).length === 0 ? (
-              <Text style={styles.empty}>
-                No build requests yet. Turn on Developer mode, have a conversation about a change,
-                or send a directive above.
-              </Text>
-            ) : (
-              [...requests]
-                .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-                .filter((r) => showArchived ? r.archived : !r.archived)
-                .map((r) => {
-                const meta = STATUS_META[r.status] ?? STATUS_META.pending;
-                const renderRightActions = () => (
-                  <TouchableOpacity
-                    style={styles.archiveAction}
-                    onPress={() => onArchive(r.id)}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={styles.archiveActionText}>Archive</Text>
-                  </TouchableOpacity>
-                );
-                return (
-                  <Swipeable
-                    key={r.id}
-                    ref={(ref) => { swipeableRefs.current[r.id] = ref; }}
-                    renderRightActions={renderRightActions}
-                    overshootRight={false}
-                    friction={2}
-                    onSwipeableWillOpen={() => { isSwipingMap.current[r.id] = true; }}
-                    onSwipeableClose={() => { isSwipingMap.current[r.id] = false; }}
-                  >
-                    <TouchableOpacity
-                      style={styles.card}
-                      onPress={() => { if (!isSwipingMap.current[r.id]) setSelectedRequest(r); }}
-                      activeOpacity={0.75}
-                    >
-                      <View style={styles.cardTop}>
-                        <Text style={styles.cardTitle} numberOfLines={2}>{r.title}</Text>
-                        <View style={[styles.badge, { borderColor: meta.color }]}>
-                          <Text style={[styles.badgeText, { color: meta.color }]}>{meta.label}</Text>
-                        </View>
-                      </View>
-                      <View style={styles.cardMeta}>
-                        <View style={styles.targetPill}>
-                          <Text style={styles.targetText}>{TARGET_LABEL[r.target] ?? r.target}</Text>
-                        </View>
-                        <Text style={styles.sourceText}>
-                          {r.source === 'directive' ? 'from directive' : 'from conversation'}
-                        </Text>
-                      </View>
-                      {r.error ? <Text style={styles.errorText}>{r.error}</Text> : null}
-                      {r.next_retry_at ? (
-                        <Text style={styles.retryText}>
-                          Retrying automatically{r.attempts ? ` (attempt ${r.attempts + 1})` : ''}…
-                        </Text>
-                      ) : null}
-                      {r.pr_url ? (
-                        <Text style={styles.prLink}>
-                          View PR{r.pr_number ? ` #${r.pr_number}` : ''} ›
-                        </Text>
-                      ) : null}
-                      {RESUBMITTABLE_STATUSES.includes(r.status) && !r.next_retry_at ? (
-                        <TouchableOpacity
-                          style={styles.resubmitBtn}
-                          onPress={() => onResubmit(r.id)}
-                          disabled={resubmitting === r.id}
-                          hitSlop={8}
-                        >
-                          {resubmitting === r.id ? (
-                            <ActivityIndicator color={Colors.coral} size="small" />
-                          ) : (
-                            <Text style={styles.resubmitText}>
-                              Resubmit{r.attempts ? ` · ${r.attempts} attempt${r.attempts === 1 ? '' : 's'}` : ''}
-                            </Text>
-                          )}
-                        </TouchableOpacity>
-                      ) : null}
-                    </TouchableOpacity>
-                  </Swipeable>
-                );
-              })
-            )}
+            {showArchived ? (
+              archivedRequests.length === 0 ? (
+                <Text style={styles.empty}>Nothing archived.</Text>
+              ) : (
+                archivedRequests.map((r) =>
+                  renderRequestCard({ key: r.id, request: r, lane: 'recent', collapsed: [] }),
+                )
+              )
+            ) : null}
           </View>
         ) : null}
       </ScrollView>
@@ -505,6 +576,29 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     marginBottom: Spacing.sm,
   },
+  banner: {
+    borderRadius: Radii.md,
+    borderWidth: 1,
+    padding: Spacing.md,
+    marginBottom: Spacing.lg,
+    gap: Spacing.xs,
+  },
+  bannerClear: { borderColor: Colors.success, backgroundColor: Colors.surface },
+  bannerBusy: { borderColor: Colors.coral, backgroundColor: Colors.surface },
+  bannerRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.sm },
+  dot: { width: 10, height: 10, borderRadius: 5 },
+  bannerText: { flex: 1, fontSize: 16, fontWeight: '700', color: Colors.textPrimary },
+  bannerSub: { fontSize: 12, color: Colors.textSecondary, lineHeight: 17 },
+  clearCard: {
+    backgroundColor: Colors.surface,
+    borderRadius: Radii.md,
+    padding: Spacing.md,
+    gap: Spacing.xs,
+  },
+  clearTitle: { fontSize: 15, fontWeight: '700', color: Colors.textPrimary },
+  clearBody: { fontSize: 13, color: Colors.textSecondary, lineHeight: 18 },
+  disclosure: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  disclosureChevron: { fontSize: 14, color: Colors.textTertiary, marginBottom: Spacing.sm },
   blurb: { fontSize: 13, color: Colors.textSecondary, lineHeight: 18, marginBottom: Spacing.md },
   composer: { marginBottom: Spacing.md },
   input: {
@@ -567,7 +661,8 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
   },
   targetText: { fontSize: 11, fontWeight: '600', color: Colors.textSecondary },
-  sourceText: { fontSize: 12, color: Colors.textTertiary },
+  sourceText: { flex: 1, fontSize: 12, color: Colors.textTertiary },
+  collapsedText: { fontSize: 12, color: Colors.textTertiary },
   errorText: { fontSize: 12, color: Colors.error, lineHeight: 16 },
   retryText: { fontSize: 12, color: Colors.textTertiary, marginTop: 4 },
   resubmitBtn: {

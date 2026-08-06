@@ -30,20 +30,25 @@ afterEach(() => {
 
 // ── Minimal inline sections that mirror the screen's conditional rendering ───
 
-function WorkItemsSection({ workItems }: { workItems: unknown[] }) {
+// The screen's IN FLIGHT section. An idle pipeline must SAY it is idle — the
+// wall of terminal cards it used to render read the same as a jammed one.
+function InFlightSection({ active }: { active: unknown[] }) {
   return (
     <View>
-      {workItems.length === 0 ? (
-        <Text>No work items yet — submissions will appear here.</Text>
+      {active.length === 0 ? (
+        <Text>Pipeline clear — nothing in flight</Text>
       ) : null}
     </View>
   );
 }
 
-function ReleasesSection({ releases }: { releases: unknown[] }) {
+// History is behind a disclosure, so nothing terminal renders until it is asked
+// for.
+function RecentSection({ recent, expanded }: { recent: string[]; expanded: boolean }) {
   return (
     <View>
-      {releases.length === 0 ? <Text>No releases yet.</Text> : null}
+      <Text>RECENT RELEASES · {recent.length}</Text>
+      {expanded ? recent.map((t) => <Text key={t}>{t}</Text>) : null}
     </View>
   );
 }
@@ -176,14 +181,25 @@ describe('ExceptionCard', () => {
 // ── Empty-state coverage ──────────────────────────────────────────────────────
 
 describe('pipeline screen empty-state behaviour', () => {
-  it('renders work-item empty state message when workItems is []', () => {
-    const { getByText } = render(<WorkItemsSection workItems={[]} />);
-    expect(getByText('No work items yet — submissions will appear here.')).toBeTruthy();
+  it('says the pipeline is clear when nothing is in flight', () => {
+    const { getByText } = render(<InFlightSection active={[]} />);
+    expect(getByText('Pipeline clear — nothing in flight')).toBeTruthy();
   });
 
-  it('renders release empty state message when releases is []', () => {
-    const { getByText } = render(<ReleasesSection releases={[]} />);
-    expect(getByText('No releases yet.')).toBeTruthy();
+  it('keeps terminal history collapsed until it is asked for', () => {
+    const shipped = ['Shipped last week', 'Shipped yesterday'];
+    const { queryByText, getByText } = render(
+      <RecentSection recent={shipped} expanded={false} />,
+    );
+    expect(getByText('RECENT RELEASES · 2')).toBeTruthy();
+    expect(queryByText('Shipped yesterday')).toBeNull();
+  });
+
+  it('reveals history on expand', () => {
+    const { getByText } = render(
+      <RecentSection recent={['Shipped yesterday']} expanded />,
+    );
+    expect(getByText('Shipped yesterday')).toBeTruthy();
   });
 
   it('renders no exception section when exceptions is []', () => {
@@ -210,8 +226,8 @@ describe('pipeline screen empty-state behaviour', () => {
       render(
         <>
           <AiDigest digest="" />
-          <WorkItemsSection workItems={[]} />
-          <ReleasesSection releases={[]} />
+          <InFlightSection active={[]} />
+          <RecentSection recent={[]} expanded={false} />
           <ExceptionsSection exceptions={[]} />
         </>,
       ),
