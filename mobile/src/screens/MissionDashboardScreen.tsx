@@ -5,13 +5,11 @@ import DayCalendarView from '../components/dashboard/DayCalendarView';
 import CalendarDetailModal from '../components/dashboard/CalendarDetailModal';
 import MultiDayCalendarView from '../components/dashboard/MultiDayCalendarView';
 import { useSmokingLogs } from '../hooks/useSmokingLogs';
-import { useRoutineProjection } from '../hooks/useRoutineProjection';
 import { useActivityLog, type ActivityLogEntry } from '../hooks/useActivityLog';
 import { useMemo, useState, useCallback, useEffect } from 'react';
 import type { DayLog } from '../components/dashboard/DayCalendarView';
 import { useDashboardRealtime } from '../hooks/useDashboardRealtime';
 import type { SmokingLog } from '../hooks/useSmokingLogs';
-import type { HourSlot } from '../hooks/useRoutineProjection';
 
 /**
  * MissionDashboardScreen is the redesigned mission dashboard.
@@ -27,13 +25,10 @@ import type { HourSlot } from '../hooks/useRoutineProjection';
  */
 export default function MissionDashboardScreen() {
   const { todayLogs, historyLogs } = useSmokingLogs();
-  const projected = useRoutineProjection(historyLogs);
   const { realtimeEvents } = useDashboardRealtime(todayLogs);
   const [selectedLog, setSelectedLog] = useState<SmokingLog | null>(null);
-  const [selectedSlot, setSelectedSlot] = useState<HourSlot | null>(null);
   const handlePressLog = useCallback((log: SmokingLog) => setSelectedLog(log), []);
-  const handlePressSlot = useCallback((slot: HourSlot) => setSelectedSlot(slot), []);
-  const handleDismiss = useCallback(() => { setSelectedLog(null); setSelectedSlot(null); }, []);
+  const handleDismiss = useCallback(() => { setSelectedLog(null); }, []);
 
   const mergedTodayLogs: SmokingLog[] = useMemo(() => {
     const fetchedIds = new Set(todayLogs.map((l) => l.id));
@@ -84,8 +79,6 @@ export default function MissionDashboardScreen() {
 
   const modalTitle = selectedLog
     ? selectedLog.activityLabel || new Date(selectedLog.occurred_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : selectedSlot
-    ? `Projected routine`
     : '';
   const modalDescription = selectedLog
     ? [
@@ -96,8 +89,6 @@ export default function MissionDashboardScreen() {
       ]
         .filter(Boolean)
         .join('\n') || 'No additional details.'
-    : selectedSlot
-    ? `Average of ~${selectedSlot.avgCount.toFixed(1)} cigarette(s) at ${selectedSlot.hour === 0 ? '12:00 AM' : selectedSlot.hour < 12 ? `${selectedSlot.hour}:00 AM` : selectedSlot.hour === 12 ? '12:00 PM' : `${selectedSlot.hour - 12}:00 PM`} based on your past 14 days.`
     : '';
 
   return (
@@ -106,11 +97,9 @@ export default function MissionDashboardScreen() {
         <HeroMetric realtimeLogs={mergedTodayLogs} />
         <View style={styles.dayView}>
           <DayCalendarView
-            projected={projected}
             actuals={mergedTodayLogs}
             previousDays={previousDays}
             onPressLog={handlePressLog}
-            onPressSlot={handlePressSlot}
           />
         </View>
         <View style={styles.historyView}>
@@ -124,7 +113,7 @@ export default function MissionDashboardScreen() {
         </View>
       </View>
       <CalendarDetailModal
-        visible={selectedLog !== null || selectedSlot !== null}
+        visible={selectedLog !== null}
         onDismiss={handleDismiss}
         title={modalTitle}
         description={modalDescription}

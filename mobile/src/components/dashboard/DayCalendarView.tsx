@@ -1,9 +1,7 @@
 import { useRef, useEffect } from 'react';
 import { ScrollView, View, Text, StyleSheet } from 'react-native';
 import { Colors, Spacing } from '../../theme';
-import ProjectedRoutineLayer from './ProjectedRoutineLayer';
 import ActualsLayer from './ActualsLayer';
-import type { HourSlot } from '../../hooks/useRoutineProjection';
 import type { SmokingLog } from '../../hooks/useSmokingLogs';
 
 export interface DayLog {
@@ -12,16 +10,13 @@ export interface DayLog {
 }
 
 interface DayCalendarViewProps {
-  /** Per-hour projected averages from the user's historical routine. */
-  projected: HourSlot[];
   /** Today's actual cigarette log entries. */
   actuals: SmokingLog[];
   /** Up to 3 previous days' logs rendered as ghost/faded markers. */
   previousDays?: DayLog[];
   /** Called when the user taps a non-ghost log block. */
   onPressLog?: (log: SmokingLog) => void;
-  /** Called when the user taps a projected routine block. */
-  onPressSlot?: (slot: HourSlot) => void;
+  [key: string]: unknown;
 }
 
 const MINUTE_HEIGHT = 2;
@@ -46,13 +41,11 @@ function minuteOffset(hour: number, minute: number): number {
  * Calendar items are rendered as absolutely-positioned time-blocks whose height
  * corresponds to their duration. Overlapping items are offset horizontally.
  *
- * @param projected - Per-hour average counts (0–23) from useRoutineProjection.
  * @param actuals - Today's SmokingLog entries from useSmokingLogs.
  * @param previousDays - Optional array of DayLog for the previous 1–3 days.
  */
-export default function DayCalendarView({ projected, actuals, previousDays = [], onPressLog, onPressSlot }: DayCalendarViewProps) {
+export default function DayCalendarView({ actuals, previousDays = [], onPressLog }: DayCalendarViewProps) {
   const scrollRef = useRef<ScrollView>(null);
-  const maxAvg = Math.max(...projected.map((s) => s.avgCount), 0);
 
   useEffect(() => {
     const now = new Date();
@@ -76,7 +69,6 @@ export default function DayCalendarView({ projected, actuals, previousDays = [],
       <Text style={styles.sectionLabel}>TODAY'S TIMELINE</Text>
       <View style={[styles.timeline, { height: TOTAL_MINUTES * MINUTE_HEIGHT }]}>
         {hours.map((hour) => {
-          const slot = projected[hour];
           const isNowHour = hour === nowHour;
           const hourTop = minuteOffset(hour, 0);
 
@@ -85,11 +77,7 @@ export default function DayCalendarView({ projected, actuals, previousDays = [],
               <Text style={[styles.hourLabel, isNowHour && styles.hourLabelNow]}>
                 {fmtHour(hour)}
               </Text>
-              <View style={styles.hourBody}>
-                {slot && maxAvg > 0 && slot.avgCount > 0 && (
-                  <ProjectedRoutineLayer projected={[slot]} maxAvg={maxAvg} onPress={onPressSlot} />
-                )}
-              </View>
+              <View style={styles.hourBody} />
             </View>
           );
         })}
