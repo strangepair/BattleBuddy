@@ -1168,6 +1168,81 @@ export function patchForEvent(evt, payload) {
 // ─── Triage layer ────────────────────────────────────────────────────────────
 // insertSubmission — durably record a raw submission + 'submitted' event.
 // Returns { submissionId } or throws (caller must decide what to surface).
+// ─── Intake: durability first, and one at a time ─────────────────────────────
+//
+// Two failure modes this pipeline has actually had, both at the front door:
+//
+//  1. SILENT DROP. Everything used to be generated FIRST and recorded second,
+//     so any failure before the insert — a truncated model response, a 500 from
+//     Anthropic, a container swap mid-request — lost the user's words entirely.
+//     #127 fixed the empty-generation case; this closes the throw case, and
+//     moves the durable record to before generation, where it belongs. Nothing
+//     a user typed may depend on a model call succeeding.
+//
+//  2. DOUBLE CAPTURE. On 2026-08-05 three flushes of one dev-mode conversation
+//     landed 18 seconds apart (13:11:21, :34, :39) and produced seven
+//     near-identical rows. insertRequests DOES scan the open backlog for near
+//     duplicates — but all three generations were in flight at once, so each
+//     scanned a backlog that did not yet contain the others' rows. A duplicate
+//     check that races is not a duplicate check.
+//
+// So intake is serialised through one chain. It is a single Node process, the
+// work is a model call plus a few inserts, and the alternative is a race whose
+// output is a backlog nobody can read.
+
+let intakeChain = Promise.resolve();
+
+/**
+ * Run `fn` after every intake already queued. Failures do not poison the chain.
+ * Exported so devCapture's flushes queue behind directives and each other.
+ */
+export function runExclusively(fn) {
+  const result = intakeChain.then(fn, fn);
+  intakeChain = result.then(() => {}, () => {});
+  return result;
+}
+
+// A resubmit of the exact same words inside this window is a double-post (a
+// retried request, a double tap, a client that fired twice), not a second ask.
+const INTAKE_DEDUP_MS = Number(process.env.DEV_INTAKE_DEDUP_MS || 10 * 60 * 1000);
+
+/** An earlier submission with identical raw text, inside the dedup window. */
+export async function recentIdenticalSubmission(supabase, rawText, excludeId, now = Date.now()) {
+  if (!supabase || !rawText) return null;
+  try {
+    const cutoff = new Date(now - INTAKE_DEDUP_MS).toISOString();
+    let q = supabase
+      .from('submissions')
+      .select('id, created_at')
+      .eq('raw_text', rawText)
+      .gte('created_at', cutoff);
+    if (excludeId) q = q.neq('id', excludeId);
+    const { data } = await q.limit(1);
+    return data?.[0] || null;
+  } catch (err) {
+    // Never let the guard block an intake. A duplicate costs a build; a
+    // swallowed submission costs the user's words.
+    console.error('[devPipeline] intake dedup check unavailable:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Record the raw text BEFORE anything can fail. Returns a submission id, or
+ * null if even this failed — in which case the caller still proceeds, because
+ * bookkeeping must never be the reason a submission is refused.
+ */
+export async function recordIntake(supabase, { source, rawText, sessionId }) {
+  if (!supabase) return null;
+  try {
+    const { submissionId } = await insertSubmission(supabase, { source, rawText, sessionId });
+    return submissionId;
+  } catch (err) {
+    console.error('[devPipeline] DURABILITY: intake record failed:', err.message);
+    return null;
+  }
+}
+
 export async function insertSubmission(supabase, { source, rawText, sessionId }) {
   const { data: sub, error: subErr } = await supabase
     .from('submissions')
@@ -1374,17 +1449,22 @@ export async function holdDuplicateRequests(supabase, insertedRequests, targetIt
 // before any further processing.
 export async function processSubmission(supabase, anthropic, {
   source, rawText, sessionId, source_meta,
-  tasks, insertedRequests, dispatchFn,
+  tasks, insertedRequests, dispatchFn, submissionId: existingSubmissionId,
 }) {
   // ── Step 1: durable submission row ────────────────────────────────────────
-  let submissionId;
-  try {
-    const result = await insertSubmission(supabase, { source, rawText, sessionId });
-    submissionId = result.submissionId;
-  } catch (err) {
-    console.error('[devPipeline] DURABILITY: submissions insert failed:', err.message);
-    // Can't proceed without a trace — surface the error.
-    throw err;
+  // Callers that already recorded the raw text at the front door (recordIntake)
+  // pass their id in: the durable record must exist BEFORE generation, and one
+  // submission must not become two rows because it survived that far.
+  let submissionId = existingSubmissionId;
+  if (!submissionId) {
+    try {
+      const result = await insertSubmission(supabase, { source, rawText, sessionId });
+      submissionId = result.submissionId;
+    } catch (err) {
+      console.error('[devPipeline] DURABILITY: submissions insert failed:', err.message);
+      // Can't proceed without a trace — surface the error.
+      throw err;
+    }
   }
 
   // ── Step 2: fetch open work items for triage ──────────────────────────────
@@ -1517,10 +1597,38 @@ export async function handleDevPipeline(req, res, deps) {
     const body = await readBody(req);
     const text = (body.text || '').toString().trim();
     if (!text) return json(400, { error: 'text required' });
+    const userId = resolveUserId ? resolveUserId(body.userId) : body.userId;
+
+    // ── DURABLE FIRST ─────────────────────────────────────────────────────
+    // The raw words are recorded before a single thing that can fail runs.
+    // Generation used to come first, so a model timeout, a truncated response
+    // or a container swap mid-request lost the submission with no trace.
+    const submissionId = await recordIntake(supabase, { source: 'dev_mode', rawText: text, sessionId: null });
+
+    // ── Double-post guard ─────────────────────────────────────────────────
+    // The same words again within minutes is a retried request or a double
+    // tap, not a second ask. Answered honestly rather than built twice.
+    const earlier = await recentIdenticalSubmission(supabase, text, submissionId);
+    if (earlier) {
+      return json(200, {
+        requests: [],
+        duplicate: true,
+        message: 'That exact directive was submitted moments ago — it is already being handled.',
+        firstSeenAt: earlier.created_at,
+      });
+    }
+
     try {
-      const tasks = await generateProductRequests(anthropic, { directiveText: text });
-      const userId = resolveUserId ? resolveUserId(body.userId) : body.userId;
-      const rows = await insertRequests(supabase, { source: 'directive', userId, sessionId: null }, tasks);
+      // Serialised with every other intake: three concurrent captures on
+      // 2026-08-05 each scanned a backlog that did not yet contain the others'
+      // rows, and seven near-identical requests landed.
+      const { tasks, rows } = await runExclusively(async () => {
+        const generated = await generateProductRequests(anthropic, { directiveText: text });
+        return {
+          tasks: generated,
+          rows: await insertRequests(supabase, { source: 'directive', userId, sessionId: null }, generated),
+        };
+      });
 
       // SILENT DROP GUARD — Mike's submissions were vanishing here.
       if (rows.length === 0) {
@@ -1547,6 +1655,7 @@ export async function handleDevPipeline(req, res, deps) {
           source: 'dev_mode',
           rawText: text,
           sessionId: null,
+          submissionId,
           insertedRequests: rows,
           dispatchFn: rows.length > 0 ? async () => rows[0].id : null,
         });
@@ -1557,7 +1666,20 @@ export async function handleDevPipeline(req, res, deps) {
 
       return json(200, { requests: rows.map(publicRow) });
     } catch (err) {
-      return json(500, { error: err.message });
+      // THE THROW PATH. Generation or insertion blew up — a model timeout, a
+      // truncated response, a database hiccup. The old handler answered 500 and
+      // left nothing behind, so the directive existed only in the user's head.
+      // Park the raw wording as a visible row and say plainly that it failed.
+      console.error('[devPipeline] directive processing failed:', err.message);
+      const parked = await parkUnprocessedDirective(
+        supabase, { userId }, text, `generation failed: ${err.message}`,
+      );
+      return json(502, {
+        error: 'That could not be processed right now. It has been saved for review, not lost.',
+        reason: 'generation_failed',
+        detail: String(err.message).slice(0, 200),
+        requests: parked ? [publicRow(parked)] : [],
+      });
     }
   }
 
