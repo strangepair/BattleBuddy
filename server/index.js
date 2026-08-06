@@ -43,6 +43,7 @@ import {
 import { toCachedSystemBlocks } from './promptCache.js';
 import { DEFAULT_TZ, tzOffsetString, formatLocalTime, buildSessionContext as buildSessionContextLine, normalizeOccurredAt } from './timeContext.js';
 import { HABIT_EVENT_TYPES, deriveUsageFacts, renderUsageFactsLine, deriveDashboardPayload } from './usageFacts.js';
+import { summarize, digestLine } from './pipelineSummary.js';
 import { checkDevModeToolResult, devModeStatusBlock } from './devMode.js';
 import { handleDevPipeline, runDevBuildWorker, runWorkerWatchdog, handleDevItems } from './devPipeline.js';
 import { runReconcileTick } from './devReconcile.js';
@@ -3448,6 +3449,46 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     } catch (err) {
       res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
+
+  // GET /api/pipeline/digest — the one-line summary the Dev tab renders above
+  // the cards.
+  //
+  // PR #143 deleted this route because the line it produced was wrong: it was
+  // computed from the newest 20 `work_items` rows regardless of stage, so it
+  // reported a constant "20 work items in flight" (counting shipped and
+  // archived items) against a pipeline whose real in-flight count was two.
+  // Deleting it was the right call for that implementation.
+  //
+  // It comes back on the same path deliberately, because the path is the point:
+  // the build already on Mike's phone calls it, so a correct answer here fixes
+  // the number he sees on next load with no app update. The line is now derived
+  // from `dev_build_requests` via pipelineSummary — the table the GitHub-truth
+  // reconciler repairs and the one the cards below it are drawn from — so the
+  // summary cannot contradict the cards, and it goes to zero when the pipeline
+  // does.
+  if (req.method === 'GET' && req.url === '/api/pipeline/digest') {
+    if (!checkClientToken(req)) return send401Unauthorized(res);
+    if (!supabase) {
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ digest: 'No pipeline activity yet.' }));
+    }
+    try {
+      const { data: rows } = await supabase
+        .from('dev_build_requests')
+        .select('id, title, status, source, archived, pr_number, work_item_id, branch, error, created_at, updated_at')
+        .eq('archived', false)
+        .order('created_at', { ascending: false })
+        .limit(500);
+
+      const summary = summarize(rows || []);
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ digest: digestLine(summary), summary }));
+    } catch (err) {
+      console.error('[pipeline/digest]', err.message);
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ digest: '' }));
     }
   }
 
