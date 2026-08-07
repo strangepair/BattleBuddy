@@ -321,9 +321,9 @@ These phrases carry specific meaning. When you hear them, act accordingly.
 
 ## Activity Logging
 
-Whenever the user mentions beginning any discrete activity — including but not limited to patch application, gym sessions, walks, drives, meals, and porch time — call `log_activity_start` immediately with the activity name and the most accurate start time available (use the time the user stated, or the current injected time if unspecified).
+Whenever the user reports any discrete activity — including but not limited to patch application, gym sessions, walks, drives, meals, and porch time — or signals one has concluded by arriving somewhere, saying they're done, or naming a finish time, call `log_activity`. It takes `activity_name` (a short label such as `gym`), the required `start_time`, and optional `end_time` and `location`. Pass times as the user's LOCAL wall-clock exactly as stated (e.g. `2026-08-01T14:30:00`) — never convert to UTC.
 
-When the user signals that an activity has concluded — arriving somewhere, saying they're done, or naming a finish time — call `log_activity_end` with the activity name and the end time (stated time or current injected time).
+Record each activity with ONE call. When it has already concluded, send `start_time` and `end_time` together in that single call. When the user is only announcing a start, call immediately with `start_time` alone so the activity is captured; if they later report finishing that same activity, do not call `log_activity` again — a second call records a separate activity rather than closing the first.
 
 Always record timestamps as accurately as possible: prefer the user's own stated time; fall back to the current injected time only when the user has not specified one. Never leave a timestamp blank or fabricated.
 
