@@ -620,10 +620,14 @@ export async function handleAdminConsole(req, res, { checkAdminSecret, CORS, sen
       };
       runDesignLoop({ email: true, trigger: 'admin_console', onProgress })
         .then(r => {
-          console.log(`[DesignLoop] On-demand run finished: ${r.changed ? 'prompt updated' : 'no changes applied'}`);
+          console.log(`[DesignLoop] On-demand run finished: ${r.proposed ? `proposed PR #${r.prNumber} for review` : 'nothing proposed'}`);
           saveDesignLoopResult({
             status: 'done', startedAt, completedAt: new Date().toISOString(),
-            changed: r.changed, summary: r.summary || null,
+            // `changed` is kept for the console's existing rendering; it now
+            // means "a change was proposed", never "a change went live".
+            changed: r.changed, proposed: !!r.proposed, summary: r.summary || null,
+            prNumber: r.prNumber ?? null, prUrl: r.prUrl ?? null,
+            skippedReason: r.skippedReason || null,
             users: r.users, sessions: r.sessions, trigger: 'admin_console',
           });
         })
@@ -631,7 +635,7 @@ export async function handleAdminConsole(req, res, { checkAdminSecret, CORS, sen
           console.error('[DesignLoop] On-demand run failed:', e.message);
           saveDesignLoopResult({ status: 'error', startedAt, completedAt: new Date().toISOString(), error: e.message, trigger: 'admin_console' });
         });
-      return json(res, CORS, 202, { ok: true, started: true, startedAt, note: 'Running in the background — takes a few minutes. You will get an email if changes are applied.' });
+      return json(res, CORS, 202, { ok: true, started: true, startedAt, note: 'Running in the background — takes a few minutes. If it finds anything, it opens a PR and a pipeline item for review and emails you; nothing goes live without a merge.' });
     }
 
     // ── UX design loop ────────────────────────────────────────────────────────

@@ -117,10 +117,18 @@ commit;
 -- submitted through the app (a hand-made or agent-authored branch). Mike's rule
 -- is that every change is tracked in dev_build_requests; adoption is how a
 -- direct PR — including the ones shipping this submission — gets a row.
+--
+-- 'design-loop' is the agent design loop's proposed system-prompt tuning
+-- (server/agentDesignLoop.js → server/promptPr.js). It used to write the live
+-- prompt directly, with no PR and no review; it now opens a PR and files the
+-- row this value labels, so the proposal is reviewed and merged like anything
+-- else. Same rule as the status check above: THIS FILE IS THE SOLE DEFINITION
+-- of dev_build_requests_source_check — widen the list HERE, never in a new
+-- file, or that file becomes the narrowing on the next deploy.
 begin;
 alter table dev_build_requests drop constraint if exists dev_build_requests_source_check;
 alter table dev_build_requests add constraint dev_build_requests_source_check
-  check (source in ('transcript','directive','github'));
+  check (source in ('transcript','directive','github','design-loop'));
 commit;
 
 comment on column dev_build_requests.expedite is
