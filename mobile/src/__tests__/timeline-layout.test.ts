@@ -1,15 +1,21 @@
 /**
- * Pins the mission-timeline layout rules in timelineLayout.ts:
- * hour spans, empty-hour collapse, today-vs-past behavior, and label
- * precedence. Timestamps are local wall-clock strings (no Z) so hour
- * extraction is deterministic in any CI timezone.
+ * Pins the fixed-hour time-grid rules in timelineLayout.ts: minute offsets,
+ * the 5-minute visual floor, duration sizing from start+end pairs, overlap
+ * lanes, and grid heights (past days = full 24 h, today ends at NOW).
+ * Timestamps are local wall-clock strings (no Z) so hour extraction is
+ * deterministic in any CI timezone.
  */
 import {
-  buildTimelineRows,
+  layoutDayBlocks,
+  dayGridHeight,
+  visibleHours,
   entryLabel,
+  entryEndTimestamp,
   fmtHour,
-  fmtGapLabel,
-  DEFAULT_DAY_START_HOUR,
+  MINUTE_HEIGHT,
+  HOUR_HEIGHT,
+  DAY_GRID_HEIGHT,
+  MIN_EVENT_MINUTES,
 } from '../components/dashboard/timelineLayout';
 import type { ActivityLogEntry } from '../hooks/useActivityLog';
 
@@ -23,104 +29,119 @@ function act(id: string, start: string, extra: Partial<ActivityLogEntry> = {}): 
 
 const NOW = new Date('2026-08-06T16:30:00'); // 4:30 PM local
 
-describe('buildTimelineRows', () => {
-  it('today: spans from DEFAULT_DAY_START_HOUR through the current hour, collapsing empty runs', () => {
-    const rows = buildTimelineRows(
-      [cig('a', '2026-08-06T09:05:00'), cig('b', '2026-08-06T09:40:00'), cig('c', '2026-08-06T14:10:00')],
-      true,
-      NOW,
-    );
-    expect(rows).toEqual([
-      { kind: 'gap', fromHour: DEFAULT_DAY_START_HOUR, toHour: 8 },
-      { kind: 'hour', hour: 9, entries: [expect.objectContaining({ id: 'a' }), expect.objectContaining({ id: 'b' })] },
-      { kind: 'gap', fromHour: 10, toHour: 13 },
-      { kind: 'hour', hour: 14, entries: [expect.objectContaining({ id: 'c' })] },
-      { kind: 'gap', fromHour: 15, toHour: 16 },
+describe('layoutDayBlocks', () => {
+  it('positions a block at its minute-of-day offset', () => {
+    const [b] = layoutDayBlocks([cig('a', '2026-08-06T09:05:00')]);
+    expect(b.startMinute).toBe(9 * 60 + 5);
+  });
+
+  it('floors instant logs at the 5-minute visual minimum', () => {
+    const [b] = layoutDayBlocks([cig('a', '2026-08-06T09:05:00')]);
+    expect(b.spanMinutes).toBe(MIN_EVENT_MINUTES);
+    expect(b.hasDuration).toBe(false);
+  });
+
+  it('sizes an activity with start+end by its real duration', () => {
+    const [b] = layoutDayBlocks([
+      act('gym', '2026-08-06T14:00:00', { end_time: '2026-08-06T14:45:00', activity_name: 'Gym' }),
     ]);
+    expect(b.spanMinutes).toBe(45);
+    expect(b.hasDuration).toBe(true);
   });
 
-  it('today: an entry before the default start extends the span earlier', () => {
-    const rows = buildTimelineRows([cig('a', '2026-08-06T05:12:00')], true, NOW);
-    expect(rows[0]).toEqual({ kind: 'hour', hour: 5, entries: [expect.objectContaining({ id: 'a' })] });
-    expect(rows[rows.length - 1]).toEqual({ kind: 'gap', fromHour: 6, toHour: 16 });
-  });
-
-  it('today: never renders hours after the current hour', () => {
-    const rows = buildTimelineRows([cig('a', '2026-08-06T09:00:00')], true, NOW);
-    for (const row of rows) {
-      const maxHour = row.kind === 'hour' ? row.hour : row.toHour;
-      expect(maxHour).toBeLessThanOrEqual(16);
-    }
-  });
-
-  it('past day: spans only from first to last entry, no scaffolding around them', () => {
-    const rows = buildTimelineRows(
-      [cig('a', '2026-08-05T22:15:00'), cig('b', '2026-08-05T20:00:00')],
-      false,
-      NOW,
-    );
-    expect(rows).toEqual([
-      { kind: 'hour', hour: 20, entries: [expect.objectContaining({ id: 'b' })] },
-      { kind: 'gap', fromHour: 21, toHour: 21 },
-      { kind: 'hour', hour: 22, entries: [expect.objectContaining({ id: 'a' })] },
+  it('a duration shorter than the floor still renders at the floor', () => {
+    const [b] = layoutDayBlocks([
+      act('sip', '2026-08-06T14:00:00', { end_time: '2026-08-06T14:02:00' }),
     ]);
+    expect(b.spanMinutes).toBe(MIN_EVENT_MINUTES);
+    expect(b.hasDuration).toBe(true);
   });
 
-  it('entries are sorted ascending within an hour and across the day', () => {
-    const rows = buildTimelineRows(
-      [cig('late', '2026-08-05T10:45:00'), cig('early', '2026-08-05T10:05:00')],
-      false,
-      NOW,
-    );
-    expect(rows).toHaveLength(1);
-    expect(rows[0].kind).toBe('hour');
-    if (rows[0].kind === 'hour') {
-      expect(rows[0].entries.map((e) => e.id)).toEqual(['early', 'late']);
-    }
-  });
-
-  it('empty day renders no rows — no placeholder blocks, past or today', () => {
-    expect(buildTimelineRows([], false, NOW)).toEqual([]);
-    expect(buildTimelineRows([], true, NOW)).toEqual([]);
-  });
-
-  it('activity entries key off start_time', () => {
-    const rows = buildTimelineRows([act('g', '2026-08-05T11:20:00', { activity_name: 'Gym drive' })], false, NOW);
-    expect(rows).toEqual([
-      { kind: 'hour', hour: 11, entries: [expect.objectContaining({ id: 'g' })] },
+  it("honors a cigarette's metadata end_time / duration_minutes", () => {
+    const [byEnd] = layoutDayBlocks([
+      cig('a', '2026-08-06T10:00:00', { metadata: { end_time: '2026-08-06T10:20:00' } }),
     ]);
+    expect(byEnd.spanMinutes).toBe(20);
+    const [byDur] = layoutDayBlocks([
+      cig('b', '2026-08-06T10:00:00', { metadata: { duration_minutes: 12 } }),
+    ]);
+    expect(byDur.spanMinutes).toBe(12);
   });
 
-  it('entries without any timestamp are skipped, not crashed on', () => {
+  it('clamps a span that would run past midnight', () => {
+    const [b] = layoutDayBlocks([
+      act('late', '2026-08-06T23:30:00', { end_time: '2026-08-07T01:00:00' }),
+    ]);
+    expect(b.startMinute + b.spanMinutes).toBe(24 * 60);
+  });
+
+  it('gives overlapping blocks separate lanes at shared width', () => {
+    const blocks = layoutDayBlocks([
+      act('a', '2026-08-06T14:00:00', { end_time: '2026-08-06T15:00:00' }),
+      cig('b', '2026-08-06T14:30:00'),
+    ]);
+    const lanes = blocks.map((b) => b.lane).sort();
+    expect(lanes).toEqual([0, 1]);
+    expect(blocks.every((b) => b.laneCount === 2)).toBe(true);
+  });
+
+  it('non-overlapping blocks keep full width (laneCount 1)', () => {
+    const blocks = layoutDayBlocks([
+      cig('a', '2026-08-06T09:00:00'),
+      cig('b', '2026-08-06T11:00:00'),
+    ]);
+    expect(blocks.every((b) => b.lane === 0 && b.laneCount === 1)).toBe(true);
+  });
+
+  it('skips entries without a parseable timestamp', () => {
     const bad = { type: 'cigarette', id: 'x' } as ActivityLogEntry;
-    expect(buildTimelineRows([bad], false, NOW)).toEqual([]);
+    expect(layoutDayBlocks([bad])).toEqual([]);
   });
 });
 
-describe('entryLabel', () => {
-  it('cigarette: activityLabel > metadata.activityLabel > location > fallback', () => {
+describe('dayGridHeight / visibleHours', () => {
+  it('past days always render the full 24-hour grid', () => {
+    expect(dayGridHeight(false, NOW)).toBe(DAY_GRID_HEIGHT);
+    expect(visibleHours(DAY_GRID_HEIGHT)).toHaveLength(24);
+  });
+
+  it("today's grid ends at the current minute (the NOW line)", () => {
+    expect(dayGridHeight(true, NOW)).toBe((16 * 60 + 30) * MINUTE_HEIGHT);
+  });
+
+  it('today shows hour marks up to the current hour only', () => {
+    const hours = visibleHours(dayGridHeight(true, NOW));
+    expect(hours[hours.length - 1]).toBe(16);
+  });
+
+  it('hour height is uniform — the grid is proportional', () => {
+    expect(HOUR_HEIGHT).toBe(60 * MINUTE_HEIGHT);
+    expect(DAY_GRID_HEIGHT).toBe(24 * HOUR_HEIGHT);
+  });
+});
+
+describe('entry helpers', () => {
+  it('entryEndTimestamp reads activity end_time and cigarette metadata', () => {
+    expect(entryEndTimestamp(act('a', 't', { end_time: 'e' }))).toBe('e');
+    expect(entryEndTimestamp(cig('b', 't', { metadata: { end_time: 'e2' } }))).toBe('e2');
+    expect(entryEndTimestamp(cig('c', 't'))).toBeNull();
+  });
+
+  it('cigarette label precedence: activityLabel > metadata.activityLabel > location > fallback', () => {
     expect(entryLabel(cig('a', 't', { activityLabel: 'Car', location: 'Garage' }))).toBe('Car');
     expect(entryLabel(cig('b', 't', { metadata: { activityLabel: 'Couch' } }))).toBe('Couch');
     expect(entryLabel(cig('c', 't', { location: 'Garage' }))).toBe('Garage');
     expect(entryLabel(cig('d', 't'))).toBe('Cigarette');
   });
 
-  it('activity: uses activity_name with a fallback', () => {
+  it('activity label uses activity_name with a fallback', () => {
     expect(entryLabel(act('a', 't', { activity_name: 'Gym drive' }))).toBe('Gym drive');
     expect(entryLabel(act('b', 't'))).toBe('Activity');
   });
-});
 
-describe('hour formatting', () => {
   it('formats 12-hour labels', () => {
     expect(fmtHour(0)).toBe('12 AM');
-    expect(fmtHour(7)).toBe('7 AM');
     expect(fmtHour(12)).toBe('12 PM');
     expect(fmtHour(16)).toBe('4 PM');
-  });
-
-  it('formats gap ranges, collapsing single-hour gaps', () => {
-    expect(fmtGapLabel(9, 9)).toBe('9 AM');
-    expect(fmtGapLabel(10, 13)).toBe('10 AM – 1 PM');
   });
 });
