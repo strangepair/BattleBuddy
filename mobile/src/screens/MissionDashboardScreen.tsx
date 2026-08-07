@@ -12,21 +12,23 @@ import type { SmokingLog } from '../hooks/useSmokingLogs';
 
 /**
  * MissionDashboardScreen — the "time since last cigarette" hero on top,
- * day calendar below, as ONE continuous scroll.
+ * bottom-anchored day calendar below.
  *
- * A single FlatList owns all scrolling. HeroMetric is the list's
- * ListHeaderComponent — it rides the same scroll as the timeline, never a
- * fixed sibling above a second scroll region. Each item is one day rendered as an
- * hour-by-hour timeline (DayTimelineSection) where EVERY logged event —
- * cigarettes and generic activities (gym, drive, couch, meals…) — appears as
- * a labeled block at its time. Today renders first (with a NOW marker);
- * previous days lazily page in backward to account creation via
- * useActivityLog's loadMore as the user scrolls.
+ * A single INVERTED FlatList owns all scrolling. The days array is
+ * newest-first, so with `inverted` today sits at the BOTTOM: the view opens
+ * anchored at the NOW line, and pulling down scrolls back through earlier
+ * hours and previous days, lazily appending older days at the visual TOP
+ * (append-at-array-end in an inverted list shifts nothing — no jump on
+ * load). Each day is a fixed-hour time grid (DayTimelineSection): every
+ * hour a uniform height, every logged event — cigarettes and generic
+ * activities — a block at its minute offset sized by its duration
+ * (5-minute visual floor for instant logs).
  *
- * There are deliberately no nested scrollables and no fixed-height panes:
- * the previous layout stacked two scroll regions (a 2,880px 24-hour canvas
- * and a history FlatList) inside a non-scrolling View whose minHeights
- * overflowed the pane, clipping the history list to a one-line window.
+ * The hero is a plain fixed card ABOVE the list: in a bottom-anchored
+ * timeline a scroll-away header would sit beyond all of history and never
+ * be visible on open. This is still exactly ONE scroll surface — the #150
+ * antipattern was two scrollables clipped inside fixed-height panes, and
+ * none of that returns here.
  *
  * Real-time layer: subscribes to `dashboard:update` SSE broadcasts and merges
  * new events into today's section without a manual refresh.
@@ -82,6 +84,8 @@ export default function MissionDashboardScreen() {
   );
   const keyExtractor = useCallback((item: DayBucket) => item.date, []);
 
+  // In an inverted list the footer renders at the visual TOP — exactly where
+  // "loading older days" / "beginning of history" belongs.
   const ListFooter = useCallback(() => {
     if (loadingInitial || loadingMore) {
       return (
@@ -116,21 +120,23 @@ export default function MissionDashboardScreen() {
     : '';
 
   return (
-    <>
+    <View style={styles.root}>
+      <HeroMetric logs={heroLogs} loading={loading} />
       <FlatList
-        style={styles.root}
+        style={styles.list}
         contentContainerStyle={styles.content}
         data={days}
+        inverted
         keyExtractor={keyExtractor}
         renderItem={renderItem}
-        ListHeaderComponent={<HeroMetric logs={heroLogs} loading={loading} />}
         ListFooterComponent={ListFooter}
         onEndReached={loadMore}
         onEndReachedThreshold={0.5}
         showsVerticalScrollIndicator={true}
-        initialNumToRender={4}
-        maxToRenderPerBatch={8}
-        windowSize={7}
+        initialNumToRender={2}
+        maxToRenderPerBatch={4}
+        windowSize={5}
+        maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
       />
       <CalendarDetailModal
         visible={selectedEntry !== null}
@@ -138,7 +144,7 @@ export default function MissionDashboardScreen() {
         title={modalTitle}
         description={modalDescription}
       />
-    </>
+    </View>
   );
 }
 
@@ -146,11 +152,16 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: Colors.background,
-  },
-  content: {
     paddingHorizontal: Spacing.md,
     paddingTop: Spacing.xs,
-    paddingBottom: Spacing.xl,
+  },
+  list: {
+    flex: 1,
+  },
+  content: {
+    // Inverted list: "top" padding here is the visual bottom, next to NOW.
+    paddingTop: Spacing.sm,
+    paddingBottom: Spacing.md,
   },
   footer: {
     alignItems: 'center',

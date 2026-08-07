@@ -1,13 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Colors, Spacing, Radii } from '../../theme';
 import type { ActivityLogEntry, DayBucket } from '../../hooks/useActivityLog';
 import {
-  buildTimelineRows,
+  layoutDayBlocks,
+  dayGridHeight,
+  visibleHours,
   entryLabel,
   entryTimestamp,
   fmtHour,
-  fmtGapLabel,
+  MINUTE_HEIGHT,
+  HOUR_HEIGHT,
 } from './timelineLayout';
 
 const HOUR_LABEL_WIDTH = 56;
@@ -28,41 +31,19 @@ function fmtTime(ts: string): string {
   return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
-function EntryBlock({ entry, onPress }: { entry: ActivityLogEntry; onPress?: (e: ActivityLogEntry) => void }) {
-  const ts = entryTimestamp(entry);
-  const isActivity = entry.type === 'activity';
-  const endTs = isActivity ? entry.end_time : (entry.metadata?.end_time as string | undefined);
-  const time = ts ? fmtTime(ts) : '';
-  const timeRange = endTs ? `${time} – ${fmtTime(endTs)}` : time;
-
-  return (
-    <TouchableOpacity
-      style={[styles.entryBlock, isActivity ? styles.entryBlockActivity : styles.entryBlockCigarette]}
-      activeOpacity={onPress ? 0.7 : 1}
-      onPress={onPress ? () => onPress(entry) : undefined}
-      disabled={!onPress}
-    >
-      <View style={[styles.entryDot, isActivity && styles.entryDotActivity]} />
-      <Text style={styles.entryTime}>{timeRange}</Text>
-      <Text style={styles.entryLabel} numberOfLines={1} ellipsizeMode="tail">
-        {entryLabel(entry)}
-      </Text>
-    </TouchableOpacity>
-  );
-}
-
 /**
- * DayTimelineSection renders one day of the mission timeline as flat content
- * (no internal scrolling — the parent FlatList owns the single scroll).
+ * DayTimelineSection renders one day as a fixed-hour time grid (no internal
+ * scrolling — the parent inverted FlatList owns the single scroll).
  *
- * Layout: a day header, then hour rows for every hour that has entries, with
- * runs of empty hours collapsed into slim gap dividers. Today's section spans
- * from the morning (or first entry) through the current hour and closes with
- * a NOW marker; past days span only their own entries. Days with no entries
- * render one slim empty row — never placeholder blocks.
+ * Every hour is HOUR_HEIGHT px — a true proportional grid; quiet hours are
+ * NOT collapsed. Each logged event is an absolutely positioned block at its
+ * minute offset, sized by its real duration when a start+end pair exists and
+ * floored at a 5-minute span so instant logs stay visible. Overlapping
+ * blocks share horizontal lanes. Past days render all 24 hours; today runs
+ * midnight → the NOW line and grows with the minute tick.
  */
 export default function DayTimelineSection({ bucket, isToday, onPressEntry }: DayTimelineSectionProps) {
-  // Minute tick so today's NOW marker and hour span stay current while the
+  // Minute tick so today's grid height and NOW line stay current while the
   // dashboard sits open. Past-day sections never re-render from this.
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
@@ -71,52 +52,71 @@ export default function DayTimelineSection({ bucket, isToday, onPressEntry }: Da
     return () => clearInterval(t);
   }, [isToday]);
 
-  const rows = buildTimelineRows(bucket.entries, isToday, now);
-  const count = bucket.entries.length;
+  const blocks = useMemo(() => layoutDayBlocks(bucket.entries), [bucket.entries]);
+  const gridHeight = dayGridHeight(isToday, now);
+  const hours = visibleHours(gridHeight);
 
   return (
     <View style={styles.section}>
-      <View style={[styles.dayHeader, isToday && styles.dayHeaderToday]}>
+      <View style={styles.dayHeader}>
         <Text style={[styles.dayHeaderText, isToday && styles.dayHeaderTextToday]}>
           {fmtDayHeader(bucket.date, isToday)}
         </Text>
-        {count > 0 && <Text style={styles.dayCount}>{count}</Text>}
+        {bucket.entries.length > 0 && (
+          <Text style={styles.dayCount}>{bucket.entries.length}</Text>
+        )}
       </View>
 
-      {rows.length === 0 ? (
-        <View style={styles.emptyRow}>
-          <Text style={styles.emptyText}>
-            {isToday ? 'Nothing logged yet today' : '—'}
-          </Text>
-        </View>
-      ) : (
-        rows.map((row) =>
-          row.kind === 'gap' ? (
-            <View key={`gap-${row.fromHour}`} style={styles.gapRow}>
-              <Text style={styles.gapLabel}>{fmtGapLabel(row.fromHour, row.toHour)}</Text>
-              <View style={styles.gapRule} />
-            </View>
-          ) : (
-            <View key={`hour-${row.hour}`} style={styles.hourRow}>
-              <Text style={styles.hourLabel}>{fmtHour(row.hour)}</Text>
-              <View style={styles.hourEntries}>
-                {row.entries.map((entry) => (
-                  <EntryBlock key={`${entry.type}-${entry.id}`} entry={entry} onPress={onPressEntry} />
-                ))}
-              </View>
-            </View>
-          ),
-        )
-      )}
+      <View style={[styles.grid, { height: gridHeight }]}>
+        {hours.map((h) => (
+          <View key={h} style={[styles.hourRow, { top: h * HOUR_HEIGHT }]} pointerEvents="none">
+            <Text style={styles.hourLabel}>{fmtHour(h)}</Text>
+            <View style={styles.hourRule} />
+          </View>
+        ))}
 
-      {isToday && (
-        <View style={styles.nowRow}>
-          <View style={styles.nowLine} />
-          <Text style={styles.nowText}>
-            NOW · {now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
-          </Text>
+        {/* Blocks live in a layer inset past the hour gutter, so lane
+            percentages divide only the plottable width. */}
+        <View style={styles.blockLayer}>
+          {blocks.map((b) => {
+            const ts = entryTimestamp(b.entry);
+            const isActivity = b.entry.type === 'activity';
+            const laneWidthPct = 100 / b.laneCount;
+            const time = ts ? fmtTime(ts) : '';
+            return (
+              <TouchableOpacity
+                key={`${b.entry.type}-${b.entry.id}`}
+                style={[
+                  styles.block,
+                  isActivity ? styles.blockActivity : styles.blockCigarette,
+                  {
+                    top: b.startMinute * MINUTE_HEIGHT,
+                    height: b.spanMinutes * MINUTE_HEIGHT,
+                    left: `${b.lane * laneWidthPct}%` as `${number}%`,
+                    width: `${laneWidthPct}%` as `${number}%`,
+                  },
+                ]}
+                activeOpacity={onPressEntry ? 0.7 : 1}
+                onPress={onPressEntry ? () => onPressEntry(b.entry) : undefined}
+                disabled={!onPressEntry}
+              >
+                <Text style={styles.blockLabel} numberOfLines={1} ellipsizeMode="tail">
+                  {time} · {entryLabel(b.entry)}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </View>
-      )}
+
+        {isToday && (
+          <View style={[styles.nowRow, { top: gridHeight - 1 }]} pointerEvents="none">
+            <View style={styles.nowLine} />
+            <Text style={styles.nowText}>
+              NOW · {now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
+            </Text>
+          </View>
+        )}
+      </View>
     </View>
   );
 }
@@ -134,7 +134,6 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.md,
     paddingBottom: Spacing.xs,
   },
-  dayHeaderToday: {},
   dayHeaderText: {
     fontSize: 11,
     fontWeight: '700',
@@ -151,109 +150,77 @@ const styles = StyleSheet.create({
     color: Colors.textTertiary,
     fontVariant: ['tabular-nums'],
   },
-  emptyRow: {
-    paddingVertical: Spacing.xs,
-    paddingHorizontal: Spacing.sm,
+  grid: {
+    position: 'relative',
   },
-  emptyText: {
-    fontSize: 13,
-    color: Colors.textTertiary,
-    marginLeft: HOUR_LABEL_WIDTH,
+  blockLayer: {
+    position: 'absolute',
+    left: HOUR_LABEL_WIDTH,
+    right: Spacing.xs,
+    top: 0,
+    bottom: 0,
   },
   hourRow: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
     flexDirection: 'row',
     alignItems: 'flex-start',
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 3,
   },
   hourLabel: {
     width: HOUR_LABEL_WIDTH,
-    fontSize: 11,
-    fontWeight: '600',
-    color: Colors.textSecondary,
-    fontVariant: ['tabular-nums'],
-    textAlign: 'right',
-    paddingRight: Spacing.sm,
-    paddingTop: 8,
-    flexShrink: 0,
-  },
-  hourEntries: {
-    flex: 1,
-    gap: 4,
-  },
-  entryBlock: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderRadius: Radii.sm,
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 7,
-    gap: Spacing.sm,
-  },
-  entryBlockCigarette: {
-    backgroundColor: 'rgba(232,98,74,0.16)',
-    borderWidth: 1,
-    borderColor: 'rgba(232,98,74,0.35)',
-  },
-  entryBlockActivity: {
-    backgroundColor: 'rgba(91,159,255,0.10)',
-    borderWidth: 1,
-    borderColor: 'rgba(91,159,255,0.28)',
-  },
-  entryDot: {
-    width: 8,
-    height: 8,
-    borderRadius: Radii.full,
-    backgroundColor: Colors.coral,
-    flexShrink: 0,
-  },
-  entryDotActivity: {
-    backgroundColor: Colors.stateIdle,
-  },
-  entryTime: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: Colors.textSecondary,
-    fontVariant: ['tabular-nums'],
-    flexShrink: 0,
-  },
-  entryLabel: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: Colors.textPrimary,
-    flex: 1,
-  },
-  gapRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: Spacing.sm,
-    height: 26,
-  },
-  gapLabel: {
-    width: HOUR_LABEL_WIDTH + 40,
     fontSize: 10,
+    fontWeight: '600',
     color: Colors.textTertiary,
     fontVariant: ['tabular-nums'],
     textAlign: 'right',
     paddingRight: Spacing.sm,
+    lineHeight: 11,
     flexShrink: 0,
   },
-  gapRule: {
+  hourRule: {
     flex: 1,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: Colors.surfaceBorder,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.surfaceBorder,
+    marginTop: 5,
+  },
+  block: {
+    position: 'absolute',
+    borderRadius: Radii.sm,
+    paddingHorizontal: 5,
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  blockCigarette: {
+    backgroundColor: 'rgba(232,98,74,0.55)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(232,98,74,0.9)',
+  },
+  blockActivity: {
+    backgroundColor: 'rgba(91,159,255,0.35)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(91,159,255,0.7)',
+  },
+  blockLabel: {
+    fontSize: 10,
+    lineHeight: 12,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    fontVariant: ['tabular-nums'],
   },
   nowRow: {
+    position: 'absolute',
+    left: HOUR_LABEL_WIDTH,
+    right: 0,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: Spacing.sm,
-    marginTop: Spacing.xs,
     gap: Spacing.sm,
   },
   nowLine: {
     flex: 1,
     height: 2,
     borderRadius: 1,
-    backgroundColor: 'rgba(91,159,255,0.6)',
+    backgroundColor: 'rgba(91,159,255,0.7)',
   },
   nowText: {
     fontSize: 10,

@@ -1,23 +1,47 @@
 import type { ActivityLogEntry } from '../../hooks/useActivityLog';
 
 /**
- * Pure layout helpers for DayTimelineSection.
+ * Pure layout math for the fixed-hour time grid (DayTimelineSection).
  *
- * A day renders as a list of rows: hour rows (hours that contain entries)
- * and gap rows (runs of empty hours collapsed into a single slim divider).
- * Keeping this logic pure lets timeline-layout.test.ts pin the span and
- * collapse rules without mounting React Native components.
+ * Every hour of every day is a uniform fixed height — a true proportional
+ * time grid (no collapsing of quiet hours). Events become absolutely
+ * positioned blocks: top = minute offset, height = real duration when a
+ * start AND end are known, floored at MIN_EVENT_MINUTES so instant logs
+ * stay visible. Overlapping blocks share horizontal lanes.
+ *
+ * Keeping this pure lets timeline-layout.test.ts pin the offsets, the
+ * 5-minute floor, duration sizing, and lane assignment without mounting
+ * React Native components.
  */
 
-export type TimelineRow =
-  | { kind: 'hour'; hour: number; entries: ActivityLogEntry[] }
-  | { kind: 'gap'; fromHour: number; toHour: number };
+export const MINUTE_HEIGHT = 2.5;
+export const HOUR_HEIGHT = 60 * MINUTE_HEIGHT;
+export const DAY_GRID_HEIGHT = 24 * HOUR_HEIGHT;
+export const MIN_EVENT_MINUTES = 5;
 
-/** Earliest hour today's timeline starts at when no entry precedes it. */
-export const DEFAULT_DAY_START_HOUR = 7;
+export interface TimelineBlock {
+  entry: ActivityLogEntry;
+  /** Minutes after midnight the block starts at. */
+  startMinute: number;
+  /** Rendered span in minutes (real duration, floored at MIN_EVENT_MINUTES). */
+  spanMinutes: number;
+  /** True when the span comes from a real start+end pair, not the floor. */
+  hasDuration: boolean;
+  /** Horizontal lane index within its overlap cluster (0-based). */
+  lane: number;
+  /** Total lanes in the block's overlap cluster (≥1). */
+  laneCount: number;
+}
 
 export function entryTimestamp(e: ActivityLogEntry): string | null {
   return e.occurred_at ?? e.start_time ?? null;
+}
+
+/** End timestamp when the log carries one (activities' end_time, or a cigarette's metadata). */
+export function entryEndTimestamp(e: ActivityLogEntry): string | null {
+  if (e.type === 'activity') return e.end_time ?? null;
+  const metaEnd = e.metadata?.end_time;
+  return typeof metaEnd === 'string' ? metaEnd : null;
 }
 
 export function entryLabel(e: ActivityLogEntry): string {
@@ -37,76 +61,105 @@ export function fmtHour(h: number): string {
   return `${hr} ${suffix}`;
 }
 
-export function fmtGapLabel(fromHour: number, toHour: number): string {
-  if (fromHour === toHour) return fmtHour(fromHour);
-  return `${fmtHour(fromHour)} – ${fmtHour(toHour)}`;
+function minuteOfDay(d: Date): number {
+  return d.getHours() * 60 + d.getMinutes();
+}
+
+/** Real duration in minutes, from start+end or a cigarette's metadata.duration_minutes. */
+function realDurationMinutes(e: ActivityLogEntry, start: Date): number | null {
+  const endTs = entryEndTimestamp(e);
+  if (endTs) {
+    const end = new Date(endTs);
+    if (!Number.isNaN(end.getTime())) {
+      const min = (end.getTime() - start.getTime()) / 60_000;
+      if (min > 0) return min;
+    }
+  }
+  const metaDur = e.type === 'cigarette' ? e.metadata?.duration_minutes : undefined;
+  if (typeof metaDur === 'number' && metaDur > 0) return metaDur;
+  return null;
 }
 
 /**
- * Build the row list for one day.
+ * Lay out one day's entries on the fixed grid.
  *
- * Span rules:
- *  - today: from min(first entry hour, DEFAULT_DAY_START_HOUR, now hour)
- *    through the current hour — future hours don't exist yet.
- *  - past day: from its first entry's hour through its last entry's hour.
- *  - a day with no entries renders no rows (the section shows its own
- *    empty state); no placeholder blocks are ever injected.
- *
- * Entries are sorted ascending within their hour. Consecutive empty hours
- * collapse into one gap row.
+ * Blocks are clamped to the day (span past midnight is cut at 24:00).
+ * Overlap lanes are assigned greedily within transitive overlap clusters,
+ * so two simultaneous events sit side by side at half width each while
+ * isolated events keep the full width.
  */
-export function buildTimelineRows(
-  entries: ActivityLogEntry[],
-  isToday: boolean,
-  now: Date = new Date(),
-): TimelineRow[] {
+export function layoutDayBlocks(entries: ActivityLogEntry[]): TimelineBlock[] {
   const dated = entries
     .map((e) => {
       const ts = entryTimestamp(e);
-      return ts ? { e, d: new Date(ts) } : null;
+      if (!ts) return null;
+      const d = new Date(ts);
+      if (Number.isNaN(d.getTime())) return null;
+      const startMinute = minuteOfDay(d);
+      const dur = realDurationMinutes(e, d);
+      const spanMinutes = Math.min(
+        Math.max(dur ?? 0, MIN_EVENT_MINUTES),
+        24 * 60 - startMinute,
+      );
+      return {
+        entry: e,
+        startMinute,
+        spanMinutes,
+        hasDuration: dur !== null,
+        lane: 0,
+        laneCount: 1,
+      };
     })
-    .filter((x): x is { e: ActivityLogEntry; d: Date } => x !== null && !Number.isNaN(x.d.getTime()))
-    .sort((a, b) => a.d.getTime() - b.d.getTime());
+    .filter((b): b is TimelineBlock => b !== null)
+    .sort((a, b) => a.startMinute - b.startMinute || a.spanMinutes - b.spanMinutes);
 
-  if (dated.length === 0 && !isToday) return [];
-
-  const nowHour = now.getHours();
-  let start: number;
-  let end: number;
-  if (dated.length === 0) {
-    // Today with nothing logged yet — no hour scaffolding, just the empty state.
-    return [];
-  } else if (isToday) {
-    start = Math.min(dated[0].d.getHours(), DEFAULT_DAY_START_HOUR, nowHour);
-    end = Math.max(nowHour, dated[dated.length - 1].d.getHours());
-  } else {
-    start = dated[0].d.getHours();
-    end = dated[dated.length - 1].d.getHours();
-  }
-
-  const byHour = new Map<number, ActivityLogEntry[]>();
-  for (const { e, d } of dated) {
-    const h = d.getHours();
-    if (!byHour.has(h)) byHour.set(h, []);
-    byHour.get(h)!.push(e);
-  }
-
-  const rows: TimelineRow[] = [];
-  let gapStart: number | null = null;
-  for (let h = start; h <= end; h++) {
-    const inHour = byHour.get(h);
-    if (inHour && inHour.length > 0) {
-      if (gapStart !== null) {
-        rows.push({ kind: 'gap', fromHour: gapStart, toHour: h - 1 });
-        gapStart = null;
+  // Cluster transitively-overlapping blocks, then greedily assign lanes
+  // within each cluster.
+  let clusterStart = 0;
+  let clusterEnd = -1;
+  const flush = (from: number, to: number) => {
+    const laneEnds: number[] = [];
+    for (let i = from; i < to; i++) {
+      const b = dated[i];
+      let lane = laneEnds.findIndex((end) => end <= b.startMinute);
+      if (lane === -1) {
+        lane = laneEnds.length;
+        laneEnds.push(0);
       }
-      rows.push({ kind: 'hour', hour: h, entries: inHour });
-    } else if (gapStart === null) {
-      gapStart = h;
+      laneEnds[lane] = b.startMinute + b.spanMinutes;
+      b.lane = lane;
     }
+    for (let i = from; i < to; i++) dated[i].laneCount = laneEnds.length;
+  };
+  for (let i = 0; i < dated.length; i++) {
+    const b = dated[i];
+    if (b.startMinute >= clusterEnd && i > clusterStart) {
+      flush(clusterStart, i);
+      clusterStart = i;
+      clusterEnd = -1;
+    }
+    clusterEnd = Math.max(clusterEnd, b.startMinute + b.spanMinutes);
   }
-  if (gapStart !== null) {
-    rows.push({ kind: 'gap', fromHour: gapStart, toHour: end });
+  if (dated.length > 0) flush(clusterStart, dated.length);
+
+  return dated;
+}
+
+/**
+ * Height in px of a day's grid. Past days always render the full 24 hours;
+ * today's grid runs midnight → the current minute (the NOW line is the
+ * bottom edge — future hours don't exist yet).
+ */
+export function dayGridHeight(isToday: boolean, now: Date = new Date()): number {
+  if (!isToday) return DAY_GRID_HEIGHT;
+  return Math.max(minuteOfDay(now) * MINUTE_HEIGHT, HOUR_HEIGHT);
+}
+
+/** Hour marks (0..23) that fall inside a grid of the given px height. */
+export function visibleHours(gridHeight: number): number[] {
+  const hours: number[] = [];
+  for (let h = 0; h < 24; h++) {
+    if (h * HOUR_HEIGHT < gridHeight) hours.push(h);
   }
-  return rows;
+  return hours;
 }
