@@ -3902,12 +3902,8 @@ setInterval(() => { runNudgeSweep().catch(() => {}); }, NUDGE_CHECK_INTERVAL_MS)
 // commits came from) — a laptop that's asleep is a design loop that doesn't
 // run. Now it runs in-process: daily, only when there are new sessions since
 // the last run. First boot seeds the state file instead of running, so a
-// deploy never triggers a surprise run; POST /admin/console/design-loop/run
-// covers "I want it now".
-//
-// The schedule is unchanged, but the OUTPUT is: the loop proposes a PR plus a
-// pipeline item for review (server/promptPr.js) instead of writing the live
-// prompt. Nothing here can change the buddy's behaviour on its own any more.
+// deploy never triggers a surprise prompt rewrite; POST
+// /admin/console/design-loop/run covers "I want it now".
 const DESIGN_LOOP_CHECK_MS = 60 * 60 * 1000;
 const DESIGN_LOOP_MIN_GAP_MS = 23 * 3600 * 1000;
 const designLoopStatePath = () => resolve(process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store'), 'design-loop-state.json');
@@ -3932,7 +3928,7 @@ async function runScheduledDesignLoop() {
   console.log('[DesignLoop] Scheduled daily run starting');
   try {
     const result = await runDesignLoop({ email: true, trigger: 'schedule' });
-    console.log(`[DesignLoop] Scheduled run finished: ${result.proposed ? `proposed PR #${result.prNumber} for review` : 'nothing proposed'}`);
+    console.log(`[DesignLoop] Scheduled run finished: ${result.changed ? 'prompt updated' : 'no changes applied'}`);
   } catch (e) {
     console.error('[DesignLoop] Scheduled run failed:', e.message);
   }
