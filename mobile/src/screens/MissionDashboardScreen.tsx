@@ -1,12 +1,12 @@
-import { FlatList, View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import { FlatList, View, Text, StyleSheet, ActivityIndicator, type LayoutChangeEvent } from 'react-native';
 import { Colors, Spacing } from '../theme';
 import HeroMetric from '../components/dashboard/HeroMetric';
 import DayTimelineSection from '../components/dashboard/DayTimelineSection';
 import CalendarDetailModal from '../components/dashboard/CalendarDetailModal';
-import { entryLabel, entryTimestamp } from '../components/dashboard/timelineLayout';
+import { entryLabel, entryTimestamp, dayGridHeight, HOUR_HEIGHT } from '../components/dashboard/timelineLayout';
 import { useSmokingLogs } from '../hooks/useSmokingLogs';
 import { useActivityLog, type ActivityLogEntry, type DayBucket } from '../hooks/useActivityLog';
-import { useMemo, useState, useCallback, useEffect } from 'react';
+import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { useDashboardRealtime } from '../hooks/useDashboardRealtime';
 import type { SmokingLog } from '../hooks/useSmokingLogs';
 
@@ -34,6 +34,9 @@ import type { SmokingLog } from '../hooks/useSmokingLogs';
  * new events into today's section without a manual refresh.
  */
 export default function MissionDashboardScreen() {
+  const flatListRef = useRef<FlatList>(null);
+  const listHeightRef = useRef<number>(0);
+  const scrolledRef = useRef(false);
   const { todayLogs, historyLogs, loading } = useSmokingLogs();
   const { realtimeEvents } = useDashboardRealtime(todayLogs);
   const [selectedEntry, setSelectedEntry] = useState<ActivityLogEntry | null>(null);
@@ -70,6 +73,27 @@ export default function MissionDashboardScreen() {
   useEffect(() => {
     loadMore();
   }, [loadMore]);
+
+  const scrollToCurrentHour = useCallback(() => {
+    if (scrolledRef.current || listHeightRef.current === 0 || days.length === 0) return;
+    const now = new Date();
+    const gridHeight = dayGridHeight(true, now);
+    const currentHourTop = now.getHours() * HOUR_HEIGHT;
+    const offset = gridHeight - currentHourTop - listHeightRef.current;
+    if (offset > 0) {
+      flatListRef.current?.scrollToOffset({ offset, animated: false });
+    }
+    scrolledRef.current = true;
+  }, [days.length]);
+
+  const handleListLayout = useCallback((e: LayoutChangeEvent) => {
+    listHeightRef.current = e.nativeEvent.layout.height;
+    scrollToCurrentHour();
+  }, [scrollToCurrentHour]);
+
+  useEffect(() => {
+    if (days.length > 0) scrollToCurrentHour();
+  }, [days.length, scrollToCurrentHour]);
 
   const todayKey = days[0]?.date;
   const renderItem = useCallback(
@@ -123,6 +147,7 @@ export default function MissionDashboardScreen() {
     <View style={styles.root}>
       <HeroMetric logs={heroLogs} loading={loading} />
       <FlatList
+        ref={flatListRef}
         style={styles.list}
         contentContainerStyle={styles.content}
         data={days}
@@ -137,6 +162,7 @@ export default function MissionDashboardScreen() {
         maxToRenderPerBatch={4}
         windowSize={5}
         maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+        onLayout={handleListLayout}
       />
       <CalendarDetailModal
         visible={selectedEntry !== null}
