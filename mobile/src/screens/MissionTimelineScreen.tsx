@@ -162,7 +162,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.background,
   },
   sectionHeaderText: {
-    fontSize: 11,
+    fontSize: 16,
     fontWeight: '700',
     letterSpacing: 1.1,
     color: Colors.textTertiary,
@@ -184,7 +184,7 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   rowTime: {
-    fontSize: 12,
+    fontSize: 16,
     fontWeight: '600',
     color: Colors.textSecondary,
     fontVariant: ['tabular-nums'],
@@ -192,7 +192,7 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   rowLabel: {
-    fontSize: 13,
+    fontSize: 16,
     color: Colors.textPrimary,
     flex: 1,
   },
@@ -201,7 +201,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.md,
   },
   footerText: {
-    fontSize: 12,
+    fontSize: 16,
     color: Colors.textTertiary,
   },
 });
