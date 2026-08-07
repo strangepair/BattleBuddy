@@ -1,38 +1,28 @@
 /**
  * Agent Design Loop — reads accumulated session data across users, proposes
- * targeted updates to agent.md, turns the HIGH confidence ones into patches
- * against the REPO copy of system.battlebuddy.md, and OPENS A PULL REQUEST
- * plus a pipeline item for review. It emails a summary of what it proposed.
+ * targeted updates to agent.md, auto-applies HIGH confidence proposals to
+ * system.battlebuddy.md, backs up the previous prompt, and emails a summary
+ * of what was actually applied.
  *
- * IT NO LONGER WRITES THE LIVE PROMPT. Until 2026-08-07 it called
- * persistPromptLive() and the change was live on the next turn: no PR, no
- * review, no CI, and the repo copy left behind. Everything about that was the
- * same mistake — a change that skips the repo skips review, skips the
- * prompt-size gate, and desynchronises the file from the behaviour it is
- * supposed to describe. The output is now a proposal; a human merges it, and
- * the ordinary deploy makes it live. See server/promptPr.js.
- *
- * Runs in TWO modes, and both now propose rather than apply:
+ * Runs in TWO modes:
  *  - In-process on bb-server (production): scheduled daily from index.js and
- *    on demand via POST /admin/console/design-loop/run.
+ *    on demand via POST /admin/console/design-loop/run. Prompt changes persist
+ *    via the volume prompt store (persistPromptLive); proposals land on the
+ *    volume; git is skipped (the image has no git/.git/credentials). No
+ *    dependence on a dev machine.
  *  - CLI on a dev machine:
  *      node server/agentDesignLoop.js [--dry-run] [--remote] [--email] [--users=id1,id2]
- *
- * Both paths open the PR through the GitHub REST API with the same
- * GITHUB_TOKEN the rest of the pipeline uses, so neither depends on a git
- * checkout, a laptop being awake, or credentials in the container.
+ *    Same flow, plus the prompt change is committed + pushed so the repo
+ *    stays the source of truth.
  */
 
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { execSync, execFileSync } from 'node:child_process';
 import Anthropic from '@anthropic-ai/sdk';
-import { ADMIN_DATA_ROOT, buildInsightsFeedback, listKnownProfiles } from './contextAgent.js';
-import { validateProposedPrompt } from './promptGuard.js';
-import {
-  applyPatches, canOpenPr, fetchRepoPrompt, parsePatchBlocks, proposePromptChange,
-} from './promptPr.js';
+import { persistPromptLive, ADMIN_DATA_ROOT, buildInsightsFeedback, listKnownProfiles } from './contextAgent.js';
+import { checkPromptSize } from './promptGuard.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -58,8 +48,10 @@ const ON_RAILWAY = !!process.env.RAILWAY_ENVIRONMENT;
 const STORE_DIR = process.env.CONTEXT_STORE_DIR || resolve(__dirname, 'context-store');
 const AGENT_MD = resolve(__dirname, '..', 'agent.md');
 const SYSTEM_PROMPT = resolve(__dirname, 'prompts', 'system.battlebuddy.md');
+const BACKUPS_DIR = resolve(__dirname, 'prompts', 'backups');
 // In prod the repo dirs aren't in the image / aren't durable — use the volume.
 const PROPOSALS_DIR = ON_RAILWAY ? resolve(ADMIN_DATA_ROOT, 'agent-proposals') : resolve(__dirname, '..', 'agent-proposals');
+const APPLIED_DIR = resolve(PROPOSALS_DIR, 'applied');
 
 // The design doc the loop reasons over. The repo copy (../agent.md) isn't in
 // the production image, so prod uses a console-managed copy on the volume
@@ -230,13 +222,46 @@ ${adminFeedback}
   return response.content[0].text;
 }
 
-// ── Turn HIGH confidence proposals into a proposed system prompt ──────────────
+// ── Auto-apply HIGH confidence proposals to system prompt ─────────────────────
 
-async function buildProposedPrompt(proposalText, currentSystemPrompt) {
+// Markers that MUST survive every rewrite. A full-file "return the complete
+// updated prompt" rewrite can silently drop content if the model runs out of
+// output tokens mid-generation — the response is truncated wherever
+// generation happened to be, with no error raised. This bit us twice
+// (2026-07-03 and 2026-07-04): the {{placeholder}} runtime-context block,
+// the Hard limits section, and the 988 crisis off-ramp all disappeared from
+// the tail of the file because the rewrite ran out of budget before reaching
+// them. Checking stop_reason plus a content-marker sanity check is the only
+// way to catch this — the model's own "never remove X" instruction is not
+// self-enforcing.
+const REQUIRED_MARKERS = [
+  '{{current_goal}}', '{{profile}}', '{{life_architecture}}',
+  '{{trigger_context}}', '{{relevant_memories}}', '{{recent_history}}',
+  '{{session_context}}', '988', '## Hard limits',
+];
+
+function findMissingMarkers(content) {
+  return REQUIRED_MARKERS.filter(marker => !content.includes(marker));
+}
+
+// Patch-based apply: ask Sonnet for <<<FIND>>>/<<<REPLACE>>>/<<<END>>> blocks
+// instead of a full file rewrite. Output is ~1-2k tokens instead of ~17k, so
+// this finishes in ~30s rather than timing out at 10 minutes.
+function parsePatchBlocks(text) {
+  const patches = [];
+  const re = /<<<FIND>>>\n([\s\S]*?)\n<<<REPLACE>>>\n([\s\S]*?)\n<<<END>>>/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    patches.push({ find: m[1], replace: m[2] });
+  }
+  return patches;
+}
+
+async function applyProposalsToSystemPrompt(proposalText, currentSystemPrompt) {
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 4096,
-    system: `You are turning HIGH confidence proposals into surgical patches to an AI system prompt.
+    system: `You are applying HIGH confidence proposals as surgical patches to a live AI system prompt.
 
 For each HIGH confidence proposal, output one patch block:
 <<<FIND>>>
@@ -254,46 +279,61 @@ Rules:
 - If there are no HIGH confidence proposals, output nothing.`,
     messages: [{
       role: 'user',
-      content: `## Proposals (patch HIGH confidence only):
+      content: `## Proposals (apply HIGH confidence only):
 
 ${proposalText}
 
-## Current system prompt (the repo copy your FIND blocks must match):
+## Current system prompt:
 
 ${currentSystemPrompt}`,
     }],
   });
 
-  const patches = parsePatchBlocks(response.content[0].text);
+  const patchText = response.content[0].text;
+  const patches = parsePatchBlocks(patchText);
 
   if (patches.length === 0) {
     console.log('[DesignLoop] Patch response contained no valid patch blocks — no HIGH confidence proposals or none matched.');
-    return { content: currentSystemPrompt, applied: 0, total: 0 };
+    return currentSystemPrompt;
   }
 
-  const result = applyPatches(currentSystemPrompt, patches);
-  console.log(`[DesignLoop] Prepared ${result.applied}/${result.total} patch(es) for the proposal branch`);
+  let result = currentSystemPrompt;
+  let applied = 0;
+  for (const { find, replace } of patches) {
+    if (result.includes(find)) {
+      result = result.replace(find, replace);
+      applied++;
+    } else {
+      console.warn(`[DesignLoop] Patch FIND text not found in system prompt (first 80 chars): "${find.slice(0, 80).replace(/\n/g, '↵')}"`);
+    }
+  }
+  console.log(`[DesignLoop] Applied ${applied}/${patches.length} patch(es)`);
+
+  const missing = findMissingMarkers(result);
+  if (missing.length > 0) {
+    throw new Error(
+      `Patches would remove required markers, refusing to apply: ${missing.join(', ')}`
+    );
+  }
+
   return result;
 }
 
-// ── Summarize what is being proposed ──────────────────────────────────────────
-//
-// One summary, two consumers: the PR body a reviewer reads and the email Mike
-// gets. They must not be able to disagree about what was proposed.
+// ── Summarize what was actually applied ───────────────────────────────────────
 
-async function generateProposalSummary(proposalText, promptBefore, promptAfter, digest) {
+async function generateAppliedSummary(proposalText, promptBefore, promptAfter, digest) {
   const response = await client.messages.create({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 1024,
-    system: `You are writing a concise change-proposal summary for a developer reviewing a pull request. Given proposals and current/proposed system prompt versions:
-- List only what is being PROPOSED (HIGH confidence proposals) — nothing here is live yet
-- One bullet per change, plain English, 1 sentence each, and say briefly what evidence motivated it
+    system: `You are writing a concise change notification email for a developer. Given proposals and before/after system prompt versions:
+- List only what was actually applied (HIGH confidence proposals)
+- One bullet per change, plain English, 1 sentence each
 - Note how many MEDIUM/LOW proposals were skipped and will need more evidence
 - End with the session count analyzed
 No preamble. Clean markdown.`,
     messages: [{
       role: 'user',
-      content: `PROPOSALS:\n${proposalText}\n\nSYSTEM PROMPT AS IT IS TODAY (first 3000 chars):\n${promptBefore.slice(0, 3000)}\n\nSYSTEM PROMPT AS PROPOSED (first 3000 chars):\n${promptAfter.slice(0, 3000)}\n\nSessions analyzed: ${digest.totalSessions} across ${digest.totalUsers} user(s).`,
+      content: `PROPOSALS:\n${proposalText}\n\nSYSTEM PROMPT BEFORE (first 3000 chars):\n${promptBefore.slice(0, 3000)}\n\nSYSTEM PROMPT AFTER (first 3000 chars):\n${promptAfter.slice(0, 3000)}\n\nSessions analyzed: ${digest.totalSessions} across ${digest.totalUsers} user(s).`,
     }],
   });
   return response.content[0].text;
@@ -301,9 +341,14 @@ No preamble. Clean markdown.`,
 
 // ── File management ───────────────────────────────────────────────────────────
 
-// No backup function any more: the proposal lands as a commit on a branch, so
-// git history IS the rollback path — `prompts/backups/` existed only because
-// the old auto-apply overwrote a live file with nothing behind it.
+function backupSystemPrompt() {
+  mkdirSync(BACKUPS_DIR, { recursive: true });
+  const date = new Date().toISOString().slice(0, 10);
+  const backupPath = resolve(BACKUPS_DIR, `system.battlebuddy.${date}.md`);
+  copyFileSync(SYSTEM_PROMPT, backupPath);
+  console.log(`[DesignLoop] Backed up system prompt to: ${backupPath}`);
+  return backupPath;
+}
 
 // Bumps the minor version in the PROMPT_VERSION header and re-stamps today's date.
 function bumpPromptVersion(content) {
@@ -340,49 +385,53 @@ ${proposalText}
   return filepath;
 }
 
-// The proposal file is no longer archived to `applied/` when a run succeeds —
-// nothing is applied. It stays where it was written, next to every other
-// proposal, and the PR is the record of what happened to it.
-//
-// There is no commitAndPush() either. The dev-machine path used to `git commit`
-// and `git push origin main` — a direct push to the default branch from an
-// unattended script, which is the same governance hole as persistPromptLive()
-// wearing different clothes. Both paths now go through the REST API onto a
-// branch, and the only way to main is a merged PR.
+function archiveProposal(filepath) {
+  mkdirSync(APPLIED_DIR, { recursive: true });
+  const filename = filepath.split('/').pop();
+  const dest = resolve(APPLIED_DIR, filename);
+  writeFileSync(dest, readFileSync(filepath, 'utf-8'));
+  // Overwrite original with a redirect note so old paths still make sense
+  writeFileSync(filepath, `# Moved\nThis proposal was auto-applied and archived to applied/${filename}\n`);
+  console.log(`[DesignLoop] Archived proposal to: ${dest}`);
+}
+
+function commitAndPush(appliedSummary) {
+  try {
+    const repoRoot = resolve(__dirname, '..');
+    execSync('git add server/prompts/system.battlebuddy.md server/prompts/backups/', { cwd: repoRoot });
+    const msg = `fix: agent design loop auto-applied HIGH confidence proposals\n\n${appliedSummary}\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>`;
+    // execFileSync passes `msg` as a single argv entry with no shell in
+    // between, so real newlines survive intact. The previous version ran
+    // this through execSync(`git commit -m ${JSON.stringify(msg)}`), which
+    // handed the whole thing to `/bin/sh -c`; JSON.stringify re-escapes real
+    // newlines as literal two-character "\n", and double-quoted shell args
+    // don't interpret that as an escape — so commit messages landed as one
+    // giant subject line with visible "\n" text instead of real paragraphs.
+    execFileSync('git', ['commit', '-m', msg], { cwd: repoRoot });
+    execSync('git push origin main', { cwd: repoRoot });
+    console.log('[DesignLoop] Committed and pushed updated system prompt');
+  } catch (e) {
+    console.warn('[DesignLoop] Git commit/push failed:', e.message);
+  }
+}
 
 // ── Send email ────────────────────────────────────────────────────────────────
 
-async function sendProposalEmail(summary, digest, outcome) {
+async function sendAppliedEmail(appliedSummary, digest) {
   if (!RESEND_API_KEY) {
     console.warn('[DesignLoop] RESEND_API_KEY not set — skipping email');
     return;
   }
 
   const date = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
-  const subject = outcome.prNumber
-    ? `BattleBuddy — prompt change proposed for review (PR #${outcome.prNumber})`
-    : `BattleBuddy — prompt proposal needs attention ${date}`;
-
-  const footer = outcome.prNumber
-    ? `Nothing is live yet. Review and merge <a href="${outcome.prUrl}">PR #${outcome.prNumber}</a> to apply it — `
-      + 'it is also on the pipeline page as a normal reviewable item, and the deploy that follows the '
-      + 'merge is what makes it live.'
-    : `No PR was opened. ${escapeHtml(outcome.reason || 'Unknown reason.')} `
-      + 'The proposal is kept for manual review; nothing was changed.';
-
-  const skippedHtml = (outcome.skipped || []).length
-    ? `<div style="background:#fffbeb;border-left:4px solid #f59e0b;padding:12px;margin:16px 0;border-radius:4px;">
-         <strong>Skipped before opening a PR</strong>
-         <ul>${outcome.skipped.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>
-       </div>`
-    : '';
+  const subject = `BattleBuddy — prompt updated ${date}`;
 
   const html = `
 <html><body style="font-family: -apple-system, sans-serif; max-width: 640px; margin: 40px auto; color: #1a1a1a; line-height: 1.6;">
-  <h2 style="border-bottom: 2px solid #e5e7eb; padding-bottom: 8px;">BattleBuddy — prompt change proposed</h2>
+  <h2 style="border-bottom: 2px solid #e5e7eb; padding-bottom: 8px;">BattleBuddy system prompt updated</h2>
   <p style="color: #6b7280; font-size: 14px;">${date} · ${digest.totalSessions} sessions analyzed · ${digest.totalUsers} user(s)</p>
-  <div style="background: #f0f9ff; border-left: 4px solid #3b82f6; padding: 16px; margin: 20px 0; border-radius: 4px;">
-    ${summary
+  <div style="background: #f0fdf4; border-left: 4px solid #22c55e; padding: 16px; margin: 20px 0; border-radius: 4px;">
+    ${appliedSummary
       .replace(/^## (.+)$/gm, '<h3 style="margin-top:16px">$1</h3>')
       .replace(/^- (.+)$/gm, '<li>$1</li>')
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
@@ -390,8 +439,9 @@ async function sendProposalEmail(summary, digest, outcome) {
       .replace(/\n\n/g, '</p><p>')
     }
   </div>
-  ${skippedHtml}
-  <p style="color: #6b7280; font-size: 13px;">${footer}</p>
+  <p style="color: #6b7280; font-size: 13px;">
+    Changes are live on Railway. Previous prompt backed up to <code>prompts/backups/</code> for rollback if needed.
+  </p>
 </body></html>`;
 
   const res = await fetch('https://api.resend.com/emails', {
@@ -405,7 +455,7 @@ async function sendProposalEmail(summary, digest, outcome) {
       to: [EMAIL_TO],
       subject,
       html,
-      text: summary,
+      text: appliedSummary,
     }),
   });
 
@@ -413,15 +463,8 @@ async function sendProposalEmail(summary, digest, outcome) {
     const err = await res.text();
     console.warn(`[DesignLoop] Email failed: ${res.status} ${err}`);
   } else {
-    console.log(`[DesignLoop] Proposal email sent to ${EMAIL_TO}`);
+    console.log(`[DesignLoop] Applied changes email sent to ${EMAIL_TO}`);
   }
-}
-
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -467,107 +510,60 @@ export async function runDesignLoop({ email = false, dryRun = false, remote = fa
   const proposalPath = writeProposal(proposals, digest);
   console.log(`[DesignLoop] Proposal written to: ${proposalPath}`);
 
-  const base = { ok: true, proposalPath, users: digest.totalUsers, sessions: digest.totalSessions };
+  progress('Applying changes');
+  console.log('[DesignLoop] Auto-applying HIGH confidence proposals to system prompt...');
+  const systemPromptAfter = await applyProposalsToSystemPrompt(proposals, systemPromptBefore);
 
-  // Without a token there is no propose path at all — and there is no longer a
-  // fallback that writes the live prompt, by design. Say so loudly and stop:
-  // a design loop that quietly does nothing is how the last one got away with
-  // quietly doing everything.
-  if (!canOpenPr()) {
-    const reason = 'GITHUB_TOKEN is not set, so no PR could be opened. Set it on bb-server '
-      + '(same token the dev pipeline uses) — the design loop no longer has any path that writes the prompt directly.';
-    console.error(`[DesignLoop] ${reason}`);
-    if (email) await sendProposalEmail(proposals.slice(0, 4000), digest, { reason, skipped: [] });
-    return { ...base, changed: false, proposed: false, skippedReason: reason };
+  const changed = systemPromptAfter.trim() !== systemPromptBefore.trim();
+  if (!changed) {
+    console.log('[DesignLoop] No changes to apply — system prompt unchanged');
+    return { ok: true, changed: false, proposalPath, users: digest.totalUsers, sessions: digest.totalSessions };
   }
 
-  // The patch base is the REPO copy, not the live one. A PR is a diff against
-  // the repo, so FIND blocks generated against a diverged live file would not
-  // apply — and this is also what re-syncs the two: from here on, the repo is
-  // where a prompt change starts.
-  progress('Reading repo prompt');
-  const repoPrompt = await fetchRepoPrompt();
-  console.log(`[DesignLoop] Repo prompt loaded from GitHub (${repoPrompt.content.length} chars)`);
-
-  progress('Preparing proposal');
-  console.log('[DesignLoop] Turning HIGH confidence proposals into patches...');
-  const patched = await buildProposedPrompt(proposals, repoPrompt.content);
-
-  if (patched.content.trim() === repoPrompt.content.trim()) {
-    console.log('[DesignLoop] Nothing to propose — the repo prompt already says this');
-    return { ...base, changed: false, proposed: false };
+  // Size fence: the loop runs unattended and once grew this file from ~43 KB
+  // to ~153 KB in ten days by appending near-duplicate bullets. Refuse to
+  // persist a result that exceeds the hard cap or grows more than the per-run
+  // budget — the proposal file survives for manual review either way. This is
+  // the only gate on the production path (volume writes bypass git and CI).
+  const sizeCheck = checkPromptSize(systemPromptAfter, { previous: systemPromptBefore });
+  if (!sizeCheck.ok) {
+    throw new Error(
+      `Refusing to apply prompt changes: ${sizeCheck.violations.join('; ')}. ` +
+      `Proposals kept for manual review at ${proposalPath}. ` +
+      'Fold changes in by tightening or replacing existing content, not appending.'
+    );
   }
 
-  // Bump BEFORE validating, so the bytes that were checked are exactly the
-  // bytes that get committed.
-  const proposedPrompt = bumpPromptVersion(patched.content);
-
-  // Marker + size gates, run against the PROPOSED content before anything is
-  // pushed. A proposal that fails them is dropped here: a junk PR costs a human
-  // a read and a close, and the whole point of this change is to spend Mike's
-  // review attention only on proposals worth reviewing. CI re-runs the size
-  // gate on the PR, which is what actually blocks a bad merge.
-  const check = validateProposedPrompt(proposedPrompt, repoPrompt.content);
-  if (!check.ok) {
-    const { violations } = check;
-    console.warn(`[DesignLoop] Proposal failed its gates, no PR opened: ${violations.join('; ')}`);
-    const reason = `The proposal failed its pre-PR checks: ${violations.join('; ')}. `
-      + `Kept for manual review at ${proposalPath}. Fold changes in by tightening or replacing existing content, not appending.`;
-    if (email) await sendProposalEmail(proposals.slice(0, 4000), digest, { reason, skipped: violations });
-    return { ...base, changed: false, proposed: false, skipped: violations, skippedReason: reason };
+  const systemPromptVersioned = bumpPromptVersion(systemPromptAfter);
+  if (ON_RAILWAY) {
+    // Container write + volume mirror + backup: live on the next turn and
+    // survives redeploys until the repo ships a different prompt.
+    persistPromptLive(systemPromptVersioned);
+  } else {
+    backupSystemPrompt();
+    writeFileSync(SYSTEM_PROMPT, systemPromptVersioned);
   }
+  console.log('[DesignLoop] System prompt updated');
 
-  // A FIND block that did not match is a patch that silently did not happen.
-  // Say so on the PR rather than letting the reviewer assume the summary
-  // describes the diff in full.
-  const skipped = patched.applied < patched.total
-    ? [`${patched.total - patched.applied} of ${patched.total} patch(es) dropped: the FIND text did not appear verbatim in the repo prompt`]
-    : [];
+  archiveProposal(proposalPath);
 
-  console.log('[DesignLoop] Generating proposal summary...');
-  const summary = await generateProposalSummary(proposals, repoPrompt.content, proposedPrompt, digest);
-  console.log('\n── PROPOSED CHANGES ────────────────────────────────\n');
-  console.log(summary);
+  console.log('[DesignLoop] Generating applied changes summary...');
+  const appliedSummary = await generateAppliedSummary(proposals, systemPromptBefore, systemPromptAfter, digest);
+  console.log('\n── APPLIED CHANGES ─────────────────────────────────\n');
+  console.log(appliedSummary);
   console.log('\n────────────────────────────────────────────────────\n');
 
-  progress('Opening PR');
-  const requestId = randomUUID();
-  const outcome = await proposePromptChange({
-    requestId,
-    content: proposedPrompt,
-    fileSha: repoPrompt.sha,
-    summary,
-    proposalText: proposals,
-    digest,
-    patchCount: patched.applied,
-    sizeCheck: check.size,
-    skipped,
-  });
-
-  if (email) {
-    await sendProposalEmail(summary, digest, {
-      prNumber: outcome.prNumber,
-      prUrl: outcome.prUrl,
-      reason: outcome.error,
-      skipped,
-    });
+  if (ON_RAILWAY) {
+    console.log('[DesignLoop] Prod run — prompt persisted to the volume; fold into git from a dev session when convenient.');
+  } else {
+    commitAndPush(appliedSummary);
   }
 
-  return {
-    ...base,
-    // `changed` has always meant "this run produced a change" — it now means a
-    // change was PROPOSED, never applied. Consumers log it; none of them act on
-    // it, so widening the meaning here is safe and the wording follows below.
-    changed: outcome.ok,
-    proposed: outcome.ok,
-    summary,
-    requestId,
-    prNumber: outcome.prNumber ?? null,
-    prUrl: outcome.prUrl ?? null,
-    branch: outcome.branch,
-    pipelineFiled: outcome.pipelineFiled,
-    ...(outcome.error ? { error: outcome.error } : {}),
-  };
+  if (email) {
+    await sendAppliedEmail(appliedSummary, digest);
+  }
+
+  return { ok: true, changed: true, proposalPath, summary: appliedSummary, users: digest.totalUsers, sessions: digest.totalSessions };
 }
 
 // CLI entry — only when executed directly (node server/agentDesignLoop.js),
