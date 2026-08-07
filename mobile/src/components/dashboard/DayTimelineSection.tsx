@@ -135,7 +135,7 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.xs,
   },
   dayHeaderText: {
-    fontSize: 11,
+    fontSize: 16,
     fontWeight: '700',
     letterSpacing: 1.2,
     color: Colors.textTertiary,
@@ -145,7 +145,7 @@ const styles = StyleSheet.create({
     color: Colors.stateIdle,
   },
   dayCount: {
-    fontSize: 11,
+    fontSize: 16,
     fontWeight: '600',
     color: Colors.textTertiary,
     fontVariant: ['tabular-nums'],
@@ -169,13 +169,13 @@ const styles = StyleSheet.create({
   },
   hourLabel: {
     width: HOUR_LABEL_WIDTH,
-    fontSize: 10,
+    fontSize: 16,
     fontWeight: '600',
     color: Colors.textTertiary,
     fontVariant: ['tabular-nums'],
     textAlign: 'right',
     paddingRight: Spacing.sm,
-    lineHeight: 11,
+    lineHeight: 18,
     flexShrink: 0,
   },
   hourRule: {
@@ -202,8 +202,8 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(91,159,255,0.7)',
   },
   blockLabel: {
-    fontSize: 10,
-    lineHeight: 12,
+    fontSize: 16,
+    lineHeight: 20,
     fontWeight: '700',
     color: Colors.textPrimary,
     fontVariant: ['tabular-nums'],
@@ -223,7 +223,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(91,159,255,0.7)',
   },
   nowText: {
-    fontSize: 10,
+    fontSize: 16,
     fontWeight: '800',
     letterSpacing: 1,
     color: Colors.stateIdle,
