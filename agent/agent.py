@@ -608,8 +608,8 @@ async def battlebuddy_session(ctx: agents.JobContext):
                 return json.dumps({"error": str(e)})
 
         @function_tool()
-        async def log_activity(self, activity_name: str, start_time: str, end_time: str = "", location: str = ""):
-            """Log an activity the user just reported starting or finishing. activity_name: short label (e.g. 'gym', 'lunch', 'work'). start_time: user's LOCAL wall-clock time as stated (e.g. '2026-08-01T14:30:00') — never convert to UTC. end_time: same format; omit when only a start is known. location: optional short label. Call immediately when the user reports finishing an activity or arriving somewhere — do NOT ask for confirmation first. If start_time is genuinely ambiguous, ask once then call. Confirm in one sentence: the activity name and the time(s) logged."""
+        async def log_activity(self, activity_name: str, start_time: str = "", end_time: str = "", location: str = ""):
+            """Log an activity the user just reported starting or finishing. activity_name: short label (e.g. 'gym', 'lunch', 'work'). ALWAYS leave start_time empty for an activity happening now — the server stamps the authoritative current time; never compute 'now' yourself. Only pass start_time when back-dating, as the user's LOCAL wall-clock time as stated (e.g. '2026-08-01T14:30:00') — never convert to UTC. end_time: same format; omit when only a start is known. location: optional short label. Call immediately when the user reports finishing an activity or arriving somewhere — do NOT ask for confirmation first. If a back-dated start_time is genuinely ambiguous, ask once then call. Confirm in one sentence: the activity name and the time(s) logged."""
             result = await _log_activity(
                 server_url=SERVER_URL,
                 user_id=user_id,
