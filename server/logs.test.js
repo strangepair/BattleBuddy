@@ -11,25 +11,45 @@ process.env.TZ = 'UTC';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+// normalizeOccurredAt is the REAL implementation, not a mirror — the timezone
+// re-anchoring is the whole point of these tests, so mirroring it would test
+// nothing.
+import { normalizeOccurredAt, DEFAULT_TZ } from './timeContext.js';
+
 // ─── Inline mirrors of helpers used by the new routes ────────────────────────
 
 function resolveUserId(id) {
   return id;
 }
 
-function buildActivityRow({ userId, activity_name, start_time, end_time, location }) {
+/**
+ * Mirrors the row construction shared by POST /logs/activity and the
+ * log_activity tool handler in index.js.
+ *
+ * `activities`.start_time/end_time are timestamptz. An offset-less local
+ * wall-clock string stored raw is read as UTC by Postgres, shifting every
+ * activity by the user's whole offset (a 7:19 PM Central drive surfaced at
+ * 2:19 AM). Both writers now run their times through normalizeOccurredAt,
+ * the same normalization the cigarette path (bb_events.occurred_at) has had
+ * since it hit the identical bug.
+ */
+function buildActivityRow({ userId, activity_name, start_time, end_time, location }, timezone = DEFAULT_TZ) {
   const row = {
     user_id: resolveUserId(userId),
     activity_name,
-    start_time,
+    start_time: normalizeOccurredAt(start_time, timezone),
   };
-  if (end_time !== undefined && end_time !== null) row.end_time = end_time;
+  if (end_time !== undefined && end_time !== null && end_time !== '') {
+    row.end_time = normalizeOccurredAt(end_time, timezone);
+  }
   if (location !== undefined && location !== null) row.location = location;
   return row;
 }
 
-function validateActivityBody({ userId, activity_name, start_time }) {
-  return !!(userId && activity_name && start_time);
+// start_time is deliberately NOT required: an absent one means "right now"
+// and the server stamps it, so the model never authors the current time.
+function validateActivityBody({ userId, activity_name }) {
+  return !!(userId && activity_name);
 }
 
 function mergeAndSort(cigarettes, activities, limit = 50) {
@@ -67,8 +87,8 @@ test('POST /logs/activity — missing activity_name → invalid', () => {
   assert.equal(validateActivityBody({ userId: 'u1', start_time: '2026-08-01T08:00:00Z' }), false);
 });
 
-test('POST /logs/activity — missing start_time → invalid', () => {
-  assert.equal(validateActivityBody({ userId: 'u1', activity_name: 'run' }), false);
+test('POST /logs/activity — missing start_time is VALID (server stamps now)', () => {
+  assert.equal(validateActivityBody({ userId: 'u1', activity_name: 'run' }), true);
 });
 
 test('POST /logs/activity — all required fields → valid', () => {
@@ -81,7 +101,7 @@ test('buildActivityRow — minimal payload omits nullable fields', () => {
   const row = buildActivityRow({ userId: 'u1', activity_name: 'walk', start_time: '2026-08-01T07:00:00Z' });
   assert.equal(row.user_id, 'u1');
   assert.equal(row.activity_name, 'walk');
-  assert.equal(row.start_time, '2026-08-01T07:00:00Z');
+  assert.equal(row.start_time, '2026-08-01T07:00:00.000Z');
   assert.equal('end_time' in row, false);
   assert.equal('location' in row, false);
 });
@@ -94,13 +114,76 @@ test('buildActivityRow — full payload includes end_time and location', () => {
     end_time: '2026-08-01T07:30:00Z',
     location: 'Planet Fitness',
   });
-  assert.equal(row.end_time, '2026-08-01T07:30:00Z');
+  assert.equal(row.end_time, '2026-08-01T07:30:00.000Z');
   assert.equal(row.location, 'Planet Fitness');
 });
 
 test('buildActivityRow — explicit null end_time is omitted', () => {
   const row = buildActivityRow({ userId: 'u1', activity_name: 'walk', start_time: '2026-08-01T07:00:00Z', end_time: null });
   assert.equal('end_time' in row, false);
+});
+
+test('buildActivityRow — empty-string end_time is omitted, not stamped as now', () => {
+  const row = buildActivityRow({ userId: 'u1', activity_name: 'walk', start_time: '2026-08-01T07:00:00Z', end_time: '' });
+  assert.equal('end_time' in row, false);
+});
+
+// ─── POST /logs/activity — timezone normalization (the 2:19 AM bug) ───────────
+
+test('buildActivityRow — offset-less local wall clock is re-anchored, not read as UTC', () => {
+  // 7:19 PM Central (CDT, UTC-5) on 2026-08-05 is 00:19Z on 2026-08-06.
+  // Stored raw this landed as 19:19Z and rendered 2:19 PM; written as the
+  // model's 12-hour "07:19" it rendered 2:19 AM. Neither can happen now.
+  const row = buildActivityRow(
+    { userId: 'u1', activity_name: 'drive to park', start_time: '2026-08-05T19:19:00' },
+    'America/Chicago',
+  );
+  assert.equal(row.start_time, '2026-08-06T00:19:00.000Z');
+});
+
+test('buildActivityRow — winter date uses the CST offset, not a hardcoded one', () => {
+  // 2026-01-15 is CST (UTC-6): 19:19 local → 01:19Z the next day.
+  const row = buildActivityRow(
+    { userId: 'u1', activity_name: 'gym', start_time: '2026-01-15T19:19:00' },
+    'America/Chicago',
+  );
+  assert.equal(row.start_time, '2026-01-16T01:19:00.000Z');
+});
+
+test('buildActivityRow — end_time gets the same treatment as start_time', () => {
+  const row = buildActivityRow(
+    {
+      userId: 'u1',
+      activity_name: 'gym',
+      start_time: '2026-08-01T14:30:00',
+      end_time: '2026-08-01T15:45:00',
+    },
+    'America/Chicago',
+  );
+  assert.equal(row.start_time, '2026-08-01T19:30:00.000Z');
+  assert.equal(row.end_time, '2026-08-01T20:45:00.000Z');
+});
+
+test('buildActivityRow — an instant with an explicit offset passes through unchanged', () => {
+  const row = buildActivityRow(
+    { userId: 'u1', activity_name: 'walk', start_time: '2026-08-01T12:00:00Z' },
+    'America/Chicago',
+  );
+  assert.equal(row.start_time, '2026-08-01T12:00:00.000Z');
+});
+
+test('buildActivityRow — absent start_time is stamped with the server clock', () => {
+  const before = Date.now();
+  const row = buildActivityRow({ userId: 'u1', activity_name: 'porch' }, 'America/Chicago');
+  const stamped = new Date(row.start_time).getTime();
+  assert.ok(!Number.isNaN(stamped), 'start_time must be a valid instant');
+  assert.ok(stamped >= before - 1000 && stamped <= Date.now() + 1000, 'start_time must be ~now');
+});
+
+test('buildActivityRow — empty-string start_time is stamped with the server clock', () => {
+  const row = buildActivityRow({ userId: 'u1', activity_name: 'porch', start_time: '' }, 'America/Chicago');
+  const stamped = new Date(row.start_time).getTime();
+  assert.ok(Math.abs(stamped - Date.now()) < 5000);
 });
 
 // ─── GET /logs — merge and sort ───────────────────────────────────────────────
