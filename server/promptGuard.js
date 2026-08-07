@@ -1,6 +1,6 @@
 /**
- * Prompt size guard — the single source of truth for how large the system
- * prompt file is allowed to get.
+ * Prompt guard — the single source of truth for what a change to the system
+ * prompt must satisfy: how large the file may get, and what must survive.
  *
  * Why this exists: system.battlebuddy.md is injected on EVERY turn (text and
  * voice), so its size is latency and cost on the hot path — and the voice
@@ -10,11 +10,12 @@
  * unattended. Two enforcement points share these numbers:
  *
  *  - promptSize.test.js: fails CI (and `npm test`) if the repo copy exceeds
- *    the cap, so a bloated prompt cannot merge.
- *  - agentDesignLoop.js: refuses to persist a rewritten prompt that exceeds
- *    the cap OR grows more than the per-run budget, so the in-process
- *    production loop (which writes to the Railway volume, bypassing git and
- *    CI) cannot re-bloat the live prompt either.
+ *    the cap, so a bloated prompt cannot merge. Since the design loop stopped
+ *    writing the live prompt and started opening PRs instead, this is the
+ *    enforcement point that actually blocks one.
+ *  - agentDesignLoop.js: refuses to PROPOSE a prompt that exceeds the cap OR
+ *    grows more than the per-run budget, so a bad proposal never becomes a PR
+ *    a human has to read and close.
  *
  * If you hit the cap with a legitimate change, tighten or replace existing
  * prompt content instead of appending — or consciously raise the cap here,
@@ -58,4 +59,54 @@ export function checkPromptSize(content, { previous = null } = {}) {
   }
 
   return { ok: violations.length === 0, bytes, violations };
+}
+
+// ─── Content integrity ────────────────────────────────────────────────────────
+
+/**
+ * Markers that MUST survive every rewrite of the system prompt.
+ *
+ * A full-file "return the complete updated prompt" rewrite can silently drop
+ * content if the model runs out of output tokens mid-generation — the response
+ * is truncated wherever generation happened to be, with no error raised. This
+ * bit us twice (2026-07-03 and 2026-07-04): the {{placeholder}} runtime-context
+ * block, the Hard limits section, and the 988 crisis off-ramp all disappeared
+ * from the tail of the file because the rewrite ran out of budget before
+ * reaching them. A content-marker sanity check is the only way to catch it —
+ * the model's own "never remove X" instruction is not self-enforcing.
+ */
+export const REQUIRED_MARKERS = [
+  '{{current_goal}}', '{{profile}}', '{{life_architecture}}',
+  '{{trigger_context}}', '{{relevant_memories}}', '{{recent_history}}',
+  '{{session_context}}', '988', '## Hard limits',
+];
+
+export function findMissingMarkers(content) {
+  return REQUIRED_MARKERS.filter(marker => !content.includes(marker));
+}
+
+/**
+ * Every gate a proposed prompt must clear before it may become a PR.
+ *
+ * Both checks used to run at write time, guarding the live file. They now
+ * guard the branch instead — same numbers, same markers, one step earlier —
+ * because the cheapest bad proposal is the one that never becomes a PR a human
+ * has to read and close.
+ *
+ * @param {string} proposed - the patched prompt
+ * @param {string} base     - the repo copy the patches were applied to
+ * @returns {{ok: boolean, violations: string[], size: object}}
+ */
+export function validateProposedPrompt(proposed, base) {
+  const violations = [];
+
+  const missing = findMissingMarkers(proposed);
+  if (missing.length > 0) {
+    violations.push(`patches would remove required marker(s): ${missing.join(', ')}`);
+  }
+
+  const size = checkPromptSize(proposed, { previous: base });
+  violations.push(...size.violations);
+
+  return { ok: violations.length === 0, violations, size };
 }
