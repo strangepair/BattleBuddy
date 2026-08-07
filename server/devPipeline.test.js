@@ -820,6 +820,7 @@ function dedupSupabase(openRows) {
     const self = {
       select: () => self,
       gte: () => self,
+      eq: () => self,
       in: () => self,
       insert(r) { mode = 'insert'; batch = Array.isArray(r) ? r : [r]; inserted.push(...batch); return self; },
       single() { single = true; return self; },
@@ -835,19 +836,130 @@ function dedupSupabase(openRows) {
   return { from: () => chain(openRows), _inserted: inserted };
 }
 
-test('insertRequests collapses a reworded duplicate of an open row', async () => {
+test('insertRequests parks a reworded duplicate of an open row — visibly, not silently', async () => {
   // The three real backlog rows this prevents:
   //   "Calendar: show only current-day logs; enable full scroll"
   //   "Calendar view: show only current day's logged activities"
   //   "Calendar: show only current-day logs; make timeline scrollable"
   // Same ask, three wordings, three different dedupe_key hashes, three rows.
+  //
+  // This used to assert the row was DROPPED (result === []). That is the bug:
+  // a dropped submission has no id, no status and no error, so a false positive
+  // is indistinguishable from never having submitted at all. The dedupe still
+  // happens — nothing is built twice — but it now leaves a row you can see.
   const supabase = dedupSupabase([
-    { title: 'Calendar: show only current-day logs; enable full scroll', target: 'ui', status: 'pending' },
+    { id: 'open-row-1', title: 'Calendar: show only current-day logs; enable full scroll', target: 'ui', status: 'pending' },
   ]);
   const result = await insertRequests(supabase, { source: 'directive', userId: null, sessionId: null }, [
     { title: "Calendar view: show only current day's logged activities", description: 'calendar shows only current day logs', target: 'ui', confidence: 0.9 },
   ]);
-  assert.deepEqual(result, [], 'the reworded duplicate is collapsed, not inserted');
+
+  assert.equal(result.length, 1, 'the submission still exists');
+  const row = supabase._inserted[0];
+  assert.equal(row.status, 'duplicate', 'terminal status — runDevBuildWorker only dispatches pending, so no second build');
+  assert.equal(row.spec.nearDuplicateOf, 'open-row-1', 'it points at the row it matched');
+  assert.ok(row.spec.nearDuplicateScore >= 0.6);
+  assert.match(row.error, /Near-duplicate of open-row-1/, 'and says so in words the Dev tab already renders');
+  assert.match(row.error, /show only current-day logs/, 'naming the row it collapsed onto');
+});
+
+// A double that actually APPLIES the .eq()/.gte()/.in() filters instead of
+// returning every row regardless. The archived bug is invisible to a stub that
+// ignores filters — it can only be reproduced by a fake that honours them.
+function filteringSupabase(rows) {
+  const inserted = [];
+  const chain = () => {
+    let mode = 'select';
+    let batch = null;
+    let filters = [];
+    const self = {
+      select: () => self,
+      eq: (col, val) => { filters.push((r) => r[col] === val); return self; },
+      gte: (col, val) => { filters.push((r) => !r[col] || r[col] >= val); return self; },
+      in: (col, vals) => { filters.push((r) => vals.includes(r[col])); return self; },
+      insert(r) { mode = 'insert'; batch = Array.isArray(r) ? r : [r]; inserted.push(...batch); return self; },
+      single: () => self,
+      then(resolve) {
+        const data = mode === 'insert' ? batch : rows.filter((r) => filters.every((f) => f(r)));
+        return Promise.resolve({ data, error: null }).then(resolve);
+      },
+    };
+    return self;
+  };
+  return { from: () => chain(), _inserted: inserted };
+}
+
+test('an ARCHIVED near-duplicate never blocks a new submission', async () => {
+  // The 2026-08-06 silent drop, reproduced. Row 87966d1a was archived on the
+  // 2nd — parked, dead, off the board — and still matched hard enough to make a
+  // brand-new directive disappear without a trace. Archived work must never be
+  // able to refuse live work.
+  const supabase = filteringSupabase([
+    {
+      id: '87966d1a',
+      title: "Add 'Jump to Now' button on Mission Dashboard calendar view",
+      target: 'ui',
+      status: 'needs_attention',
+      archived: true,
+      created_at: new Date().toISOString(),
+    },
+  ]);
+
+  const result = await insertRequests(supabase, { source: 'transcript', userId: null, sessionId: null }, [
+    { title: "Add 'Jump to Now' button on the Mission Dashboard calendar", description: 'jump to the current time', target: 'ui', confidence: 0.9 },
+  ]);
+
+  assert.equal(result.length, 1, 'the submission must land — the blocker was archived');
+  assert.equal(supabase._inserted[0].status, 'pending', 'and it must be real work, not parked as a duplicate');
+});
+
+test('an archived row with the SAME dedupe_key never blocks a resubmission', async () => {
+  // The same bug on the exact-key path: `stillOpen` meant "not deployed and not
+  // failed", so an archived 'needs_attention' row counted as open and silently
+  // swallowed every resubmission of that title, permanently. 49 archived rows
+  // held that power when this was found.
+  const task = { title: 'Resubmit me after archiving', target: 'ui', confidence: 0.9, description: 'desc' };
+  const supabase = filteringSupabase([
+    { dedupe_key: dedupeKey(task.target, task.title), status: 'needs_attention', archived: true, updated_at: new Date().toISOString() },
+  ]);
+
+  const result = await insertRequests(supabase, { source: 'directive', userId: null, sessionId: null }, [task]);
+
+  assert.equal(result.length, 1, 'archiving a row must not blacklist its title forever');
+});
+
+test('a closed-out (superseded/duplicate) row never blocks a resubmission', async () => {
+  const task = { title: 'Cancelled then asked for again', target: 'backend', confidence: 0.9, description: 'desc' };
+  for (const status of ['superseded', 'duplicate']) {
+    const supabase = filteringSupabase([
+      { dedupe_key: dedupeKey(task.target, task.title), status, archived: false, updated_at: new Date().toISOString() },
+    ]);
+    const result = await insertRequests(supabase, { source: 'directive', userId: null, sessionId: null }, [task]);
+    assert.equal(result.length, 1, `a '${status}' row is closed work and must not block new intake`);
+  }
+});
+
+test('a near-duplicate of a genuinely OPEN row is still deduped, with a trace', async () => {
+  // The other half of the contract: the archived filter must not turn the
+  // dedupe off. An open row still collapses the new one — it just stays visible.
+  const supabase = filteringSupabase([
+    {
+      id: 'open-1',
+      title: 'Calendar: show only current-day logs; enable full scroll',
+      target: 'ui',
+      status: 'pending',
+      archived: false,
+      created_at: new Date().toISOString(),
+    },
+  ]);
+
+  const result = await insertRequests(supabase, { source: 'directive', userId: null, sessionId: null }, [
+    { title: "Calendar view: show only current day's logged activities", description: 'same ask', target: 'ui', confidence: 0.9 },
+  ]);
+
+  assert.equal(result.length, 1, 'nothing vanishes');
+  assert.equal(supabase._inserted[0].status, 'duplicate', 'but it is parked, not built');
+  assert.equal(supabase._inserted[0].spec.nearDuplicateOf, 'open-1');
 });
 
 test('insertRequests still admits a genuinely different ask on the same surface', async () => {
