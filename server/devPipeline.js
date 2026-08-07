@@ -119,6 +119,11 @@ const TITLE_STOPWORDS = new Set([
 
 const NEAR_DUPLICATE_THRESHOLD = Number(process.env.DEV_NEAR_DUPLICATE_THRESHOLD || 0.6);
 
+// Statuses that mean "this row is no longer on the board". A row parked in one
+// of these has been closed out by triage or by a human, so it describes work
+// nobody is doing — it must never be the reason a NEW submission is turned away.
+const CLOSED_STATUSES = ['superseded', 'duplicate'];
+
 function titleTokens(title) {
   const out = new Set();
   for (const w of normalizeWords(String(title || ''))) {
@@ -258,10 +263,10 @@ export async function insertRequests(supabase, { source, userId, sessionId }, ta
   const keys = tasks.map((t) => dedupeKey(t.target, t.title));
   const { data: existing } = await supabase
     .from('dev_build_requests')
-    .select('dedupe_key, status, updated_at')
+    .select('dedupe_key, status, updated_at, archived')
     .in('dedupe_key', keys);
 
-  // Near-duplicate collapse against what is already OPEN, not just an exact
+  // Near-duplicate detection against what is already OPEN, not just an exact
   // dedupe_key match. The key is a hash of (target|normalised title), so three
   // rewordings of one ask — "Calendar: show only current-day logs", "Calendar
   // view: show only current day's logged activities", "Calendar: show only
@@ -271,12 +276,23 @@ export async function insertRequests(supabase, { source, userId, sessionId }, ta
   // Wrapped: this is an ENHANCEMENT to insertion, so it must never be able to
   // prevent one. Durability-first — a submission that cannot be deduped is
   // still a submission, and losing it would be far worse than a duplicate.
+  //
+  // ⚠ `.eq('archived', false)` is load-bearing, not tidiness. Without it the scan
+  // compared new submissions against ARCHIVED rows — work a human had already
+  // taken off the board — and a match there silently dropped the submission. On
+  // 2026-08-06 that ate a real directive: a new mission-dashboard calendar ask
+  // scored over the threshold against archived row 87966d1a ("Add 'Jump to Now'
+  // button on Mission Dashboard calendar view"), parked since 08-02, and
+  // produced no row, no status, no error — invisible in every UI. 18 archived
+  // rows sat inside this window at the time, each able to block intake the same
+  // way. An archived row is dead work: it can never justify refusing live work.
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
   let openRows = [];
   try {
     const { data } = await supabase
       .from('dev_build_requests')
-      .select('title, target, status')
+      .select('id, title, target, status')
+      .eq('archived', false)
       .gte('created_at', sevenDaysAgo)
       .in('status', ['pending', 'building', 'in_review', 'merging', 'deploying', 'needs_attention']);
     openRows = data || [];
@@ -287,6 +303,12 @@ export async function insertRequests(supabase, { source, userId, sessionId }, ta
   const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 3600 * 1000).toISOString();
   const seen = new Set();
   for (const r of existing || []) {
+    // Same rule as the near-duplicate scan above, on the exact-key path: an
+    // archived or closed-out row is off the board and cannot block new intake.
+    // This path had the identical bug — `stillOpen` was "not deployed and not
+    // failed", so all 49 archived 'superseded'/'needs_attention' rows counted as
+    // open and silently swallowed any resubmission of the same title, forever.
+    if (r.archived || CLOSED_STATUSES.includes(r.status)) continue;
     const stillOpen = r.status !== 'deployed' && r.status !== 'failed';
     const recentlyDeployed = r.status === 'deployed' && r.updated_at && r.updated_at >= fourteenDaysAgo;
     if (stillOpen || recentlyDeployed) {
@@ -298,41 +320,75 @@ export async function insertRequests(supabase, { source, userId, sessionId }, ta
   function nearDuplicateOf(task) {
     for (const r of openRows || []) {
       if (r.target !== task.target) continue;
-      if (titleSimilarity(task.title, r.title) >= NEAR_DUPLICATE_THRESHOLD) return r;
+      const score = titleSimilarity(task.title, r.title);
+      if (score >= NEAR_DUPLICATE_THRESHOLD) return { row: r, score };
     }
     return null;
   }
 
+  // A near-duplicate is PARKED, never dropped.
+  //
+  // This used to be a `.filter()`: a match meant no row, no status, no error —
+  // the submission ceased to exist, and the only trace was a console line in a
+  // container nobody reads. "Nothing vanishes" is the pipeline's governance
+  // invariant, and a dedupe heuristic is the last place that should be allowed
+  // to break it, because a heuristic is exactly the thing that will be wrong
+  // sometimes. Now the row is written with status 'duplicate' — a terminal
+  // status the worker never dispatches, so it still cannot ship a second
+  // identical build — carrying a pointer to the row it matched. The Dev tab
+  // already renders it ("Already tracked") with `error` underneath, so a false
+  // positive is now something Mike can see and resubmit instead of something
+  // that silently never happened.
   const rows = tasks
     .filter((t) => !seen.has(dedupeKey(t.target, t.title)))
-    .filter((t) => {
+    .map((t) => {
       const dup = nearDuplicateOf(t);
-      if (dup) console.log('[devPipeline] skip insert: near-duplicate of open row:', dup.title);
-      return !dup;
-    })
-    .map((t) => ({
-      source,
-      user_id: userId ? String(userId) : null,
-      session_id: sessionId || null,
-      title: String(t.title).slice(0, 200),
-      target: t.target,
-      description: t.description || null,
-      confidence: t.confidence,
-      spec: {
-        acceptanceCriteria: t.acceptanceCriteria || [],
-        affectedFiles: t.affectedFiles || [],
-        claudeCodePrompt: t.claudeCodePrompt || t.description || t.title,
-      },
-      dedupe_key: dedupeKey(t.target, t.title),
-      // Forbidden or low-confidence → park it for a human rather than build.
-      status: t.forbidden
-        ? 'needs_attention'
-        : t.confidence < MIN_CONFIDENCE
-        ? 'needs_attention'
-        : 'pending',
-      error: t.forbidden ? 'Touches a protected area (CI/secrets/safety) — needs human review.' : null,
-      history: [{ at: new Date().toISOString(), to: 'created', note: source }],
-    }));
+      if (dup) {
+        console.log(
+          `[devPipeline] parking near-duplicate (${dup.score.toFixed(2)} title match) of open row ${dup.row.id}:`,
+          dup.row.title,
+        );
+      }
+      return {
+        source,
+        user_id: userId ? String(userId) : null,
+        session_id: sessionId || null,
+        title: String(t.title).slice(0, 200),
+        target: t.target,
+        description: t.description || null,
+        confidence: t.confidence,
+        spec: {
+          acceptanceCriteria: t.acceptanceCriteria || [],
+          affectedFiles: t.affectedFiles || [],
+          claudeCodePrompt: t.claudeCodePrompt || t.description || t.title,
+          // The pointer, kept structured as well as in `error`, so the pipeline
+          // page can link the two rows without parsing prose.
+          ...(dup ? { nearDuplicateOf: dup.row.id, nearDuplicateScore: dup.score } : {}),
+        },
+        dedupe_key: dedupeKey(t.target, t.title),
+        // Forbidden wins over duplicate: a protected-area touch must reach a
+        // human even when it looks like something already in flight.
+        status: t.forbidden
+          ? 'needs_attention'
+          : dup
+          ? 'duplicate'
+          : t.confidence < MIN_CONFIDENCE
+          ? 'needs_attention'
+          : 'pending',
+        error: t.forbidden
+          ? 'Touches a protected area (CI/secrets/safety) — needs human review.'
+          : dup
+          ? `Near-duplicate of ${dup.row.id} — "${dup.row.title}" (${Math.round(dup.score * 100)}% title match). Parked, not built. If this is a genuinely different ask, resubmit it with a more distinct title.`
+          : null,
+        history: [
+          {
+            at: new Date().toISOString(),
+            to: dup && !t.forbidden ? 'duplicate' : 'created',
+            note: dup ? `${source} — near-duplicate of ${dup.row.id}` : source,
+          },
+        ],
+      };
+    });
 
   if (rows.length === 0) return [];
   const { data, error } = await supabase.from('dev_build_requests').insert(rows).select('*');
@@ -1649,6 +1705,20 @@ export async function handleDevPipeline(req, res, deps) {
           requests: [],
           deduped: true,
           message: 'Everything in that directive is already tracked — no new work was created.',
+        });
+      }
+
+      // Every task collapsed onto something already open, but the rows now
+      // EXIST (status 'duplicate') instead of being dropped. Same honest
+      // "already tracked" answer as the branch above, except the app can also
+      // show the parked rows and the change each one matched. Triage is skipped
+      // deliberately: there is nothing new to classify, and this keeps the
+      // control flow identical to what a fully-deduped directive did before.
+      if (rows.every((r) => r.status === 'duplicate')) {
+        return json(200, {
+          requests: rows.map(publicRow),
+          deduped: true,
+          message: 'Everything in that directive is already tracked — it was kept and marked as a duplicate, not dropped.',
         });
       }
 
