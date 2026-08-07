@@ -447,7 +447,7 @@ const AGENT_TOOLS = [
   },
   {
     name: 'log_activity',
-    description: "Record an activity the user just reported starting or finishing (e.g. 'gym', 'lunch', 'drive home') or a location transition. Call immediately when the user reports finishing an activity or arriving somewhere — do NOT ask for confirmation first. Pass start_time (and end_time when known) as the user's LOCAL wall-clock time exactly as stated, e.g. '2026-08-01T14:30:00' — never convert to UTC. Confirm in one sentence naming the activity and time(s) logged. Activities and location transitions only; cigarette events still use log_event.",
+    description: "Record an activity the user just reported starting or finishing (e.g. 'gym', 'lunch', 'drive home') or a location transition. Call immediately when the user reports finishing an activity or arriving somewhere — do NOT ask for confirmation first. Leave start_time empty for an activity happening now — the server stamps the authoritative current time; pass it only when back-dating, as the user's LOCAL wall-clock time exactly as stated, e.g. '2026-08-01T14:30:00' — never convert to UTC. Confirm in one sentence naming the activity and time(s) logged. Activities and location transitions only; cigarette events still use log_event.",
     input_schema: {
       type: 'object',
       properties: {
@@ -457,7 +457,7 @@ const AGENT_TOOLS = [
         },
         start_time: {
           type: 'string',
-          description: "The user's LOCAL wall-clock start time exactly as stated, e.g. '2026-08-01T14:30:00'. Never convert to UTC. If genuinely ambiguous, ask once, then call.",
+          description: "Optional. Omit entirely for an activity happening now — the server stamps the current time. Pass it only when back-dating, as the user's LOCAL wall-clock time exactly as stated, e.g. '2026-08-01T14:30:00'. Never convert to UTC. If a back-dated time is genuinely ambiguous, ask once, then call.",
         },
         end_time: {
           type: 'string',
@@ -468,7 +468,7 @@ const AGENT_TOOLS = [
           description: "Optional location label, e.g. 'home', 'office'.",
         },
       },
-      required: ['activity_name', 'start_time'],
+      required: ['activity_name'],
     },
   },
   {
@@ -923,14 +923,19 @@ async function executeToolUse(toolUse, userId, timezone = DEFAULT_TZ, requestCon
       return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: 'Event store unavailable' }), is_error: true };
     }
     const { activity_name, start_time, end_time, location } = toolUse.input || {};
-    if (!activity_name || !start_time) {
-      return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: 'activity_name and start_time are required' }), is_error: true };
+    if (!activity_name) {
+      return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: 'activity_name is required' }), is_error: true };
     }
-    // Same storage contract as POST /logs/activity: local wall-clock strings
-    // are stored as given — never UTC-converted (the route and the voice
-    // surface follow the identical rule).
-    const row = { user_id: userId, activity_name, start_time };
-    if (end_time !== undefined && end_time !== null && end_time !== '') row.end_time = end_time;
+    // Same storage contract as POST /logs/activity and the cigarette path:
+    // model-authored times arrive as offset-less LOCAL wall clock and must be
+    // re-anchored in the user's timezone before they reach `activities`, whose
+    // start_time/end_time are timestamptz — stored raw, Postgres reads them as
+    // UTC and every activity shifts by the user's whole offset. An absent
+    // start_time means "right now": normalizeOccurredAt returns the server
+    // clock, so the model never has to author the current time.
+    const startAt = normalizeOccurredAt(start_time, timezone);
+    const row = { user_id: userId, activity_name, start_time: startAt };
+    if (end_time !== undefined && end_time !== null && end_time !== '') row.end_time = normalizeOccurredAt(end_time, timezone);
     if (location !== undefined && location !== null && location !== '') row.location = location;
     const { data, error } = await supabase
       .from('activities')
@@ -943,7 +948,17 @@ async function executeToolUse(toolUse, userId, timezone = DEFAULT_TZ, requestCon
     return {
       type: 'tool_result',
       tool_use_id: toolUse.id,
-      content: JSON.stringify({ ok: true, id: data.id, activity_name, start_time, end_time: end_time || null }),
+      // local_time is what the model may read back to the user; start_time
+      // stays raw UTC for reference only (same contract as log_event).
+      content: JSON.stringify({
+        ok: true,
+        id: data.id,
+        activity_name,
+        start_time: startAt,
+        local_time: formatEventTimeLocal(startAt, timezone),
+        end_time: row.end_time || null,
+        end_local_time: row.end_time ? formatEventTimeLocal(row.end_time, timezone) : null,
+      }),
     };
   }
 
@@ -2665,10 +2680,10 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     let body = '';
     for await (const chunk of req) body += chunk;
     try {
-      const { userId, activity_name, start_time, end_time, location } = JSON.parse(body);
-      if (!userId || !activity_name || !start_time) {
+      const { userId, activity_name, start_time, end_time, location, timezone } = JSON.parse(body);
+      if (!userId || !activity_name) {
         res.writeHead(400, { ...CORS, 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ error: 'userId, activity_name, and start_time are required' }));
+        return res.end(JSON.stringify({ error: 'userId and activity_name are required' }));
       }
       if (!checkClientToken(req)) {
         const auth = await authorizeProfileAccess(req, userId);
@@ -2683,12 +2698,22 @@ Return ONLY the JSON object, no markdown, no explanation.`;
         res.writeHead(409, { ...CORS, 'Content-Type': 'application/json' });
         return res.end(JSON.stringify({ duplicate: true, existingEventId: existing.id }));
       }
+      // Same normalization the cigarette route applies to occurred_at: the
+      // mobile quick-log sends full ISO instants (pass through unchanged), the
+      // voice agent's model-authored times arrive as offset-less local wall
+      // clock and are re-anchored in the user's timezone. `activities`.
+      // start_time is timestamptz — an offset-less string stored raw is read
+      // as UTC and shifts the whole activity by the user's offset. An absent
+      // start_time means "right now" and gets the server clock.
+      const activityTz = timezone || loadProfile(resolveUserId(userId))?.timezone || DEFAULT_TZ;
       const row = {
         user_id: resolveUserId(userId),
         activity_name,
-        start_time,
+        start_time: normalizeOccurredAt(start_time, activityTz),
       };
-      if (end_time !== undefined && end_time !== null) row.end_time = end_time;
+      if (end_time !== undefined && end_time !== null && end_time !== '') {
+        row.end_time = normalizeOccurredAt(end_time, activityTz);
+      }
       if (location !== undefined && location !== null) row.location = location;
       const { data, error } = await supabase
         .from('activities')
@@ -2700,7 +2725,13 @@ Return ONLY the JSON object, no markdown, no explanation.`;
         return res.end(JSON.stringify({ error: error.message }));
       }
       res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ ok: true, id: data.id, created_at: data.created_at }));
+      return res.end(JSON.stringify({
+        ok: true,
+        id: data.id,
+        created_at: data.created_at,
+        start_time: row.start_time,
+        local_time: formatEventTimeLocal(row.start_time, activityTz),
+      }));
     } catch (err) {
       res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: err.message }));
