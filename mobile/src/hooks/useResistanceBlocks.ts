@@ -3,11 +3,12 @@ import { useFocusEffect } from '@react-navigation/native';
 import { ApiConfig } from '../config';
 import { useAuthStore } from '../stores/authStore';
 import { getAuthToken } from '../services/supabase';
-import type { ResistanceBlock, StreakResult } from '../types/resistanceBlocks';
+import type { ResistanceBlock, ScheduleWindow, StreakResult } from '../types/resistanceBlocks';
 
 export interface UseResistanceBlocksResult {
   blocks: ResistanceBlock[];
   streakResult: StreakResult | null;
+  scheduleWindows: ScheduleWindow[];
   isLoading: boolean;
   error: Error | null;
   startBlock: () => Promise<void>;
@@ -21,6 +22,7 @@ export function useResistanceBlocks(): UseResistanceBlocksResult {
 
   const [blocks, setBlocks] = useState<ResistanceBlock[]>([]);
   const [streakResult, setStreakResult] = useState<StreakResult | null>(null);
+  const [scheduleWindows, setScheduleWindows] = useState<ScheduleWindow[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
@@ -36,11 +38,14 @@ export function useResistanceBlocks(): UseResistanceBlocksResult {
       const token = await getAuthToken();
       if (!token) return;
 
-      const [blocksRes, streakRes] = await Promise.all([
+      const [blocksRes, streakRes, scheduleRes] = await Promise.all([
         fetch(`${ApiConfig.CHAT_URL}/api/resistance-blocks`, {
           headers: { Authorization: `Bearer ${token}` },
         }),
         fetch(`${ApiConfig.CHAT_URL}/api/resistance-blocks/streak`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        fetch(`${ApiConfig.CHAT_URL}/api/resistance-blocks/schedule`, {
           headers: { Authorization: `Bearer ${token}` },
         }),
       ]);
@@ -58,6 +63,11 @@ export function useResistanceBlocks(): UseResistanceBlocksResult {
       if (streakRes.ok) {
         const json = await streakRes.json() as StreakResult;
         setStreakResult(json);
+      }
+
+      if (scheduleRes.ok) {
+        const json = await scheduleRes.json() as ScheduleWindow[];
+        setScheduleWindows(json);
       }
     } catch (err) {
       setError(err instanceof Error ? err : new Error(String(err)));
@@ -163,5 +173,5 @@ export function useResistanceBlocks(): UseResistanceBlocksResult {
 
   const flagUrge = useCallback((id: string) => closeBlock(id, true), [closeBlock]);
 
-  return { blocks, streakResult, isLoading, error, startBlock, closeBlock, flagUrge };
+  return { blocks, streakResult, scheduleWindows, isLoading, error, startBlock, closeBlock, flagUrge };
 }
