@@ -1618,6 +1618,258 @@ export async function processSubmission(supabase, anthropic, {
 
 // ─── HTTP dispatcher (mounted at /dev/* in index.js) ─────────────────────────
 
+// ─── Governed operations ─────────────────────────────────────────────────────
+//
+// The bodies below used to live inline inside handleDevPipeline's route table,
+// reachable only over HTTP. The agent's pipeline tools need the SAME governance
+// — durable-first intake, the double-post guard, the dedupe/park rules, the
+// resubmit plan, the breaker reset — so the logic moved out here and both
+// callers now share one implementation.
+//
+// Each returns { status, body } (HTTP-shaped) so the route handlers stay a
+// one-line delegation and the status code keeps carrying the meaning ('409 =
+// wrong state for this action') for the tool layer too.
+//
+// This is the reason the agent must NOT write dev_build_requests directly: the
+// existing /api/dev-items shortcut does exactly that with source 'agent_tool',
+// which migration 022's dev_build_requests_source_check (transcript | directive
+// | github | design-loop) rejects outright — every insert through it fails.
+
+/**
+ * Durable-first intake for a new pipeline item — the governed path behind both
+ * POST /dev/directive and the agent's create_pipeline_item tool.
+ *
+ * Order is load-bearing: the raw words are recorded BEFORE anything that can
+ * fail, so a model timeout or a container swap mid-request can never lose the
+ * submission. Every exit either returns rows or parks the text visibly.
+ */
+export async function createPipelineItem(supabase, anthropic, { text, userId, sessionId = null }) {
+  const raw = (text || '').toString().trim();
+  if (!raw) return { status: 400, body: { error: 'text required' } };
+
+  // ── DURABLE FIRST ───────────────────────────────────────────────────────
+  const submissionId = await recordIntake(supabase, { source: 'dev_mode', rawText: raw, sessionId });
+
+  // ── Double-post guard ───────────────────────────────────────────────────
+  // The same words again within minutes is a retried request or a double tap,
+  // not a second ask. Answered honestly rather than built twice.
+  const earlier = await recentIdenticalSubmission(supabase, raw, submissionId);
+  if (earlier) {
+    return {
+      status: 200,
+      body: {
+        requests: [],
+        duplicate: true,
+        message: 'That exact directive was submitted moments ago — it is already being handled.',
+        firstSeenAt: earlier.created_at,
+      },
+    };
+  }
+
+  try {
+    // Serialised with every other intake: three concurrent captures on
+    // 2026-08-05 each scanned a backlog that did not yet contain the others'
+    // rows, and seven near-identical requests landed.
+    const { tasks, rows } = await runExclusively(async () => {
+      const generated = await generateProductRequests(anthropic, { directiveText: raw });
+      return {
+        tasks: generated,
+        rows: await insertRequests(supabase, { source: 'directive', userId, sessionId }, generated),
+      };
+    });
+
+    // SILENT DROP GUARD — Mike's submissions were vanishing here.
+    if (rows.length === 0) {
+      if (tasks.length === 0) {
+        const parked = await parkUnprocessedDirective(supabase, { userId }, raw, 'spec generation returned nothing');
+        return {
+          status: 422,
+          body: {
+            error: 'That could not be turned into a build request. It has been saved for review, not lost.',
+            reason: 'generation_empty',
+            requests: parked ? [publicRow(parked)] : [],
+          },
+        };
+      }
+      return {
+        status: 200,
+        body: {
+          requests: [],
+          deduped: true,
+          message: 'Everything in that directive is already tracked — no new work was created.',
+        },
+      };
+    }
+
+    if (rows.every((r) => r.status === 'duplicate')) {
+      return {
+        status: 200,
+        body: {
+          requests: rows.map(publicRow),
+          deduped: true,
+          message: 'Everything in that directive is already tracked — it was kept and marked as a duplicate, not dropped.',
+        },
+      };
+    }
+
+    if (supabase) {
+      const triage = await processSubmission(supabase, anthropic, {
+        source: 'dev_mode',
+        rawText: raw,
+        sessionId,
+        submissionId,
+        insertedRequests: rows,
+        dispatchFn: rows.length > 0 ? async () => rows[0].id : null,
+      });
+      if (triage.isDuplicate) {
+        return { status: 200, body: { requests: rows.map(publicRow), duplicate: true, attachedTo: triage.existingWorkItem } };
+      }
+    }
+
+    return { status: 200, body: { requests: rows.map(publicRow) } };
+  } catch (err) {
+    // THE THROW PATH. Generation or insertion blew up. Park the raw wording as
+    // a visible row and say plainly that it failed — never a bare 500.
+    console.error('[devPipeline] directive processing failed:', err.message);
+    const parked = await parkUnprocessedDirective(supabase, { userId }, raw, `generation failed: ${err.message}`);
+    return {
+      status: 502,
+      body: {
+        error: 'That could not be processed right now. It has been saved for review, not lost.',
+        reason: 'generation_failed',
+        detail: String(err.message).slice(0, 200),
+        requests: parked ? [publicRow(parked)] : [],
+      },
+    };
+  }
+}
+
+/** Recent pipeline rows, optionally filtered by a comma-joined status list. */
+export async function listPipelineItems(supabase, { status = null, limit = 100 } = {}) {
+  if (!supabase) return { status: 200, body: { total: 0, data: [], requests: [] } };
+  const capped = Math.min(Number(limit) || 100, 500);
+  const statusValues = status ? String(status).split(',').map((s) => s.trim()).filter(Boolean) : null;
+  let countQ = supabase.from('dev_build_requests').select('*', { count: 'exact', head: true });
+  if (statusValues) countQ = countQ.in('status', statusValues);
+  let q = supabase.from('dev_build_requests').select('*');
+  if (statusValues) q = q.in('status', statusValues);
+  const [{ count }, { data }] = await Promise.all([countQ, q.order('created_at', { ascending: false }).limit(capped)]);
+  const rows = (data || []).map(publicRow);
+  return {
+    status: 200,
+    body: { total: count ?? rows.length, data: rows, requests: rows, enabled: isPipelineEnabled(), dryRun: isDryRun() },
+  };
+}
+
+/** One pipeline row by id. */
+export async function getPipelineItem(supabase, id) {
+  if (!supabase) return { status: 404, body: { error: 'not found' } };
+  const { data } = await supabase.from('dev_build_requests').select('*').eq('id', id).single();
+  if (!data) return { status: 404, body: { error: 'not found' } };
+  return { status: 200, body: { request: publicRow(data) } };
+}
+
+/**
+ * Human "try again" for a stuck request — the governed path behind both
+ * POST /dev/requests/:id/resubmit and the agent's retry / resubmit actions.
+ *
+ * The auto-retry loop deliberately refuses terminal failures (scope fence,
+ * destructive migration); this is the escape hatch for when the underlying
+ * cause has been fixed by hand. An optional `note` is threaded into the row's
+ * history so "resubmit because X" survives as a durable audit line.
+ */
+export async function resubmitPipelineItem(supabase, id, note = null) {
+  if (!supabase) return { status: 404, body: { error: 'not found' } };
+  const { data: row } = await supabase.from('dev_build_requests').select('*').eq('id', id).single();
+  if (!row) return { status: 404, body: { error: 'not found' } };
+  if (!RESUBMITTABLE.includes(row.status)) {
+    return { status: 409, body: { error: `cannot resubmit a request that is ${row.status}` } };
+  }
+
+  const plan = resubmitPlan(row);
+  try {
+    if (plan === 'rerun_deploy') await rerunDeploy(row);
+    else await dispatchBuild(row);
+
+    // A human resubmitting is asserting the underlying fault is fixed, so the
+    // breaker for this signature reopens the road for its siblings too.
+    await resolveAlert(supabase, row.failure_signature);
+    await setStatus(
+      supabase,
+      id,
+      {
+        status: plan === 'rerun_deploy' ? 'deploying' : 'building',
+        attempts: (row.attempts ?? 0) + 1,
+        next_retry_at: null,
+        error: null,
+      },
+      note ? `manual resubmit (${plan}): ${String(note).slice(0, 300)}` : `manual resubmit (${plan})`,
+    );
+    const { data: updatedRow } = await supabase.from('dev_build_requests').select('*').eq('id', id).single();
+    return { status: 200, body: { ok: true, plan, item: updatedRow ?? null } };
+  } catch (err) {
+    await applyFailure(
+      supabase,
+      id,
+      { status: 'failed', error: String(err.message).slice(0, 300) },
+      'manual resubmit failed',
+      'resubmit',
+    );
+    return { status: 502, body: { error: err.message } };
+  }
+}
+
+/**
+ * Terminal, non-destructive stop.
+ *
+ * Archiving alone was not enough: `archived` is a display flag, so an archived
+ * row kept status `pending` and runDevBuildWorker would still dispatch it.
+ * Cancelling parks it in `superseded` (terminal) AND archives it.
+ */
+export async function cancelPipelineItem(supabase, id, note = null) {
+  if (!supabase) return { status: 404, body: { error: 'not found' } };
+  const { data: row } = await supabase.from('dev_build_requests').select('*').eq('id', id).single();
+  if (!row) return { status: 404, body: { error: 'not found' } };
+  if (['deployed', 'superseded'].includes(row.status)) {
+    return { status: 409, body: { error: `cannot cancel a request that is ${row.status}` } };
+  }
+  await setStatus(
+    supabase,
+    id,
+    { status: 'superseded', archived: true, next_retry_at: null },
+    note ? `cancelled by operator: ${String(note).slice(0, 300)}` : 'cancelled by operator',
+  );
+  return { status: 200, body: { ok: true, id } };
+}
+
+/**
+ * Flag a request to bypass the mobile build train (migration 022): the release
+ * dispatches under its own concurrency group so this one change builds alone
+ * instead of waiting for the next train.
+ *
+ * Honest scope: this sets the flag the release path reads at dispatch time. It
+ * does NOT itself kick a build — a row that has not reached the release stage
+ * yet will simply take the expedited route when it gets there.
+ */
+export async function expeditePipelineItem(supabase, id, note = null) {
+  if (!supabase) return { status: 404, body: { error: 'not found' } };
+  const { data: row } = await supabase.from('dev_build_requests').select('*').eq('id', id).single();
+  if (!row) return { status: 404, body: { error: 'not found' } };
+  if (['deployed', 'superseded'].includes(row.status)) {
+    return { status: 409, body: { error: `cannot expedite a request that is ${row.status}` } };
+  }
+  // No status change — setStatus records the history line and leaves the row's
+  // stage clock (`entered_at`) untouched, which is what we want: expediting is
+  // a routing decision, not a stage transition.
+  await setStatus(
+    supabase,
+    id,
+    { expedite: true },
+    note ? `expedited by operator: ${String(note).slice(0, 300)}` : 'expedited by operator',
+  );
+  return { status: 200, body: { ok: true, id, expedite: true } };
+}
+
 export async function handleDevPipeline(req, res, deps) {
   const { CORS, checkClientToken, checkAdminSecret, anthropic, supabase, resolveUserId } = deps;
   const url = new URL(req.url, 'http://x');
@@ -1656,131 +1908,30 @@ export async function handleDevPipeline(req, res, deps) {
     const text = (body.text || '').toString().trim();
     if (!text) return json(400, { error: 'text required' });
     const userId = resolveUserId ? resolveUserId(body.userId) : body.userId;
-
-    // ── DURABLE FIRST ─────────────────────────────────────────────────────
-    // The raw words are recorded before a single thing that can fail runs.
-    // Generation used to come first, so a model timeout, a truncated response
-    // or a container swap mid-request lost the submission with no trace.
-    const submissionId = await recordIntake(supabase, { source: 'dev_mode', rawText: text, sessionId: null });
-
-    // ── Double-post guard ─────────────────────────────────────────────────
-    // The same words again within minutes is a retried request or a double
-    // tap, not a second ask. Answered honestly rather than built twice.
-    const earlier = await recentIdenticalSubmission(supabase, text, submissionId);
-    if (earlier) {
-      return json(200, {
-        requests: [],
-        duplicate: true,
-        message: 'That exact directive was submitted moments ago — it is already being handled.',
-        firstSeenAt: earlier.created_at,
-      });
-    }
-
-    try {
-      // Serialised with every other intake: three concurrent captures on
-      // 2026-08-05 each scanned a backlog that did not yet contain the others'
-      // rows, and seven near-identical requests landed.
-      const { tasks, rows } = await runExclusively(async () => {
-        const generated = await generateProductRequests(anthropic, { directiveText: text });
-        return {
-          tasks: generated,
-          rows: await insertRequests(supabase, { source: 'directive', userId, sessionId: null }, generated),
-        };
-      });
-
-      // SILENT DROP GUARD — Mike's submissions were vanishing here.
-      if (rows.length === 0) {
-        if (tasks.length === 0) {
-          // The generator produced nothing usable. Park it so it is visible.
-          const parked = await parkUnprocessedDirective(supabase, { userId }, text, 'spec generation returned nothing');
-          return json(422, {
-            error: 'That could not be turned into a build request. It has been saved for review, not lost.',
-            reason: 'generation_empty',
-            requests: parked ? [publicRow(parked)] : [],
-          });
-        }
-        // Tasks existed but every one collapsed onto something already open.
-        // Not a failure, but the app must say so rather than show nothing.
-        return json(200, {
-          requests: [],
-          deduped: true,
-          message: 'Everything in that directive is already tracked — no new work was created.',
-        });
-      }
-
-      // Every task collapsed onto something already open, but the rows now
-      // EXIST (status 'duplicate') instead of being dropped. Same honest
-      // "already tracked" answer as the branch above, except the app can also
-      // show the parked rows and the change each one matched. Triage is skipped
-      // deliberately: there is nothing new to classify, and this keeps the
-      // control flow identical to what a fully-deduped directive did before.
-      if (rows.every((r) => r.status === 'duplicate')) {
-        return json(200, {
-          requests: rows.map(publicRow),
-          deduped: true,
-          message: 'Everything in that directive is already tracked — it was kept and marked as a duplicate, not dropped.',
-        });
-      }
-
-      if (supabase) {
-        const triage = await processSubmission(supabase, anthropic, {
-          source: 'dev_mode',
-          rawText: text,
-          sessionId: null,
-          submissionId,
-          insertedRequests: rows,
-          dispatchFn: rows.length > 0 ? async () => rows[0].id : null,
-        });
-        if (triage.isDuplicate) {
-          return json(200, { requests: rows.map(publicRow), duplicate: true, attachedTo: triage.existingWorkItem });
-        }
-      }
-
-      return json(200, { requests: rows.map(publicRow) });
-    } catch (err) {
-      // THE THROW PATH. Generation or insertion blew up — a model timeout, a
-      // truncated response, a database hiccup. The old handler answered 500 and
-      // left nothing behind, so the directive existed only in the user's head.
-      // Park the raw wording as a visible row and say plainly that it failed.
-      console.error('[devPipeline] directive processing failed:', err.message);
-      const parked = await parkUnprocessedDirective(
-        supabase, { userId }, text, `generation failed: ${err.message}`,
-      );
-      return json(502, {
-        error: 'That could not be processed right now. It has been saved for review, not lost.',
-        reason: 'generation_failed',
-        detail: String(err.message).slice(0, 200),
-        requests: parked ? [publicRow(parked)] : [],
-      });
-    }
+    // Governed intake lives in createPipelineItem() so the agent's
+    // create_pipeline_item tool goes through the identical path.
+    const r = await createPipelineItem(supabase, anthropic, { text, userId, sessionId: null });
+    return json(r.status, r.body);
   }
 
   // GET /dev/requests — list for the Dev tab.
   if (req.method === 'GET' && path === '/dev/requests') {
     if (!checkClientToken(req)) return json(401, { error: 'unauthorized' });
-    if (!supabase) return json(200, { total: 0, data: [], requests: [] });
     // Filterable: the flat newest-100 window hid in-flight rows behind a wall of
     // backlog, which is exactly how a slot-holding row stays invisible.
-    const statusFilter = url.searchParams.get('status');
-    const limit = Math.min(Number(url.searchParams.get('limit') || 100), 500);
-    const statusValues = statusFilter ? statusFilter.split(',').map((s) => s.trim()).filter(Boolean) : null;
-    let countQ = supabase.from('dev_build_requests').select('*', { count: 'exact', head: true });
-    if (statusValues) countQ = countQ.in('status', statusValues);
-    let q = supabase.from('dev_build_requests').select('*');
-    if (statusValues) q = q.in('status', statusValues);
-    const [{ count }, { data }] = await Promise.all([countQ, q.order('created_at', { ascending: false }).limit(limit)]);
-    const rows = (data || []).map(publicRow);
-    return json(200, { total: count ?? rows.length, data: rows, requests: rows, enabled: isPipelineEnabled(), dryRun: isDryRun() });
+    const r = await listPipelineItems(supabase, {
+      status: url.searchParams.get('status'),
+      limit: url.searchParams.get('limit') || 100,
+    });
+    return json(r.status, r.body);
   }
 
   // GET /dev/requests/:id
   if (req.method === 'GET' && path.startsWith('/dev/requests/')) {
     if (!checkClientToken(req)) return json(401, { error: 'unauthorized' });
-    if (!supabase) return json(404, { error: 'not found' });
     const id = decodeURIComponent(path.slice('/dev/requests/'.length));
-    const { data } = await supabase.from('dev_build_requests').select('*').eq('id', id).single();
-    if (!data) return json(404, { error: 'not found' });
-    return json(200, { request: publicRow(data) });
+    const r = await getPipelineItem(supabase, id);
+    return json(r.status, r.body);
   }
 
   // POST /dev/github/webhook — status callbacks from the GitHub workflows.
@@ -1858,50 +2009,10 @@ export async function handleDevPipeline(req, res, deps) {
   // cause has been fixed by hand.
   if (req.method === 'POST' && path.startsWith('/dev/requests/') && path.endsWith('/resubmit')) {
     if (!checkClientToken(req)) return json(401, { error: 'unauthorized' });
-    if (!supabase) return json(404, { error: 'not found' });
     const id = decodeURIComponent(path.slice('/dev/requests/'.length, -'/resubmit'.length));
-
-    const { data: row } = await supabase.from('dev_build_requests').select('*').eq('id', id).single();
-    if (!row) return json(404, { error: 'not found' });
-    if (!RESUBMITTABLE.includes(row.status)) {
-      return json(409, { error: `cannot resubmit a request that is ${row.status}` });
-    }
-
-    const plan = resubmitPlan(row);
-    try {
-      if (plan === 'rerun_deploy') await rerunDeploy(row);
-      else await dispatchBuild(row);
-
-      // A human resubmitting is asserting the underlying fault is fixed, so
-      // the breaker for this signature reopens the road for its siblings too.
-      await resolveAlert(supabase, row.failure_signature);
-      await setStatus(
-        supabase,
-        id,
-        {
-          status: plan === 'rerun_deploy' ? 'deploying' : 'building',
-          attempts: (row.attempts ?? 0) + 1,
-          next_retry_at: null,
-          error: null,
-        },
-        `manual resubmit (${plan})`,
-      );
-      const { data: updatedRow } = await supabase
-        .from('dev_build_requests')
-        .select('*')
-        .eq('id', id)
-        .single();
-      return json(200, { ok: true, plan, item: updatedRow ?? null });
-    } catch (err) {
-      await applyFailure(
-        supabase,
-        id,
-        { status: 'failed', error: String(err.message).slice(0, 300) },
-        'manual resubmit failed',
-        'resubmit',
-      );
-      return json(502, { error: err.message });
-    }
+    const body = await readBody(req).catch(() => ({}));
+    const r = await resubmitPipelineItem(supabase, id, body?.note || null);
+    return json(r.status, r.body);
   }
 
   // POST /dev/requests/:id/cancel — terminal, non-destructive stop.
@@ -1910,15 +2021,19 @@ export async function handleDevPipeline(req, res, deps) {
   // Cancelling parks it in `superseded` (terminal) AND archives it.
   if (req.method === 'POST' && path.startsWith('/dev/requests/') && path.endsWith('/cancel')) {
     if (!checkClientToken(req)) return json(401, { error: 'unauthorized' });
-    if (!supabase) return json(404, { error: 'not found' });
     const id = decodeURIComponent(path.slice('/dev/requests/'.length, -'/cancel'.length));
-    const { data: row } = await supabase.from('dev_build_requests').select('*').eq('id', id).single();
-    if (!row) return json(404, { error: 'not found' });
-    if (['deployed', 'superseded'].includes(row.status)) {
-      return json(409, { error: `cannot cancel a request that is ${row.status}` });
-    }
-    await setStatus(supabase, id, { status: 'superseded', archived: true, next_retry_at: null }, 'cancelled by operator');
-    return json(200, { ok: true, id });
+    const body = await readBody(req).catch(() => ({}));
+    const r = await cancelPipelineItem(supabase, id, body?.note || null);
+    return json(r.status, r.body);
+  }
+
+  // POST /dev/requests/:id/expedite — bypass the mobile build train.
+  if (req.method === 'POST' && path.startsWith('/dev/requests/') && path.endsWith('/expedite')) {
+    if (!checkClientToken(req)) return json(401, { error: 'unauthorized' });
+    const id = decodeURIComponent(path.slice('/dev/requests/'.length, -'/expedite'.length));
+    const body = await readBody(req).catch(() => ({}));
+    const r = await expeditePipelineItem(supabase, id, body?.note || null);
+    return json(r.status, r.body);
   }
 
   // POST /dev/backlog/clear — cancel the whole queued backlog at once.
