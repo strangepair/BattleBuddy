@@ -8,6 +8,12 @@ export interface ResistanceBlock {
   session_date: string;
 }
 
+export interface ScheduleWindow {
+  start: string;
+  end: string;
+  avgCleanBlocksPercent: number;
+}
+
 export interface StreakResult {
   currentStreakBlocks: number;
   longestStreakBlocks: number;
