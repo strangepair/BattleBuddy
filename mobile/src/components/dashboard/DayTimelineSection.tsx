@@ -11,6 +11,7 @@ import {
   fmtHour,
   MINUTE_HEIGHT,
   HOUR_HEIGHT,
+  MIN_BLOCK_HEIGHT,
 } from './timelineLayout';
 
 const HOUR_LABEL_WIDTH = 56;
@@ -91,7 +92,7 @@ export default function DayTimelineSection({ bucket, isToday, onPressEntry }: Da
                   isActivity ? styles.blockActivity : styles.blockCigarette,
                   {
                     top: b.startMinute * MINUTE_HEIGHT,
-                    height: b.spanMinutes * MINUTE_HEIGHT,
+                    height: Math.max(b.spanMinutes * MINUTE_HEIGHT, MIN_BLOCK_HEIGHT),
                     left: `${b.lane * laneWidthPct}%` as `${number}%`,
                     width: `${laneWidthPct}%` as `${number}%`,
                   },
