@@ -11,6 +11,8 @@ import {
   Alert,
   Switch,
   AppState,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Swipeable from 'react-native-gesture-handler/Swipeable';
@@ -376,6 +378,10 @@ export default function DevScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backButton} hitSlop={12}>
           <Text style={styles.backText}>← Back</Text>
@@ -394,6 +400,7 @@ export default function DevScreen() {
 
       <ScrollView
         contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.coral} />}
       >
         {/* The verdict, before any card. Whether the pipeline is clear is the
@@ -554,12 +561,14 @@ export default function DevScreen() {
         ) : null}
       </ScrollView>
       <PRDetailView request={selectedRequest} onDismiss={() => setSelectedRequest(null)} />
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
+  flex: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
