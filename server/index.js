@@ -25,6 +25,8 @@ import { renderMemoryDoc } from './memoryDoc.js';
 import { deriveFactsFromProfile, buildSonnetBackfillPrompt, groundSonnetProposals } from './factBackfill.js';
 import { runGateCycle, readGateLog } from './factGate.js';
 import { FACT_TOOLS, FACT_TOOL_NAMES, executeFactTool } from './factTools.js';
+import { PIPELINE_TOOLS, PIPELINE_TOOL_NAMES, executePipelineTool } from './pipelineTools.js';
+import { TIMELINE_TOOLS, TIMELINE_TOOL_NAMES, executeTimelineTool } from './activityTools.js';
 import { proposalsFromExtraction } from './factExtraction.js';
 import { runFactConsolidation, readConsolidationReport } from './factConsolidation.js';
 import { runPromotionSweep } from './promotionJob.js';
@@ -41,7 +43,7 @@ import {
   COMMITMENT_EXTRACTION_PROMPT, AUTO_DELIVER_MIN_CONFIDENCE,
 } from './commitments.js';
 import { toCachedSystemBlocks } from './promptCache.js';
-import { DEFAULT_TZ, tzOffsetString, formatLocalTime, buildSessionContext as buildSessionContextLine, normalizeOccurredAt } from './timeContext.js';
+import { DEFAULT_TZ, tzOffsetString, formatLocalTime, buildSessionContext as buildSessionContextLine, normalizeOccurredAt, localDateInTz, dayRangeInTz, formatEventTimeLocal } from './timeContext.js';
 import { HABIT_EVENT_TYPES, deriveUsageFacts, renderUsageFactsLine, deriveDashboardPayload } from './usageFacts.js';
 import { summarize, digestLine } from './pipelineSummary.js';
 import { checkDevModeToolResult, devModeStatusBlock } from './devMode.js';
@@ -148,25 +150,10 @@ const systemPromptPath = resolve(__dirname, 'prompts', 'system.battlebuddy.md');
 // bb_events stores UTC instants; "today" must be computed in the *user's* day,
 // not the server's (Railway runs in UTC — a 7 PM Central cigarette is
 // tomorrow's date in UTC). DEFAULT_TZ / tzOffsetString / formatLocalTime /
-// normalizeOccurredAt live in timeContext.js so they are testable under TZ=UTC.
-
-function localDateInTz(timezone = DEFAULT_TZ, at = new Date()) {
-  try {
-    return new Intl.DateTimeFormat('en-CA', {
-      timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
-    }).format(at);
-  } catch {
-    return at.toISOString().slice(0, 10);
-  }
-}
-
-/** UTC start/end instants of a local calendar day (YYYY-MM-DD) in a timezone. */
-function dayRangeInTz(dateStr, timezone = DEFAULT_TZ) {
-  const offset = tzOffsetString(timezone, new Date(`${dateStr}T12:00:00Z`));
-  const start = new Date(`${dateStr}T00:00:00${offset}`);
-  const end = new Date(start.getTime() + 24 * 3600 * 1000 - 1);
-  return { start, end };
-}
+// normalizeOccurredAt / localDateInTz / dayRangeInTz / formatEventTimeLocal all
+// live in timeContext.js so they are testable under TZ=UTC — and so modules
+// that need them (activityTools.js) can import them without importing this
+// server entrypoint, which would boot the whole process.
 
 /** Convert a profile-style local time ("3:30 PM" on "2026-07-02") to an ISO instant. */
 function localTimeToIso(dateStr, timeStr, timezone = DEFAULT_TZ) {
@@ -180,23 +167,6 @@ function localTimeToIso(dateStr, timeStr, timezone = DEFAULT_TZ) {
   const offset = tzOffsetString(timezone, new Date(`${dateStr}T12:00:00Z`));
   const d = new Date(`${dateStr}T${String(hour).padStart(2, '0')}:${String(min).padStart(2, '0')}:00${offset}`);
   return isNaN(d.getTime()) ? null : d.toISOString();
-}
-
-// Render a stored UTC instant as a human-readable time IN THE USER'S TIMEZONE.
-// Everything in bb_events is UTC; the model must never see a bare `...Z` string
-// or it reports UTC clock times back to the user. Attach this alongside every
-// event/summary time the model can read.
-function formatEventTimeLocal(iso, timezone = DEFAULT_TZ) {
-  if (!iso) return null;
-  try {
-    return new Intl.DateTimeFormat('en-US', {
-      timeZone: timezone || DEFAULT_TZ,
-      weekday: 'short', month: 'short', day: 'numeric',
-      hour: 'numeric', minute: '2-digit', hour12: true,
-    }).format(new Date(iso));
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -575,6 +545,14 @@ const AGENT_TOOLS = [
       required: [],
     },
   },
+  // Dev-pipeline CRUD (create / list / get / act). Every one routes through the
+  // governed functions in devPipeline.js — same durable-first intake, dedupe and
+  // control paths the Dev tab uses. Gated on the live devMode flag inside
+  // executePipelineTool, so a normal coaching turn cannot reach them.
+  ...PIPELINE_TOOLS,
+  // Timeline CRUD over `activities` — the log the mission calendar renders.
+  // log_activity above is the CREATE; these are read / correct / delete.
+  ...TIMELINE_TOOLS,
 ];
 
 async function queryEvents(userId, { date, eventTypes, limit = 20, timezone = DEFAULT_TZ } = {}) {
@@ -876,6 +854,36 @@ async function executeToolUse(toolUse, userId, timezone = DEFAULT_TZ, requestCon
       const { query, date } = toolUse.input || {};
       const recall = await recallConversation(userId, query || '', date, timezone);
       return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(recall) };
+    } catch (err) {
+      return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: err.message }), is_error: true };
+    }
+  }
+
+  if (PIPELINE_TOOL_NAMES.has(toolUse.name)) {
+    try {
+      const { content, is_error } = await executePipelineTool(toolUse.name, toolUse.input || {}, {
+        supabase,
+        anthropic: client,
+        userId,
+        sessionId: requestContext.sessionId || null,
+        // The live DEV-toggle value the client sent with THIS request — the
+        // same flag check_dev_mode reports. Never a remembered value.
+        devMode: requestContext.devMode === true,
+      });
+      return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(content), is_error: !!is_error };
+    } catch (err) {
+      return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: err.message }), is_error: true };
+    }
+  }
+
+  if (TIMELINE_TOOL_NAMES.has(toolUse.name)) {
+    try {
+      const { content, is_error } = await executeTimelineTool(toolUse.name, toolUse.input || {}, {
+        supabase,
+        userId,
+        timezone,
+      });
+      return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify(content), is_error: !!is_error };
     } catch (err) {
       return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: err.message }), is_error: true };
     }

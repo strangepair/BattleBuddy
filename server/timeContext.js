@@ -50,6 +50,42 @@ export function formatLocalTime(timezone, at = new Date()) {
   }
 }
 
+/** The user's local calendar date (YYYY-MM-DD) at an instant. */
+export function localDateInTz(timezone = DEFAULT_TZ, at = new Date()) {
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).format(at);
+  } catch {
+    return at.toISOString().slice(0, 10);
+  }
+}
+
+/** UTC start/end instants of a local calendar day (YYYY-MM-DD) in a timezone. */
+export function dayRangeInTz(dateStr, timezone = DEFAULT_TZ) {
+  const offset = tzOffsetString(timezone, new Date(`${dateStr}T12:00:00Z`));
+  const start = new Date(`${dateStr}T00:00:00${offset}`);
+  const end = new Date(start.getTime() + 24 * 3600 * 1000 - 1);
+  return { start, end };
+}
+
+// Render a stored UTC instant as a human-readable time IN THE USER'S TIMEZONE.
+// Everything in bb_events is UTC; the model must never see a bare `...Z` string
+// or it reports UTC clock times back to the user. Attach this alongside every
+// event/summary time the model can read.
+export function formatEventTimeLocal(iso, timezone = DEFAULT_TZ) {
+  if (!iso) return null;
+  try {
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone || DEFAULT_TZ,
+      weekday: 'short', month: 'short', day: 'numeric',
+      hour: 'numeric', minute: '2-digit', hour12: true,
+    }).format(new Date(iso));
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Session-continuity line for the system prompt. The clock time is rendered in
  * the USER's timezone — the omitted-timeZone formatter this replaces rendered
