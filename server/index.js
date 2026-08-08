@@ -53,6 +53,7 @@ import { broadcastToUser, registerSseClient } from './broadcast.js';
 import { broadcastDashboard } from './broadcastDashboard.js';
 import { findDuplicate, findActivityDuplicate } from './middleware/deduplicate.js';
 import { listSessions } from './controllers/sessionsController.js';
+import './ciNegativeControl.js'; // CI NEGATIVE CONTROL — DO NOT MERGE
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
