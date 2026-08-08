@@ -1,9 +1,10 @@
 import ScreenWithEntity from '../../src/components/common/ScreenWithEntity';
 import EmptyState from '../../src/components/common/EmptyState';
+import DailyHoursVisualization from '../../src/components/insights/DailyHoursVisualization';
 import { useResistanceBlocks } from '../../src/hooks/useResistanceBlocks';
 
 export default function InsightsScreen() {
-  const { blocks, streakResult, isLoading } = useResistanceBlocks();
+  const { blocks, streakResult, scheduleWindows, isLoading } = useResistanceBlocks();
 
   void blocks;
   void streakResult;
@@ -11,6 +12,7 @@ export default function InsightsScreen() {
 
   return (
     <ScreenWithEntity title="Insights">
+      <DailyHoursVisualization scheduleWindows={scheduleWindows} />
       <EmptyState
         icon="sparkles-outline"
         title="Insights are coming"
