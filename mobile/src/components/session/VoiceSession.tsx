@@ -184,10 +184,19 @@ function MuteControl({ muted }: { muted: boolean }) {
 function TranscriptCapture({ onTranscript }: { onTranscript?: (text: string) => void }) {
   const room = useRoomContext();
   // addAssistantMsg/updateAssistantMsg handle agent-side transcript bubbles.
-  // User-side transcripts are routed through onTranscript (see below).
+  // User-side transcripts: partial segments update a live bubble via
+  // updateUserMessage; the final segment routes through onTranscript.
   const addAssistantMsg = useSessionStore((s) => s.addAssistantMessage);
   const updateAssistantMsg = useSessionStore((s) => s.updateAssistantMessage);
+  const addUserMsg = useSessionStore((s) => s.addUserMessage);
+  const updateUserMsg = useSessionStore((s) => s.updateUserMessage);
   const lastAgentMsgId = useRef<string | null>(null);
+  // Live bubble for the user's in-progress speech. Allocated on the first
+  // partial segment, reused for all subsequent partials, then the final
+  // segment hands the text to onTranscript (which calls addUserMessage again
+  // internally via handleUserTurn). We remove the partial bubble first so
+  // the stream doesn't show a duplicate.
+  const liveUserMsgId = useRef<string | null>(null);
 
   useEffect(() => {
     const handler = (segments: TranscriptionSegment[], participant?: Participant) => {
@@ -220,15 +229,26 @@ function TranscriptCapture({ onTranscript }: { onTranscript?: (text: string) => 
           }
           updateAssistantMsg(lastAgentMsgId.current, text);
         }
-      } else if (isFinal) {
-        // Final user transcript: route through the parent's handleUserTurn
-        // callback so the voice path uses the SAME agent-response pipeline as
-        // typed messages (URGE_RE detection → sendMessage → streamChatTurn).
-        // handleUserTurn calls addUserMessage internally, so the bubble appears
-        // in the stream AND the agent receives the transcript and replies.
-        console.log(`[VOICE] User transcript captured — routing to agent: "${text.slice(0, 80)}"`);
-        if (onTranscript) {
-          onTranscript(text);
+      } else {
+        if (!isFinal) {
+          // Partial user transcript: show live in stream while user is speaking.
+          if (!liveUserMsgId.current) {
+            liveUserMsgId.current = addUserMsg(text);
+          } else {
+            updateUserMsg(liveUserMsgId.current, text);
+          }
+        } else {
+          // Final user transcript: remove the live partial bubble then route
+          // through onTranscript → handleUserTurn, which calls addUserMessage
+          // to create the durable bubble and triggers agent response generation.
+          if (liveUserMsgId.current) {
+            updateUserMsg(liveUserMsgId.current, '');
+            liveUserMsgId.current = null;
+          }
+          console.log(`[VOICE] User transcript captured — routing to agent: "${text.slice(0, 80)}"`);
+          if (onTranscript) {
+            onTranscript(text);
+          }
         }
       }
     };
@@ -237,8 +257,9 @@ function TranscriptCapture({ onTranscript }: { onTranscript?: (text: string) => 
     room.on(RoomEvent.TranscriptionReceived, handler);
     return () => {
       room.off(RoomEvent.TranscriptionReceived, handler);
+      liveUserMsgId.current = null;
     };
-  }, [room, addAssistantMsg, updateAssistantMsg, onTranscript]);
+  }, [room, addAssistantMsg, updateAssistantMsg, addUserMsg, updateUserMsg, onTranscript]);
 
   return null;
 }
