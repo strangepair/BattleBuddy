@@ -18,6 +18,7 @@ export const MINUTE_HEIGHT = 2.5;
 export const HOUR_HEIGHT = 60 * MINUTE_HEIGHT;
 export const DAY_GRID_HEIGHT = 24 * HOUR_HEIGHT;
 export const MIN_EVENT_MINUTES = 5;
+export const MIN_BLOCK_HEIGHT = 48;
 
 export interface TimelineBlock {
   entry: ActivityLogEntry;
