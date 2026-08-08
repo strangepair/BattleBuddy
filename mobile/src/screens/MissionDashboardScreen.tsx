@@ -37,6 +37,7 @@ export default function MissionDashboardScreen() {
   const flatListRef = useRef<FlatList>(null);
   const listHeightRef = useRef<number>(0);
   const scrolledRef = useRef(false);
+  const logCountRef = useRef(0);
   const { todayLogs, historyLogs, loading } = useSmokingLogs();
   const { realtimeEvents } = useDashboardRealtime(todayLogs);
   const [selectedEntry, setSelectedEntry] = useState<ActivityLogEntry | null>(null);
@@ -74,17 +75,24 @@ export default function MissionDashboardScreen() {
     loadMore();
   }, [loadMore]);
 
-  const scrollToCurrentHour = useCallback(() => {
-    if (scrolledRef.current || listHeightRef.current === 0 || days.length === 0) return;
+  const NOW_MARGIN = 135;
+
+  const scrollToNow = useCallback((animated: boolean) => {
+    if (listHeightRef.current === 0) return;
     const now = new Date();
     const gridHeight = dayGridHeight(true, now);
     const currentHourTop = now.getHours() * HOUR_HEIGHT;
-    const offset = gridHeight - currentHourTop - listHeightRef.current;
+    const offset = gridHeight - currentHourTop - listHeightRef.current + NOW_MARGIN;
     if (offset > 0) {
-      flatListRef.current?.scrollToOffset({ offset, animated: false });
+      flatListRef.current?.scrollToOffset({ offset, animated });
     }
+  }, []);
+
+  const scrollToCurrentHour = useCallback(() => {
+    if (scrolledRef.current || listHeightRef.current === 0 || days.length === 0) return;
+    scrollToNow(false);
     scrolledRef.current = true;
-  }, [days.length]);
+  }, [days.length, scrollToNow]);
 
   const handleListLayout = useCallback((e: LayoutChangeEvent) => {
     listHeightRef.current = e.nativeEvent.layout.height;
@@ -94,6 +102,16 @@ export default function MissionDashboardScreen() {
   useEffect(() => {
     if (days.length > 0) scrollToCurrentHour();
   }, [days.length, scrollToCurrentHour]);
+
+  useEffect(() => {
+    const count = mergedTodayLogs.length;
+    if (count > logCountRef.current && scrolledRef.current) {
+      logCountRef.current = count;
+      scrollToNow(true);
+    } else {
+      logCountRef.current = count;
+    }
+  }, [mergedTodayLogs.length, scrollToNow]);
 
   const todayKey = days[0]?.date;
   const renderItem = useCallback(
@@ -185,8 +203,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   content: {
-    // Inverted list: "top" padding here is the visual bottom, next to NOW.
-    paddingTop: Spacing.sm,
+    // Inverted list: "top" padding here is the visual bottom, below the NOW marker.
+    paddingTop: 150,
     paddingBottom: Spacing.md,
   },
   footer: {
