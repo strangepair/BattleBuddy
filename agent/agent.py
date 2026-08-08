@@ -57,6 +57,11 @@ import asyncio
 #     SessionAgent.__init__ and crash-looped every voice job for ~18 hours.
 from utils.deduplication import EventDeduplicator
 from tools.log_activity import log_activity as _log_activity
+from tools.resistance_block_tools import (
+    start_resistance_block as _start_resistance_block,
+    flag_urge_on_block as _flag_urge_on_block,
+    close_resistance_block as _close_resistance_block,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -462,6 +467,8 @@ async def battlebuddy_session(ctx: agents.JobContext):
     session_messages = []
     last_save_count = 0
     session_ended = False
+    active_block_id: list = [None]
+    block_urge_flagged: list = [False]
 
     # The per-turn context injections that used to live here — local time, the
     # server-computed usage-facts line, the 30-second repeat guard — are gone
@@ -602,6 +609,11 @@ async def battlebuddy_session(ctx: agents.JobContext):
                     data = await resp.json()
                     print(f"[Agent] log_event {event_type} for {user_id}: {data}")
                     self._event_dedup.record(event_type)
+                    if event_type in ("cigarette", "urge_gave_in") and active_block_id[0]:
+                        block_urge_flagged[0] = True
+                        bid = active_block_id[0]
+                        active_block_id[0] = None
+                        asyncio.ensure_future(_close_block(bid, True))
                     return json.dumps(data)
             except Exception as e:
                 print(f"[Agent] log_event failed: {e}")
@@ -819,8 +831,12 @@ async def battlebuddy_session(ctx: agents.JobContext):
                 lower = content.lower().strip()
                 for phrase in END_PHRASES:
                     if phrase in lower:
-                        asyncio.ensure_future(_end_session(session, ctx, user_id, session_messages, session_id, timezone, dev_mode_on))
+                        asyncio.ensure_future(_end_session(session, ctx, user_id, session_messages, session_id, timezone, dev_mode_on, active_block_id, block_urge_flagged))
                         return
+                _URGE_KEYWORDS = ("urge", "craving", "crave", "want to", "need to smoke", "need a cigarette", "need a vape")
+                if active_block_id[0] and not block_urge_flagged[0] and any(kw in lower for kw in _URGE_KEYWORDS):
+                    block_urge_flagged[0] = True
+                    asyncio.ensure_future(_flag_urge(active_block_id[0]))
         except Exception as e:
             print(f"[Agent] on_item error: {e}")
 
@@ -962,10 +978,33 @@ async def battlebuddy_session(ctx: agents.JobContext):
             print(f"[Agent] Session close: sending {len(session_messages)} messages for {user_id} (isSessionEnd=true)")
             asyncio.ensure_future(_send_final_transcript(user_id, list(session_messages), session_id, timezone, dev_mode_on))
 
+        if active_block_id[0]:
+            asyncio.ensure_future(_close_block(active_block_id[0], block_urge_flagged[0]))
+
     # The greeting is still the cleanest probe of the whole audio path: it is
     # unconditional and depends on no VAD, no turn detection, and now no LLM.
     # If the user hears this line, TTS and playout are healthy and anything
     # still silent afterwards is the reply bridge, not the mouth.
+    async def _open_block():
+        result = await _start_resistance_block(SERVER_URL, user_id, auth_headers())
+        bid = result.get("id") or result.get("block_id") or result.get("blockId")
+        if bid:
+            active_block_id[0] = bid
+            print(f"[Agent] Resistance block opened: {bid} for {user_id}")
+        else:
+            print(f"[Agent] Resistance block open failed: {result}")
+
+    async def _flag_urge(block_id: str):
+        result = await _flag_urge_on_block(SERVER_URL, block_id, auth_headers())
+        print(f"[Agent] Urge flagged on block {block_id}: {result}")
+
+    async def _close_block(block_id: str, urge_occurred: bool):
+        result = await _close_resistance_block(SERVER_URL, block_id, urge_occurred, auth_headers())
+        print(f"[Agent] Resistance block closed {block_id} (urge={urge_occurred}): {result}")
+        active_block_id[0] = None
+
+    asyncio.ensure_future(_open_block())
+
     _vlog("greeting: fetching spoken line from server")
     _greet_t0 = time.monotonic()
     greeting_text = await fetch_greeting_text(room_name, config_token)
@@ -997,7 +1036,7 @@ async def _send_final_transcript(user_id, messages, session_id=None, timezone="A
                 await asyncio.sleep(2)
 
 
-async def _end_session(session, ctx, user_id, messages, session_id=None, timezone="America/Chicago", dev_mode=False):
+async def _end_session(session, ctx, user_id, messages, session_id=None, timezone="America/Chicago", dev_mode=False, active_block_id=None, block_urge_flagged=None):
     # A literal sign-off, for the same reason as everywhere else on this path:
     # the agent has no LLM of its own, and the room is about to close — a
     # generation racing a disconnect is how a goodbye becomes silence.
@@ -1011,6 +1050,16 @@ async def _end_session(session, ctx, user_id, messages, session_id=None, timezon
     if messages and len(messages) >= 2:
         print(f"[Agent] End session — sending {len(messages)} messages to context agent")
         await send_to_context_agent(user_id, messages, session_id=session_id, is_session_end=True, timezone=timezone, dev_mode=dev_mode)
+
+    if active_block_id is not None and active_block_id[0]:
+        bid = active_block_id[0]
+        urge = block_urge_flagged[0] if block_urge_flagged else False
+        active_block_id[0] = None
+        try:
+            result = await _close_resistance_block(SERVER_URL, bid, urge, {"Authorization": f"Bearer {BB_CLIENT_TOKEN}"} if BB_CLIENT_TOKEN else {})
+            print(f"[Agent] Resistance block closed at end_session {bid} (urge={urge}): {result}")
+        except Exception as e:
+            print(f"[Agent] Resistance block close failed: {e}")
 
     await asyncio.sleep(3)
     await ctx.room.disconnect()
