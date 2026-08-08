@@ -1,5 +1,6 @@
 import type { ResistanceBlock } from '../db/schema.js';
 import { calculateStreak } from '../services/streakCalculator.js';
+import { analyzeUserSchedule } from '../services/scheduleAnalyzer.js';
 
 interface NodeRequest {
   method?: string;
@@ -155,6 +156,16 @@ export function createResistanceBlocksHandler(supabase: SupabaseClient, cors: Re
 
       if (error) { json(res, 500, { error: (error as { message?: string }).message ?? 'query failed' }, cors); return true; }
       const result = calculateStreak(data ?? []);
+      json(res, 200, result, cors);
+      return true;
+    }
+
+    // GET /api/resistance-blocks/schedule
+    if (method === 'GET' && subpath === '/schedule') {
+      const user = await resolveUser(req, supabase);
+      if (!user) { json(res, 401, { error: 'unauthorized' }, cors); return true; }
+
+      const result = await analyzeUserSchedule(user.id, supabase);
       json(res, 200, result, cors);
       return true;
     }
