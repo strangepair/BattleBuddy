@@ -3582,6 +3582,43 @@ Return ONLY the JSON object, no markdown, no explanation.`;
     }
   }
 
+  if (req.method === 'GET' && req.url.startsWith('/api/logs/recent')) {
+    if (!supabase) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Event store not configured' }));
+    }
+    try {
+      const authHeader = req.headers['authorization'] || '';
+      const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+      if (!token) return send401(res, 401, 'Missing credentials');
+      const { data: userData, error: authErr } = await supabase.auth.getUser(token);
+      if (authErr || !userData?.user) return send401(res, 401, 'Invalid token');
+      const userId = resolveUserId(userData.user.id);
+      const url = new URL(req.url, 'http://localhost');
+      const limit = Math.min(parseInt(url.searchParams.get('limit'), 10) || 10, 50);
+      const { data, error } = await supabase
+        .from('bb_events')
+        .select('id, event_type, occurred_at, metadata')
+        .eq('user_id', userId)
+        .order('occurred_at', { ascending: false })
+        .limit(limit);
+      if (error) {
+        res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: error.message }));
+      }
+      const entries = (data || []).map(r => ({
+        id: r.id,
+        event_type: r.event_type,
+        logged_at: r.occurred_at,
+        metadata: r.metadata,
+      }));
+      res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(entries));
+    } catch (err) {
+      res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: err.message }));
+    }
+  }
   if (req.method === 'GET' && req.url.startsWith('/api/sessions')) {
     if (!supabase) {
       res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
