@@ -36,6 +36,19 @@ Each voice session has exactly one *resistance block* — a backend record that 
 5. **All tool calls are fire-and-forget** (`asyncio.ensure_future`). Continue the conversation regardless of tool response latency.
 6. **No user-visible effects.** Never mention resistance blocks, block IDs, or this state machine to the user.
 
+## log_event ordering requirement
+
+> **Internal only.** Enforced by the tool loop; documented here for prompt-level clarity.
+
+When the user's turn contains any log, record, or save intent for a cigarette or usage event:
+
+1. Call `log_event` **first**. Do not generate any response text in the same pass as the tool call.
+2. Wait for the tool result. The tool loop re-invokes generation only after all `tool_result` blocks are present in context.
+3. Only after receiving `ok: true` from `log_event` may you emit a confirmation phrase ('logged', 'recorded', 'noted', 'saved', etc.).
+4. If `log_event` returns an error, do not claim the entry was saved. Acknowledge the failure and offer to retry.
+
+**Never** emit a confirmation of logging in the same generation turn as the `log_event` tool call — the tool result is structurally unavailable until the next turn.
+
 ## Rule-of-Three Milestone Acknowledgements
 
 Progress is measured in 3-minute blocks. Sequences of successful blocks form streaks. Milestones are defined by the Rule-of-Three hierarchy:

@@ -579,7 +579,19 @@ async def battlebuddy_session(ctx: agents.JobContext):
 
         @function_tool()
         async def log_event(self, event_type: str, occurred_at: str = "", notes: str = "", trigger: str = "", location: str = ""):
-            """Log a smoking or urge event the user just told you about. event_type is one of: cigarette, urge_resisted, urge_gave_in, milestone. ALWAYS leave occurred_at empty for 'right now' — the server stamps the authoritative current time; never compute 'now' yourself. Only pass occurred_at when back-dating, as the user's LOCAL wall-clock time exactly as they said it (e.g. '2026-07-29T16:43:00') — no timezone conversion, no UTC offset. trigger: optional short label for what triggered the event (e.g. 'after coffee', 'stress'). location: optional short label for where it happened (e.g. 'car', 'garage'). When the user explicitly requests logging ('log', 'log that', 'log it', 'log my ...') with a discernible event type, call this tool immediately — do NOT ask a confirmation question first. Only ask a clarifying question when no event type can be inferred. For ambiguous slip disclosures where the user has NOT explicitly requested logging, confirm first. Confirm back what you logged in one short line."""
+            """Log a smoking or urge event the user just told you about. event_type is one of: cigarette, urge_resisted, urge_gave_in, milestone. ALWAYS leave occurred_at empty for 'right now' — the server stamps the authoritative current time; never compute 'now' yourself. Only pass occurred_at when back-dating, as the user's LOCAL wall-clock time exactly as they said it (e.g. '2026-07-29T16:43:00') — no timezone conversion, no UTC offset. trigger: optional short label for what triggered the event (e.g. 'after coffee', 'stress'). location: optional short label for where it happened (e.g. 'car', 'garage'). When the user explicitly requests logging ('log', 'log that', 'log it', 'log my ...') with a discernible event type, call this tool immediately — do NOT ask a confirmation question first. Only ask a clarifying question when no event type can be inferred. For ambiguous slip disclosures where the user has NOT explicitly requested logging, confirm first. ORDERING REQUIREMENT: you MUST await the result of this tool call before generating any confirmation phrase ('logged', 'recorded', 'noted', 'saved', etc.). Do not emit a confirmation in the same generation pass as the tool call — only confirm in the follow-up turn after this tool has returned a success result (ok=true). If this tool returns an error, do not claim the entry was saved."""
+            # ORDERING REQUIREMENT: This coroutine fully awaits the backend HTTP
+            # round-trip before returning. The LLM confirmation turn MUST NOT be
+            # generated until this function has returned — the return value is the
+            # gate. In the server-side tool loop (index.js executeToolUse /
+            # runStream), the LLM is only re-invoked after all tool_result blocks
+            # have been collected, which means this await is the hard barrier
+            # between "user said log it" and "agent says it's logged".
+            # If the current user turn contains any log/record/save intent for a
+            # cigarette event and this function has not yet returned, the LLM
+            # cannot have a tool_result to include in its context, so it cannot
+            # legitimately claim the entry was saved. Any confirmation phrase
+            # before this function returns is a hallucination of the result.
             if self._event_dedup.should_skip(event_type):
                 print(f"[Agent] log_event {event_type} deduplicated — skipping backend call")
                 return json.dumps({"ok": True, "deduplicated": True})
@@ -599,6 +611,10 @@ async def battlebuddy_session(ctx: agents.JobContext):
                 }
                 if occurred_at:
                     payload["occurredAt"] = occurred_at
+                # Awaiting here is the enforcement point: nothing downstream of
+                # this coroutine can run until the HTTP response is received and
+                # the result is returned to the tool loop. The LLM confirmation
+                # turn is only possible after this await resolves.
                 async with aiohttp.ClientSession() as http:
                     resp = await http.post(
                         f"{SERVER_URL}/events",
