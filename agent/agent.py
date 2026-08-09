@@ -62,6 +62,7 @@ from tools.resistance_block_tools import (
     flag_urge_on_block as _flag_urge_on_block,
     close_resistance_block as _close_resistance_block,
 )
+from tools.verify_log import verify_last_log as _verify_last_log
 
 logger = logging.getLogger(__name__)
 
@@ -615,23 +616,49 @@ async def battlebuddy_session(ctx: agents.JobContext):
                 # this coroutine can run until the HTTP response is received and
                 # the result is returned to the tool loop. The LLM confirmation
                 # turn is only possible after this await resolves.
-                async with aiohttp.ClientSession() as http:
-                    resp = await http.post(
-                        f"{SERVER_URL}/events",
-                        json=payload,
-                        headers=auth_headers(),
-                        timeout=aiohttp.ClientTimeout(total=10),
-                    )
-                    data = await resp.json()
-                    if resp.status not in (200, 201) or not (data.get("ok") or data.get("success")):
-                        reason = data.get("error") or data.get("message") or f"server returned {resp.status}"
-                        print(f"[Agent] log_event {event_type} FAILED for {user_id}: {reason}")
-                        return json.dumps({"success": False, "error": reason})
-                    # Inject local_time so the LLM confirmation can echo the
-                    # persisted timestamp rather than assuming the current time.
-                    # The server returns entry.created_at as a raw UTC instant;
-                    # convert it to a human-readable local time here if the
-                    # server did not already include a local_time field.
+                async def _post_event():
+                    async with aiohttp.ClientSession() as http:
+                        resp = await http.post(
+                            f"{SERVER_URL}/events",
+                            json=payload,
+                            headers=auth_headers(),
+                            timeout=aiohttp.ClientTimeout(total=10),
+                        )
+                        return resp.status, await resp.json()
+
+                write_before = datetime.now(tz=ZoneInfo("UTC"))
+                status, data = await _post_event()
+                if status not in (200, 201) or not (data.get("ok") or data.get("success")):
+                    reason = data.get("error") or data.get("message") or f"server returned {status}"
+                    print(f"[Agent] log_event {event_type} FAILED for {user_id}: {reason}")
+                    return json.dumps({"success": False, "error": reason})
+                # Inject local_time so the LLM confirmation can echo the
+                # persisted timestamp rather than assuming the current time.
+                # The server returns entry.created_at as a raw UTC instant;
+                # convert it to a human-readable local time here if the
+                # server did not already include a local_time field.
+                if not data.get("local_time"):
+                    try:
+                        raw_ts = (data.get("entry") or {}).get("created_at") or ""
+                        if raw_ts:
+                            _tz = ZoneInfo(timezone)
+                            _dt = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).astimezone(_tz)
+                            data = dict(data)
+                            data["local_time"] = _dt.strftime("%-I:%M %p")
+                    except Exception as _te:
+                        print(f"[Agent] log_event local_time format failed (non-fatal): {_te}")
+                # Verify the write landed in the backend before confirming.
+                # If verification returns False the write is retried once;
+                # if the retry also fails verification the error is surfaced.
+                verified = await _verify_last_log(SERVER_URL, auth_headers(), event_type, write_before)
+                if not verified:
+                    print(f"[Agent] log_event {event_type} verify failed for {user_id} — retrying")
+                    retry_status, retry_data = await _post_event()
+                    if retry_status not in (200, 201) or not (retry_data.get("ok") or retry_data.get("success")):
+                        reason = retry_data.get("error") or retry_data.get("message") or f"server returned {retry_status}"
+                        print(f"[Agent] log_event {event_type} RETRY FAILED for {user_id}: {reason}")
+                        return json.dumps({"success": False, "error": reason, "retry": True})
+                    data = retry_data
                     if not data.get("local_time"):
                         try:
                             raw_ts = (data.get("entry") or {}).get("created_at") or ""
@@ -641,15 +668,22 @@ async def battlebuddy_session(ctx: agents.JobContext):
                                 data = dict(data)
                                 data["local_time"] = _dt.strftime("%-I:%M %p")
                         except Exception as _te:
-                            print(f"[Agent] log_event local_time format failed (non-fatal): {_te}")
-                    print(f"[Agent] log_event {event_type} for {user_id}: {data}")
-                    self._event_dedup.record(event_type)
-                    if event_type in ("cigarette", "urge_gave_in") and active_block_id[0]:
-                        block_urge_flagged[0] = True
-                        bid = active_block_id[0]
-                        active_block_id[0] = None
-                        asyncio.ensure_future(_close_block(bid, True))
-                    return json.dumps(data)
+                            print(f"[Agent] log_event retry local_time format failed (non-fatal): {_te}")
+                    verified2 = await _verify_last_log(SERVER_URL, auth_headers(), event_type, write_before)
+                    if not verified2:
+                        print(f"[Agent] log_event {event_type} re-verify failed for {user_id} after retry")
+                        return json.dumps({"success": False, "error": "log could not be verified after retry", "retry": True})
+                    data = dict(data)
+                    data["retried"] = True
+                    print(f"[Agent] log_event {event_type} retry verified for {user_id}: {data}")
+                print(f"[Agent] log_event {event_type} for {user_id}: {data}")
+                self._event_dedup.record(event_type)
+                if event_type in ("cigarette", "urge_gave_in") and active_block_id[0]:
+                    block_urge_flagged[0] = True
+                    bid = active_block_id[0]
+                    active_block_id[0] = None
+                    asyncio.ensure_future(_close_block(bid, True))
+                return json.dumps(data)
             except Exception as e:
                 print(f"[Agent] log_event failed: {e}")
                 return json.dumps({"success": False, "error": str(e)})
