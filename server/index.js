@@ -997,8 +997,25 @@ async function executeToolUse(toolUse, userId, timezone = DEFAULT_TZ, requestCon
       .single();
 
     if (error) {
-      return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ error: error.message }), is_error: true };
+      return { type: 'tool_result', tool_use_id: toolUse.id, content: JSON.stringify({ success: false, error: error.message }), is_error: true };
     }
+
+    let count_today = null;
+    try {
+      const today = localDateInTz(timezone);
+      const { start, end } = dayRangeInTz(today, timezone);
+      const { count, error: countErr } = await supabase
+        .from('bb_events')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', userId)
+        .eq('event_type', event_type)
+        .gte('occurred_at', start.toISOString())
+        .lte('occurred_at', end.toISOString());
+      if (!countErr) count_today = count;
+    } catch (_) {
+      // non-fatal — omit count_today rather than fail the insert response
+    }
+
     try {
       const broadcastRows = await supabase
         .from('bb_events')
@@ -1014,9 +1031,18 @@ async function executeToolUse(toolUse, userId, timezone = DEFAULT_TZ, requestCon
     return {
       type: 'tool_result',
       tool_use_id: toolUse.id,
-      // local_time is what the model may read back to the user; occurred_at
-      // stays raw UTC for reference only (same contract as get_usage_stats).
-      content: JSON.stringify({ ok: true, id: data.id, occurred_at: data.occurred_at, local_time: formatEventTimeLocal(data.occurred_at, timezone), event_type }),
+      content: JSON.stringify({
+        success: true,
+        entry: {
+          id: data.id,
+          created_at: data.occurred_at,
+          type: event_type,
+          count_today,
+        },
+        // local_time is what the model may read back to the user; occurred_at
+        // stays raw UTC for reference only (same contract as get_usage_stats).
+        local_time: formatEventTimeLocal(data.occurred_at, timezone),
+      }),
     };
   }
 
@@ -2501,15 +2527,40 @@ Return ONLY the JSON object, no markdown, no explanation.`;
 
       if (error) {
         res.writeHead(500, { ...CORS, 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ error: error.message }));
+        return res.end(JSON.stringify({ success: false, error: error.message }));
+      }
+
+      const resolvedUserId = resolveUserId(userId);
+
+      let count_today = null;
+      try {
+        const today = localDateInTz(eventTz);
+        const { start, end } = dayRangeInTz(today, eventTz);
+        const { count, error: countErr } = await supabase
+          .from('bb_events')
+          .select('id', { count: 'exact', head: true })
+          .eq('user_id', resolvedUserId)
+          .eq('event_type', eventType)
+          .gte('occurred_at', start.toISOString())
+          .lte('occurred_at', end.toISOString());
+        if (!countErr) count_today = count;
+      } catch (_) {
+        // non-fatal
       }
 
       res.writeHead(200, { ...CORS, 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, id: data.id, occurred_at: data.occurred_at }));
+      res.end(JSON.stringify({
+        success: true,
+        entry: {
+          id: data.id,
+          created_at: data.occurred_at,
+          type: eventType,
+          count_today,
+        },
+      }));
 
       // Fire-and-forget dashboard push — must never reject the main request.
       try {
-        const resolvedUserId = resolveUserId(userId);
         const { data: bRows, error: bError } = await supabase
           .from('bb_events')
           .select('id, event_type, occurred_at, metadata')
