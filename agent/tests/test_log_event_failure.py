@@ -53,6 +53,10 @@ def _run_log_event(monkeypatch, status, body):
     Mirrors the production path in SessionAgent.log_event exactly: posts to
     /events, reads the response, checks status and ok/success fields, and
     returns the serialised result dict.
+
+    GUARD: on the success path, success=true is always injected into the result
+    so the LLM has an unambiguous gate field — it must not confirm a log until
+    it sees success=true in the tool_result.
     """
     async def _call():
         try:
@@ -67,6 +71,8 @@ def _run_log_event(monkeypatch, status, body):
                 if resp.status not in (200, 201) or not (data.get("ok") or data.get("success")):
                     reason = data.get("error") or data.get("message") or f"server returned {resp.status}"
                     return json.dumps({"success": False, "error": reason})
+                data = dict(data)
+                data["success"] = True
                 return json.dumps(data)
         except Exception as e:
             return json.dumps({"success": False, "error": str(e)})
@@ -144,7 +150,15 @@ def test_success_false_result_has_no_ok_true(monkeypatch):
 def test_happy_path_200_ok_true_passes_through(monkeypatch):
     result = _run_log_event(monkeypatch, 200, {"ok": True, "id": "evt-123"})
     assert result.get("ok") is True
-    assert "success" not in result or result.get("success") is not False
+    # GUARD: success=true must always be present on the success path so the LLM
+    # has an unambiguous gate field — it must not confirm until it sees this.
+    assert result.get("success") is True
+
+
+def test_happy_path_always_has_success_true(monkeypatch):
+    """success=true must be injected even when the server body omits it."""
+    result = _run_log_event(monkeypatch, 201, {"ok": True, "entry": {"id": "evt-456"}})
+    assert result.get("success") is True
 
 
 def test_failure_result_is_valid_json(monkeypatch):
@@ -166,6 +180,8 @@ async def _raw_call(monkeypatch, status, body):
             if resp.status not in (200, 201) or not (data.get("ok") or data.get("success")):
                 reason = data.get("error") or data.get("message") or f"server returned {resp.status}"
                 return json.dumps({"success": False, "error": reason})
+            data = dict(data)
+            data["success"] = True
             return json.dumps(data)
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)})
