@@ -695,6 +695,27 @@ async def battlebuddy_session(ctx: agents.JobContext):
                 # the LLM has an unambiguous gate field to check before confirming.
                 data = dict(data)
                 data["success"] = True
+                # Read-back: fetch confirmed count and last timestamp from the
+                # backend AFTER the write is verified. This is mandatory — the
+                # LLM must report only values returned by the backend, never
+                # in-memory or computed counts (which can diverge if events are
+                # logged from other surfaces between voice turns, or if the
+                # dedup layer skipped a write).
+                try:
+                    async with aiohttp.ClientSession() as _stats_http:
+                        _stats_resp = await _stats_http.get(
+                            f"{SERVER_URL}/context/stats/{user_id}?timezone={timezone}",
+                            timeout=aiohttp.ClientTimeout(total=10),
+                        )
+                        _stats = await _stats_resp.json()
+                        print(f"[Agent] log_event stats read-back for {user_id}: {_stats}")
+                        data["confirmed_stats"] = _stats
+                except Exception as _se:
+                    print(f"[Agent] log_event stats read-back failed (non-fatal): {_se}")
+                    # Signal to the LLM that the count is unconfirmed so it
+                    # falls back to the safe failure phrase instead of stating
+                    # a number that may be stale.
+                    data["confirmed_stats"] = {"error": str(_se), "unconfirmed": True}
                 return json.dumps(data)
             except Exception as e:
                 print(f"[Agent] log_event failed: {e}")
