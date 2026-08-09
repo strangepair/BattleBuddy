@@ -579,7 +579,7 @@ async def battlebuddy_session(ctx: agents.JobContext):
 
         @function_tool()
         async def log_event(self, event_type: str, occurred_at: str = "", notes: str = "", trigger: str = "", location: str = ""):
-            """Log a smoking or urge event the user just told you about. event_type is one of: cigarette, urge_resisted, urge_gave_in, milestone. ALWAYS leave occurred_at empty for 'right now' — the server stamps the authoritative current time; never compute 'now' yourself. Only pass occurred_at when back-dating, as the user's LOCAL wall-clock time exactly as they said it (e.g. '2026-07-29T16:43:00') — no timezone conversion, no UTC offset. trigger: optional short label for what triggered the event (e.g. 'after coffee', 'stress'). location: optional short label for where it happened (e.g. 'car', 'garage'). When the user explicitly requests logging ('log', 'log that', 'log it', 'log my ...') with a discernible event type, call this tool immediately — do NOT ask a confirmation question first. Only ask a clarifying question when no event type can be inferred. For ambiguous slip disclosures where the user has NOT explicitly requested logging, confirm first. ORDERING REQUIREMENT: you MUST await the result of this tool call before generating any confirmation phrase ('logged', 'recorded', 'noted', 'saved', etc.). Do not emit a confirmation in the same generation pass as the tool call — only confirm in the follow-up turn after this tool has returned a success result (ok=true). If this tool returns an error, do not claim the entry was saved."""
+            """Log a smoking or urge event the user just told you about. event_type is one of: cigarette, urge_resisted, urge_gave_in, milestone. ALWAYS leave occurred_at empty for 'right now' — the server stamps the authoritative current time; never compute 'now' yourself. Only pass occurred_at when back-dating, as the user's LOCAL wall-clock time exactly as they said it (e.g. '2026-07-29T16:43:00') — no timezone conversion, no UTC offset. trigger: optional short label for what triggered the event (e.g. 'after coffee', 'stress'). location: optional short label for where it happened (e.g. 'car', 'garage'). When the user explicitly requests logging ('log', 'log that', 'log it', 'log my ...') with a discernible event type, call this tool immediately — do NOT ask a confirmation question first. Only ask a clarifying question when no event type can be inferred. For ambiguous slip disclosures where the user has NOT explicitly requested logging, confirm first. ORDERING REQUIREMENT: you MUST await the result of this tool call before generating any confirmation phrase ('logged', 'recorded', 'noted', 'saved', etc.). Never confirm a log entry until this tool call returns a success response (success=true). Do not emit a confirmation in the same generation pass as the tool call — only confirm in the follow-up turn after this tool has returned a success result. When confirming, always include the timestamp from the tool response local_time field (e.g. 'Logged at 7:45 AM') — never assume the current time. If this tool returns an error or success=false, do not claim the entry was saved; tell the user the log failed and offer to try again."""
             # ORDERING REQUIREMENT: This coroutine fully awaits the backend HTTP
             # round-trip before returning. The LLM confirmation turn MUST NOT be
             # generated until this function has returned — the return value is the
@@ -627,6 +627,21 @@ async def battlebuddy_session(ctx: agents.JobContext):
                         reason = data.get("error") or data.get("message") or f"server returned {resp.status}"
                         print(f"[Agent] log_event {event_type} FAILED for {user_id}: {reason}")
                         return json.dumps({"success": False, "error": reason})
+                    # Inject local_time so the LLM confirmation can echo the
+                    # persisted timestamp rather than assuming the current time.
+                    # The server returns entry.created_at as a raw UTC instant;
+                    # convert it to a human-readable local time here if the
+                    # server did not already include a local_time field.
+                    if not data.get("local_time"):
+                        try:
+                            raw_ts = (data.get("entry") or {}).get("created_at") or ""
+                            if raw_ts:
+                                _tz = ZoneInfo(timezone)
+                                _dt = datetime.fromisoformat(raw_ts.replace("Z", "+00:00")).astimezone(_tz)
+                                data = dict(data)
+                                data["local_time"] = _dt.strftime("%-I:%M %p")
+                        except Exception as _te:
+                            print(f"[Agent] log_event local_time format failed (non-fatal): {_te}")
                     print(f"[Agent] log_event {event_type} for {user_id}: {data}")
                     self._event_dedup.record(event_type)
                     if event_type in ("cigarette", "urge_gave_in") and active_block_id[0]:
