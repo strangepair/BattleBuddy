@@ -593,9 +593,17 @@ async def battlebuddy_session(ctx: agents.JobContext):
             # cannot have a tool_result to include in its context, so it cannot
             # legitimately claim the entry was saved. Any confirmation phrase
             # before this function returns is a hallucination of the result.
+            # GUARD: this function MUST complete its full await chain and return
+            # a result dict containing success=true before the LLM can generate
+            # any confirmation phrase ("logged", "recorded", "saved", count, or
+            # timestamp). The tool loop only re-invokes the LLM after every
+            # tool_result block is present in context, so this return value is
+            # the hard gate between "user said log it" and "agent says it's logged".
+            # Any confirmation emitted while this coroutine is in-flight would
+            # be a hallucination — the tool_result is structurally unavailable.
             if self._event_dedup.should_skip(event_type):
                 print(f"[Agent] log_event {event_type} deduplicated — skipping backend call")
-                return json.dumps({"ok": True, "deduplicated": True})
+                return json.dumps({"success": True, "ok": True, "deduplicated": True})
             try:
                 metadata: dict = {"source": "voice"}
                 if notes:
@@ -683,6 +691,10 @@ async def battlebuddy_session(ctx: agents.JobContext):
                     bid = active_block_id[0]
                     active_block_id[0] = None
                     asyncio.ensure_future(_close_block(bid, True))
+                # Ensure success=true is always explicit on the success path so
+                # the LLM has an unambiguous gate field to check before confirming.
+                data = dict(data)
+                data["success"] = True
                 return json.dumps(data)
             except Exception as e:
                 print(f"[Agent] log_event failed: {e}")
