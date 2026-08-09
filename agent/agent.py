@@ -623,6 +623,10 @@ async def battlebuddy_session(ctx: agents.JobContext):
                         timeout=aiohttp.ClientTimeout(total=10),
                     )
                     data = await resp.json()
+                    if resp.status not in (200, 201) or not (data.get("ok") or data.get("success")):
+                        reason = data.get("error") or data.get("message") or f"server returned {resp.status}"
+                        print(f"[Agent] log_event {event_type} FAILED for {user_id}: {reason}")
+                        return json.dumps({"success": False, "error": reason})
                     print(f"[Agent] log_event {event_type} for {user_id}: {data}")
                     self._event_dedup.record(event_type)
                     if event_type in ("cigarette", "urge_gave_in") and active_block_id[0]:
@@ -633,7 +637,7 @@ async def battlebuddy_session(ctx: agents.JobContext):
                     return json.dumps(data)
             except Exception as e:
                 print(f"[Agent] log_event failed: {e}")
-                return json.dumps({"error": str(e)})
+                return json.dumps({"success": False, "error": str(e)})
 
         @function_tool()
         async def log_activity(self, activity_name: str, start_time: str = "", end_time: str = "", location: str = ""):
