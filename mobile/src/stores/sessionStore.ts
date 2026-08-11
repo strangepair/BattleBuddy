@@ -85,7 +85,8 @@ interface SessionState {
   endSession: () => void;
   switchMode: (to: SessionMode) => void;
 
-  addUserMessage: (content: string) => void;
+  addUserMessage: (content: string) => string;
+  updateUserMessage: (id: string, content: string) => void;
   addAssistantMessage: () => string;
   updateAssistantMessage: (id: string, content: string) => void;
   addReceipt: (type: ReceiptType, label: string) => void;
@@ -246,6 +247,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         timestamp: msg.timestamp,
       }).catch(() => {});
     }
+
+    return msg.id;
+  },
+
+  updateUserMessage: (id, content) => {
+    set((state) => ({
+      messages: state.messages.map((m) =>
+        m.id === id ? { ...m, content } : m,
+      ),
+    }));
   },
 
   addAssistantMessage: () => {
