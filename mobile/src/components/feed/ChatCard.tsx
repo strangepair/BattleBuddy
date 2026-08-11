@@ -55,7 +55,7 @@ const styles = StyleSheet.create({
     marginBottom: 40,
   },
   chatButton: {
-    backgroundColor: '#E8624A',
+    backgroundColor: '#2563EB',
     borderRadius: 28,
     paddingVertical: 18,
     paddingHorizontal: 48,

@@ -280,7 +280,7 @@ const EntityBackground = forwardRef<EntityBackgroundHandle, EntityBackgroundProp
       return `rgb(${Math.round(curR.value)}, ${Math.round(curG.value)}, ${Math.round(curB.value)})`;
     }
     const cycle = (Math.sin((time.value / COLOR_PERIOD_S) * 2 * Math.PI) + 1) / 2;
-    return interpolateColor(cycle, [0, 1], ['#4FC3F7', '#E8624A']);
+    return interpolateColor(cycle, [0, 1], ['#4FC3F7', '#2563EB']);
   });
 
   // Glow reacts to whichever driver is active for this screen — the hub's
