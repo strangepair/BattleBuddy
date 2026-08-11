@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import Animated, {
   cancelAnimation,
   Easing,
@@ -9,8 +9,10 @@ import Animated, {
   withSequence,
   withTiming,
 } from 'react-native-reanimated';
+import { Ionicons } from '@expo/vector-icons';
 import type { MascotState } from '../mascot';
 import { useSettingsStore } from '../../stores/settingsStore';
+import { useUIStore } from '../../stores/uiStore';
 import { Colors } from '../../theme';
 
 export type SessionPhase = 'observation' | 'resistance';
@@ -80,6 +82,7 @@ export default function SessionHeader({ mascotState, phase: _phase }: SessionHea
   const orbColor = STATE_COLOR[mascotState];
 
   const hand = useSettingsStore((s) => s.hand);
+  const openMenu = useUIStore((s) => s.openMenu);
   const time = now.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
   const day = now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
 
@@ -101,22 +104,36 @@ export default function SessionHeader({ mascotState, phase: _phase }: SessionHea
       <View style={[styles.orb, { backgroundColor: orbColor }]} />
     </View>
   );
+  const hamburger = (
+    <TouchableOpacity
+      onPress={openMenu}
+      style={styles.menuBtn}
+      hitSlop={12}
+      accessibilityLabel="Open navigation menu"
+    >
+      <Ionicons name="menu-outline" size={26} color={Colors.textPrimary} />
+    </TouchableOpacity>
+  );
 
   // Buddy's presence lives on the thumb side; clock on the other. The dev
   // toggle deliberately does NOT live here: every TestFlight build that
   // rendered a control in this header crashed at launch (builds 50–53). This
   // header is inside the screen react-native-screens snapshots during
   // transitions while the orb ring animates on the UI thread — keep it to the
-  // long-proven children (clock, buddy, orb). The toggle lives in Preferences.
+  // long-proven children (clock, buddy, orb). The hamburger is a plain static
+  // TouchableOpacity (no Reanimated, no conditional children) and sits outside
+  // the animated elements, so it does not reproduce the snapshot-time crash.
   return hand === 'right' ? (
     <View style={styles.row}>
       {clock}
       <View style={styles.spacer} />
       {buddy}
       {orb}
+      {hamburger}
     </View>
   ) : (
     <View style={styles.row}>
+      {hamburger}
       {orb}
       {buddy}
       <View style={styles.spacer} />
@@ -188,5 +205,8 @@ const styles = StyleSheet.create({
     color: Colors.textTertiary,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+  },
+  menuBtn: {
+    paddingHorizontal: 2,
   },
 });

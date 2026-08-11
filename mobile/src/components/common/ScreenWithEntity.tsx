@@ -3,6 +3,7 @@ import { StyleSheet, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import EntityBackground from '../home/EntityBackground';
 import ScreenHeader from './ScreenHeader';
+import HamburgerMenu from './HamburgerMenu';
 import { Colors } from '../../theme';
 
 interface ScreenWithEntityProps {
@@ -44,7 +45,7 @@ export default function ScreenWithEntity({
         center={{ x: width / 2, y: height * entityCenterYRatio }}
       />
       <SafeAreaView style={styles.safeArea}>
-        {title && <ScreenHeader title={title} right={headerRight} onBack={onBack} />}
+        {title && <ScreenHeader title={title} right={headerRight ?? <HamburgerMenu />} onBack={onBack} />}
         {children}
       </SafeAreaView>
     </View>
