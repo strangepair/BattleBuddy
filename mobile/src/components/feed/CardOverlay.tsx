@@ -105,6 +105,6 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   helpedLabelActive: {
-    color: '#E8624A',
+    color: '#2563EB',
   },
 });
