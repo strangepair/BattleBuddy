@@ -1,13 +1,13 @@
 export const Colors = {
   // Brand
-  coral: '#E8624A',
-  coralSoft: '#FF6B6B',
+  coral: '#2563EB',
+  coralSoft: '#93C5FD',
 
   // Mascot state colors (eye + ring)
   stateIdle: '#5B9FFF',
   stateListening: '#FF9F0A',
   stateUserSpeaking: '#34C759',
-  stateSpeaking: '#E8624A',
+  stateSpeaking: '#2563EB',
 
   // Surfaces
   background: '#1C1C1E',
