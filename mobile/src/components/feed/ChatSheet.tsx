@@ -286,7 +286,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   userBubble: {
-    backgroundColor: '#E8624A',
+    backgroundColor: '#2563EB',
     alignSelf: 'flex-end',
     borderBottomRightRadius: 4,
   },
@@ -327,7 +327,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#E8624A',
+    backgroundColor: '#2563EB',
     justifyContent: 'center',
     alignItems: 'center',
   },

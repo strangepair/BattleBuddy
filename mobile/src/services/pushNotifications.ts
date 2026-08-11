@@ -91,6 +91,6 @@ if (Platform.OS === 'android') {
     name: 'BattleBuddy',
     importance: Notifications.AndroidImportance.HIGH,
     vibrationPattern: [0, 250, 250, 250],
-    lightColor: '#E8624A',
+    lightColor: '#2563EB',
   });
 }
