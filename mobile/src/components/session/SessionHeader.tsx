@@ -16,7 +16,7 @@ import { Colors } from '../../theme';
 export type SessionPhase = 'observation' | 'resistance';
 
 // Presence colors per the One Conversation spec (MOBILE-PORT §3):
-// blue = neutral/listening, orange = hearing the user, coral = responding.
+// blue = neutral/listening, blue = hearing the user, blue = responding.
 const STATE_COLOR: Record<MascotState, string> = {
   idle: Colors.stateIdle,
   listening: Colors.stateIdle,

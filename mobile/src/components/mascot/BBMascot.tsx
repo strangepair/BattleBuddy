@@ -18,11 +18,11 @@ import { useMascotAnimation, type MascotState } from './useMascotAnimation';
 const AnimatedEllipse = Animated.createAnimatedComponent(Ellipse);
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
-// 3 colors: blue (idle/waiting), green (hearing user), orange (BB talking)
+// 3 colors: blue (idle/waiting), green (hearing user), blue (BB talking)
 const STATE_COLORS = [
   Colors.stateIdle,         // 0 = blue
   Colors.stateUserSpeaking, // 1 = green
-  Colors.stateListening,    // 2 = orange
+  Colors.stateListening,    // 2 = blue (BB speaking)
 ];
 
 const STATE_INDEX: Record<MascotState, number> = {

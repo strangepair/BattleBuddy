@@ -42,7 +42,7 @@ const HINT_KEY = '@bb_swipe_hint_shown';
 const DEST_TINTS: Record<Direction, string> = {
   down: '#5B9FFF',
   up: '#34C759',
-  left: '#FF9F0A',
+  left: Colors.stateListening,
   right: '#8B5CF6',
 };
 
