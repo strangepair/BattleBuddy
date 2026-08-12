@@ -23,19 +23,19 @@ export type MascotState =
   | 'celebrating'
   | 'empathy';
 
-// 3 colors: blue (idle/waiting), green (hearing user), orange (BB talking)
+// 3 colors: blue (idle/waiting), green (hearing user), blue (BB talking)
 const STATE_COLORS = [
   Colors.stateIdle,         // 0 = blue
   Colors.stateUserSpeaking, // 1 = green
-  Colors.stateListening,    // 2 = orange (BB speaking)
+  Colors.stateListening,    // 2 = blue (BB speaking)
 ] as const;
 
 const STATE_INDEX: Record<MascotState, number> = {
   idle: 0,        // blue — waiting
   listening: 0,   // blue — waiting for user
   user_speaking: 1, // green — hearing user
-  speaking: 2,    // orange — BB talking
-  thinking: 2,    // orange — BB processing (still "talking")
+  speaking: 2,    // blue — BB talking
+  thinking: 2,    // blue — BB processing (still "talking")
   celebrating: 1, // green
   empathy: 0,     // blue
 };

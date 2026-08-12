@@ -161,7 +161,7 @@ describe('ExceptionCard', () => {
     const style = Array.isArray(json!.props.style)
       ? Object.assign({}, ...json!.props.style)
       : json!.props.style;
-    expect(style.borderColor).toBe('#FF9F0A');
+    expect(style.borderColor).toBe('#2563EB');
   });
 
   it('does not throw when deadlineIso is an invalid date string', () => {

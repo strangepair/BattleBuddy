@@ -5,7 +5,7 @@ export const Colors = {
 
   // Mascot state colors (eye + ring)
   stateIdle: '#5B9FFF',
-  stateListening: '#FF9F0A',
+  stateListening: '#2563EB',
   stateUserSpeaking: '#34C759',
   stateSpeaking: '#2563EB',
 
